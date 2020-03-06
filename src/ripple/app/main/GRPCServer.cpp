@@ -410,6 +410,52 @@ GRPCServerImpl::setupListeners()
             RPC::NO_CONDITION,
             Resource::feeMediumBurdenRPC));
     }
+
+    {
+        using cd = CallData<
+            org::xrpl::rpc::v1::GetLedgerRequest,
+            org::xrpl::rpc::v1::GetLedgerResponse>;
+
+        addToRequests(std::make_shared<cd>(
+            service_,
+            *cq_,
+            app_,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
+                RequestGetLedger,
+            doLedgerGrpc,
+            RPC::NO_CONDITION,
+            Resource::feeMediumBurdenRPC));
+    }
+    {
+        using cd = CallData<
+            org::xrpl::rpc::v1::GetLedgerDataRequest,
+            org::xrpl::rpc::v1::GetLedgerDataResponse>;
+
+        addToRequests(std::make_shared<cd>(
+            service_,
+            *cq_,
+            app_,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
+                RequestGetLedgerData,
+            doLedgerDataGrpc,
+            RPC::NO_CONDITION,
+            Resource::feeReferenceRPC));
+    }
+    {
+        using cd = CallData<
+            org::xrpl::rpc::v1::GetLedgerEntryRequest,
+            org::xrpl::rpc::v1::GetLedgerEntryResponse>;
+
+        addToRequests(std::make_shared<cd>(
+            service_,
+            *cq_,
+            app_,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
+                RequestGetLedgerEntry,
+            doLedgerEntryGrpc,
+            RPC::NO_CONDITION,
+            Resource::feeReferenceRPC));
+    }
     return requests;
 };
 

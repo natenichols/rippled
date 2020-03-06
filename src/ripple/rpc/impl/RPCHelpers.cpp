@@ -256,15 +256,15 @@ ledgerFromRequest(T& ledger, JsonContext& context)
 }
 }  // namespace
 
-template <class T>
+template <class T, class R>
 Status
 ledgerFromRequest(
     T& ledger,
-    GRPCContext<org::xrpl::rpc::v1::GetAccountInfoRequest>& context)
+    GRPCContext<R>& context)
 {
     ledger.reset();
 
-    org::xrpl::rpc::v1::GetAccountInfoRequest& request = context.params;
+    R& request = context.params;
 
     using LedgerCase = org::xrpl::rpc::v1::LedgerSpecifier::LedgerCase;
     LedgerCase ledgerCase = request.ledger().ledger_case();
@@ -313,6 +313,27 @@ template Status
 ledgerFromRequest<>(
     std::shared_ptr<ReadView const>&,
     GRPCContext<org::xrpl::rpc::v1::GetAccountInfoRequest>&);
+
+
+// explicit instantiation of above function
+template Status
+ledgerFromRequest<>(
+    std::shared_ptr<ReadView const>&,
+    GRPCContext<org::xrpl::rpc::v1::GetLedgerEntryRequest>&);
+
+
+// explicit instantiation of above function
+template Status
+ledgerFromRequest<>(
+    std::shared_ptr<ReadView const>&,
+    GRPCContext<org::xrpl::rpc::v1::GetLedgerDataRequest>&);
+
+
+// explicit instantiation of above function
+template Status
+ledgerFromRequest<>(
+    std::shared_ptr<ReadView const>&,
+    GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>&);
 
 Status
 getLedger(

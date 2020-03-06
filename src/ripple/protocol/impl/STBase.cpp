@@ -48,6 +48,7 @@ STBase::operator=(const STBase& t)
     }
     if (!fName->isUseful())
         fName = t.fName;
+    std::cout << "assignment. sliding" << std::endl;
     return *this;
 }
 

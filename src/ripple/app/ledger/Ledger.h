@@ -157,6 +157,12 @@ public:
         return info_;
     }
 
+    void
+        setLedgerInfo(LedgerInfo const& info)
+        {
+            info_ = info;
+        }
+
     Fees const&
     fees() const override
     {
@@ -171,6 +177,12 @@ public:
 
     bool
     exists(Keylet const& k) const override;
+
+    bool
+    exists(uint256 const& key)
+    {
+        return stateMap_->hasItem(key);
+    }
 
     boost::optional<uint256>
     succ(uint256 const& key, boost::optional<uint256> const& last = boost::none)
@@ -216,6 +228,13 @@ public:
 
     void
     rawInsert(std::shared_ptr<SLE> const& sle) override;
+
+    void
+    rawErase(uint256 const& key)
+    {
+        if (!stateMap_->delItem(key))
+            LogicError("Ledger::rawErase: key not found");
+    }
 
     void
     rawReplace(std::shared_ptr<SLE> const& sle) override;
@@ -369,6 +388,9 @@ public:
     bool
     isVotingLedger() const;
 
+
+    std::shared_ptr<SLE>
+    peek (Keylet const& k) const;
 private:
     class sles_iter_impl;
     class txs_iter_impl;
@@ -376,8 +398,6 @@ private:
     bool
     setup(Config const& config);
 
-    std::shared_ptr<SLE>
-    peek(Keylet const& k) const;
 
     bool mImmutable;
 

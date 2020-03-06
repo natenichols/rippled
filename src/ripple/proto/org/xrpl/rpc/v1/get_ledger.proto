@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package org.xrpl.rpc.v1;
+option java_package = "org.xrpl.rpc.v1";
+option java_multiple_files = true;
+
+import "org/xrpl/rpc/v1/ledger.proto";
+
+message GetLedgerRequest
+{
+
+    LedgerSpecifier ledger = 1;
+
+    bool transactions = 2;
+
+    bool expand = 3;
+}
+
+message GetLedgerResponse
+{
+    bytes ledger_header = 1;
+
+    oneof transactions
+    {
+        TransactionHashList hashes_list = 2;
+        
+        TransactionAndMetadataList transactions_list = 3;
+    }
+
+    bool validated = 4;
+}
+
+message TransactionHashList
+{
+    repeated bytes hashes = 1;
+}
+
+message TransactionAndMetadata
+{
+    bytes transaction_blob = 1;
+
+    bytes metadata_blob = 2;
+}
+
+message TransactionAndMetadataList
+{
+    repeated TransactionAndMetadata transactions = 1;
+}

@@ -509,8 +509,9 @@ LedgerMaster::fixIndex(LedgerIndex ledgerIndex, LedgerHash const& ledgerHash)
 bool
 LedgerMaster::storeLedger(std::shared_ptr<Ledger const> ledger)
 {
+    bool validated = ledger->info().validated;
     // Returns true if we already had the ledger
-    return mLedgerHistory.insert(std::move(ledger), false);
+    return mLedgerHistory.insert(std::move(ledger), validated);
 }
 
 /** Apply held transactions to the open ledger

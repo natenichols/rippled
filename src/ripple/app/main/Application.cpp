@@ -806,8 +806,15 @@ public:
         return *openLedger_;
     }
 
-    Overlay&
-    overlay() override
+    void
+    setOpenLedger(std::shared_ptr<Ledger>& l) override
+    {
+        openLedger_.emplace(l, cachedSLEs_, logs_->journal("OpenLedger"));
+        // m_ledgerMaster->storeLedger(l);
+        // m_ledgerMaster->switchLCL(l);
+    }
+
+    Overlay& overlay () override
     {
         assert(overlay_);
         return *overlay_;

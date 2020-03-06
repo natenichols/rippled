@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package org.xrpl.rpc.v1;
+option java_package = "org.xrpl.rpc.v1";
+option java_multiple_files = true;
+
+import "org/xrpl/rpc/v1/ledger.proto";
+
+message GetLedgerDataRequest
+{
+    
+    bytes marker = 1;
+
+    LedgerSpecifier ledger = 2;
+}
+
+message GetLedgerDataResponse
+{
+
+    uint32 ledger_index = 1;
+
+    bytes ledger_hash = 2;
+        
+    repeated LedgerState state_objects = 3;
+
+    bytes marker = 4;
+}
+
+message LedgerState
+{
+    bytes data = 1;
+
+    bytes index = 2;
+}

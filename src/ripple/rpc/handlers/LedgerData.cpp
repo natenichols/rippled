@@ -27,6 +27,9 @@
 #include <ripple/rpc/impl/RPCHelpers.h>
 #include <ripple/rpc/impl/Tuning.h>
 
+#include <ripple/rpc/impl/GRPCHelpers.h>
+#include <ripple/rpc/GRPCHandlers.h>
+
 namespace ripple {
 
 // Get state nodes from a ledger
@@ -126,4 +129,61 @@ doLedgerData(RPC::JsonContext& context)
     return jvResult;
 }
 
-}  // namespace ripple
+
+std::pair<org::xrpl::rpc::v1::GetLedgerDataResponse, grpc::Status>
+doLedgerDataGrpc(
+    RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerDataRequest>& context)
+{
+    org::xrpl::rpc::v1::GetLedgerDataRequest request = context.params;
+    org::xrpl::rpc::v1::GetLedgerDataResponse response;
+    grpc::Status status = grpc::Status::OK;
+
+    std::shared_ptr<ReadView const> ledger;
+    if(RPC::ledgerFromRequest(ledger, context) != RPC::Status::OK)
+    {
+        
+        grpc::Status errorStatus{grpc::StatusCode::NOT_FOUND,
+                                 "ledger not found"};
+        return {response, errorStatus};
+    }
+
+    ReadView::key_type key = ReadView::key_type();
+    if(request.marker().size() != 0)
+    {
+        key = uint256::fromVoid(request.marker().data());
+        if(key.size() != request.marker().size())
+        {
+            
+            grpc::Status errorStatus{grpc::StatusCode::INVALID_ARGUMENT,
+                                     "marker malformed"};
+            return {response, errorStatus};
+        }
+    }
+
+    
+    int maxLimit = RPC::Tuning::pageLength(true);
+
+    auto e = ledger->sles.end();
+    for (auto i = ledger->sles.upper_bound(key); i != e; ++i)
+    {
+        auto sle = ledger->read(keylet::unchecked((*i)->key()));
+        if (maxLimit-- <= 0)
+        {
+            // Stop processing before the current key.
+            auto k = sle->key();
+            --k;
+            response.set_marker(k.data(),k.size());
+            break;
+        }
+        auto stateObject = response.add_state_objects();
+        Serializer s;
+        sle->add(s);
+        stateObject->set_data(s.peekData().data(), s.getLength());
+        stateObject->set_index(sle->key().data(), sle->key().size());
+    }
+    return {response, status};
+}
+
+
+
+} // ripple

@@ -137,11 +137,11 @@ lookupLedger(
     JsonContext&,
     Json::Value& result);
 
-template <class T>
+template <class T, class R>
 Status
 ledgerFromRequest(
     T& ledger,
-    GRPCContext<org::xrpl::rpc::v1::GetAccountInfoRequest>& context);
+    GRPCContext<R>& context);
 
 bool
 isValidated(

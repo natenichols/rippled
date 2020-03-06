@@ -28,6 +28,9 @@
 #include <ripple/rpc/handlers/LedgerHandler.h>
 #include <ripple/rpc/impl/RPCHelpers.h>
 
+#include <ripple/rpc/impl/GRPCHelpers.h>
+#include <ripple/rpc/GRPCHandlers.h>
+
 namespace ripple {
 namespace RPC {
 
@@ -97,5 +100,65 @@ LedgerHandler::check()
     return Status::OK;
 }
 
-}  // namespace RPC
-}  // namespace ripple
+
+} // RPC
+
+
+std::pair<org::xrpl::rpc::v1::GetLedgerResponse, grpc::Status>
+doLedgerGrpc(
+    RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
+{
+
+    org::xrpl::rpc::v1::GetLedgerRequest request = context.params;
+    org::xrpl::rpc::v1::GetLedgerResponse response;
+    grpc::Status status = grpc::Status::OK;
+
+
+    std::shared_ptr<ReadView const> ledger;
+    if(RPC::ledgerFromRequest(ledger, context) != RPC::Status::OK)
+    {
+        
+        grpc::Status errorStatus{grpc::StatusCode::NOT_FOUND,
+                                 "ledger not found"};
+        return {response, errorStatus};
+    }
+
+
+    Serializer s;
+    addRaw(ledger->info(), s);
+    std::cout << "serialized ledger header" << std::endl;
+
+    response.set_ledger_header(s.peekData().data(), s.getLength());
+
+    if (request.transactions())
+    {
+        for (auto& i : ledger->txs)
+        {
+            assert(i.first);
+            if (request.expand())
+            {
+                auto txn =
+                    response.mutable_transactions_list()->add_transactions();
+                Serializer sTxn = i.first->getSerializer();
+                txn->set_transaction_blob(sTxn.data(), sTxn.getLength());
+                if(i.second)
+                {
+                    Serializer sMeta = i.second->getSerializer();
+                    txn->set_metadata_blob(sMeta.data(), sMeta.getLength());
+                }
+            }
+            else
+            {
+                auto const& hash = i.first->getTransactionID();
+                response.mutable_hashes_list()->add_hashes(
+                    hash.data(), hash.size());
+            }
+        }
+    }
+    std::cout << "processed transactions" << std::endl;
+    
+    response.set_validated(RPC::isValidated (context.ledgerMaster, *ledger, context.app));
+
+    return {response, status};
+}
+} // ripple

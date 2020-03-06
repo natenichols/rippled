@@ -267,34 +267,24 @@ public:
 
     // caution: otherMap must be accessed only by this function
     // return value: true=successfully completed, false=too different
-    bool
-    compare(SHAMap const& otherMap, Delta& differences, int maxCount) const;
+    bool compare (SHAMap const& otherMap,
+                  Delta& differences, int maxCount) const;
 
-    int
-    flushDirty(NodeObjectType t, std::uint32_t seq);
-    void
-    walkMap(std::vector<SHAMapMissingNode>& missingNodes, int maxMissing) const;
-    bool
-    deepCompare(SHAMap& other) const;  // Intended for debug/test only
+    int flushDirty (NodeObjectType t, std::uint32_t seq);
+    int flushDirtyNoWrite(NodeObjectType t, std::uint32_t seq);
+    void walkMap (std::vector<SHAMapMissingNode>& missingNodes, int maxMissing) const;
+    bool deepCompare (SHAMap & other) const;  // Intended for debug/test only
 
-    using fetchPackEntry_t = std::pair<uint256, Blob>;
+    using fetchPackEntry_t = std::pair <uint256, Blob>;
 
-    void
-    getFetchPack(
-        SHAMap const* have,
-        bool includeLeaves,
-        int max,
-        std::function<void(SHAMapHash const&, const Blob&)>) const;
+    void getFetchPack (SHAMap const* have, bool includeLeaves, int max,
+        std::function<void (SHAMapHash const&, const Blob&)>) const;
 
-    void
-    setUnbacked();
-    int
-    unshare();
+    void setUnbacked ();
+    int unshare ();
 
-    void
-    dump(bool withHashes = false) const;
-    void
-    invariants() const;
+    void dump (bool withHashes = false) const;
+    void invariants() const;
 
 private:
     using SharedPtrNodeStack = std::stack<

@@ -516,21 +516,16 @@ public:
     set(std::unique_ptr<STBase> v);
 
     void
-    setFieldU8(SField const& field, unsigned char);
-    void
-    setFieldU16(SField const& field, std::uint16_t);
-    void
-    setFieldU32(SField const& field, std::uint32_t);
-    void
-    setFieldU64(SField const& field, std::uint64_t);
-    void
-    setFieldH128(SField const& field, uint128 const&);
-    void
-    setFieldH256(SField const& field, uint256 const&);
-    void
-    setFieldVL(SField const& field, Blob const&);
-    void
-    setFieldVL(SField const& field, Slice const&);
+    set (STBase* v);
+
+    void setFieldU8 (SField const& field, unsigned char);
+    void setFieldU16 (SField const& field, std::uint16_t);
+    void setFieldU32 (SField const& field, std::uint32_t);
+    void setFieldU64 (SField const& field, std::uint64_t);
+    void setFieldH128 (SField const& field, uint128 const&);
+    void setFieldH256 (SField const& field, uint256 const& );
+    void setFieldVL (SField const& field, Blob const&);
+    void setFieldVL (SField const& field, Slice const&);
 
     void
     setAccountID(SField const& field, AccountID const&);
