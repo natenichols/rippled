@@ -102,6 +102,8 @@ private:
     */
     bool RUN_STANDALONE = false;
 
+    bool RUN_REPORTING = false;
+
     /** Determines if the server will sign a tx, given an account's secret seed.
 
         In the past, this was allowed, but this functionality can have security
@@ -196,9 +198,14 @@ public:
         std::string const& strConf,
         bool bQuiet,
         bool bSilent,
-        bool bStandalone);
+        bool bStandalone,
+        bool bReporting = false);
     void
-    setupControl(bool bQuiet, bool bSilent, bool bStandalone);
+    setupControl(
+        bool bQuiet,
+        bool bSilent,
+        bool bStandalone,
+        bool bReporting = false);
 
     /**
      *  Load the config from the contents of the string.
@@ -222,6 +229,11 @@ public:
     standalone() const
     {
         return RUN_STANDALONE;
+    }
+    bool
+    reporting() const
+    {
+        return RUN_REPORTING;
     }
 
     bool

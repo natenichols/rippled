@@ -33,6 +33,8 @@
 #include <ripple/app/main/LoadManager.h>
 #include <ripple/app/main/NodeIdentity.h>
 #include <ripple/app/main/NodeStoreScheduler.h>
+#include <ripple/app/main/ReportingETL.h>
+#include <ripple/app/main/Tuning.h>
 #include <ripple/app/misc/AmendmentTable.h>
 #include <ripple/app/misc/HashRouter.h>
 #include <ripple/app/misc/LoadFeeTrack.h>
@@ -225,6 +227,7 @@ public:
     io_latency_sampler m_io_latency_sampler;
 
     std::unique_ptr<GRPCServer> grpcServer_;
+    std::unique_ptr<ReportingETL> reportingETL_;
 
     //--------------------------------------------------------------------------
 
@@ -440,6 +443,7 @@ public:
               std::chrono::milliseconds(100),
               get_io_service())
         , grpcServer_(std::make_unique<GRPCServer>(*this))
+        , reportingETL_(std::make_unique<ReportingETL>(*this))
     {
         add(m_resourceManager.get());
 
@@ -1637,6 +1641,10 @@ ApplicationImp::setup()
 
             return false;
         }
+    }
+    if (config_->reporting())
+    {
+        reportingETL_->run();
     }
 
     return true;
