@@ -45,8 +45,8 @@ ReportingETL::doSubscribe()
         // Sends a WebSocket message and prints the response
         try
         {
-            auto const host = "127.0.0.1";
-            auto const port = "6007";
+            auto const host = ip_;
+            auto const port = wsPort_;
 
             // The io_context is required for all I/O
             net::io_context ioc;
@@ -246,13 +246,7 @@ ReportingETL::doWork()
         grpc::Status status =
             stub_->GetLedgerData(&grpcContextData, requestData, &replyData);
 
-        /*
-        std::mutex mtx;
-        std::condition_variable cv;
-        std::queue<std::pair<std::string, std::string>> data;
-        std::atomic_bool done{false};
-*/
-
+        // TODO: improve the performance of this
         while (not stopping_)
         {
             std::cout << "marker = " << strHex(replyData.marker()) << std::endl;
@@ -325,8 +319,6 @@ ReportingETL::doWork()
         storeLedger();
         std::cout << "stored initial ledger!" << std::endl;
 
-        // sleep for ten seconds to prevent throttling
-        std::this_thread::sleep_for(std::chrono::seconds(10));
         std::cout << "starting continous update" << std::endl;
 
         while (not stopping_)

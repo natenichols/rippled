@@ -119,6 +119,9 @@ private:
 
     LedgerIndexQueue queue_;
 
+    std::string ip_;
+    std::string wsPort_;
+
 public:
     ReportingETL(Application& app) : app_(app)
     {
@@ -131,8 +134,14 @@ public:
             if (!ipPair.second)
                 return;
 
-            std::pair<std::string, bool> portPair = section.find("source_port");
+            std::pair<std::string, bool> portPair =
+                section.find("source_grpc_port");
             if (!portPair.second)
+                return;
+
+            std::pair<std::string, bool> wsPortPair =
+                section.find("source_ws_port");
+            if (!wsPortPair.second)
                 return;
 
             std::pair<std::string, bool> startIndexPair =
@@ -153,6 +162,8 @@ public:
                             .to_string(),
                         grpc::InsecureChannelCredentials()));
                 std::cout << "made stub" << std::endl;
+                ip_ = ipPair.first;
+                wsPort_ = wsPortPair.first;
             }
             catch (std::exception const& e)
             {
