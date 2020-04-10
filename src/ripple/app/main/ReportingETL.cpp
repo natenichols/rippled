@@ -281,7 +281,7 @@ ReportingETL::loadNextLedger()
 
     std::cout << "deserialize header" << std::endl;
     LedgerInfo lgrInfo = deserializeHeader(
-        makeSlice(reply.ledger_header()));
+        makeSlice(reply.ledger_header()), true);
     std::cout << "make ledger" << std::endl;
     this->currentIndex_ = lgrInfo.seq;
 
@@ -758,7 +758,7 @@ ReportingETL::doWork()
 
             std::cout << "deserialize header" << std::endl;
             LedgerInfo lgrInfo = deserializeHeader(
-                makeSlice(reply.ledger_header()));
+                makeSlice(reply.ledger_header()), true);
             std::cout << "make ledger" << std::endl;
             this->currentIndex_ = lgrInfo.seq;
 
