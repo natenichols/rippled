@@ -127,6 +127,21 @@ private:
     enum LoadMethod { ITERATIVE, BUFFER, PARALLEL};
 
     LoadMethod method_ = ITERATIVE;
+   
+
+    void loadIterative();
+
+    void loadParallel();
+
+    void loadBuffer();
+    
+    void doInitialLedgerLoad();
+
+    std::vector<TxMeta> loadNextLedger();
+
+    void storeLedger();
+
+    void continousUpdate();
 
 
 public:

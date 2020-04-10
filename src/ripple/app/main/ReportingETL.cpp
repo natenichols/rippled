@@ -136,34 +136,7 @@ public:
         return res;
     }
 };
-/*
-class ConcurrentQueue
-{
-    struct Cell
-    {
-        std::string index;
-        std::string data;
-    };
-    std::queue<Cell> queue_;
-    std::mutex m_;
 
-    void push(std::string&& index, std::string&& data)
-    {
-        std::unique_lock(
-        queue_.emplace(std::move(index), std::move(data));
-    }
-
-    Cell& front()
-    {
-        return queue_.front();
-    }
-
-    Cell& pop()
-    {
-        queue_.pop();
-    }
-}
-*/
 void
 ReportingETL::doSubscribe()
 {
@@ -254,6 +227,479 @@ ReportingETL::doSubscribe()
             return;
         }
     });
+}
+
+std::vector<TxMeta>
+ReportingETL::loadNextLedger()
+{
+    // ledger header with txns and metadata
+    org::xrpl::rpc::v1::GetLedgerResponse reply;
+    org::xrpl::rpc::v1::GetLedgerRequest request;
+    if (false and this->currentIndex_ == 0)
+    {
+        request.mutable_ledger()->set_shortcut(
+            org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED);
+    }
+    else
+    {
+        this->currentIndex_ = queue_.pop();
+        if (this->currentIndex_ == 0)
+        {
+            return std::vector<TxMeta>{};
+        }
+        request.mutable_ledger()->set_sequence(this->currentIndex_);
+    }
+    request.set_transactions(true);
+    request.set_expand(true);
+    std::cout << "calling get ledger" << std::endl;
+    std::cout << "ledger index = " << this->currentIndex_ << std::endl;
+
+    bool validated = false;
+
+    int toWait = 1;
+    while (not validated)
+    {
+        grpc::ClientContext grpcContext;
+        grpc::Status status = stub_->GetLedger(&grpcContext, request, &reply);
+        if (status.ok())
+        {
+            validated = reply.validated();
+            if (!validated)
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+            toWait = 1;
+            continue;
+        }
+        std::cout << "reply = " << reply.DebugString() << std::endl;
+        std::cout << "status = " << status.error_code()
+                  << " msg = " << status.error_message() << std::endl;
+        std::cout << "request = " << request.DebugString() << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(toWait));
+        toWait *= 2;
+    }
+
+    std::cout << reply.DebugString() << std::endl;
+
+    std::cout << "deserialize header" << std::endl;
+    LedgerInfo lgrInfo = deserializeHeader(
+        makeSlice(reply.ledger_header()));
+    std::cout << "make ledger" << std::endl;
+    this->currentIndex_ = lgrInfo.seq;
+
+    if (!this->ledger_)
+    {
+        this->ledger_ = std::make_shared<Ledger>(
+            lgrInfo, this->app_.config(), this->app_.getNodeFamily());
+    }
+    else
+    {
+        this->ledger_ =
+            std::make_shared<Ledger>(*this->ledger_, NetClock::time_point{});
+        this->ledger_->setLedgerInfo(lgrInfo);
+    }
+
+    this->ledger_->stateMap().clearSynching();
+    this->ledger_->txMap().clearSynching();
+    std::vector<TxMeta> metas;
+
+    std::cout << "process txns" << std::endl;
+    for (auto& txn : reply.transactions_list().transactions())
+    {
+        std::cout << "process txn" << std::endl;
+        auto& raw = txn.transaction_blob();
+
+        SerialIter it{raw.data(), raw.size()};
+        STTx sttx{it};
+
+        std::cout << "made sttx" << std::endl;
+        auto txSerializer = std::make_shared<Serializer>(sttx.getSerializer());
+        std::cout << "made sttx serializer" << std::endl;
+
+        TxMeta txMeta{sttx.getTransactionID(),
+                      this->ledger_->info().seq,
+                      txn.metadata_blob()};
+        metas.push_back(txMeta);
+
+        std::cout << "made txMeta" << std::endl;
+
+        auto metaSerializer =
+            std::make_shared<Serializer>(txMeta.getAsObject().getSerializer());
+
+        std::cout << "made txMeta serializer" << std::endl;
+
+        if (!this->ledger_->txExists(sttx.getTransactionID()))
+            this->ledger_->rawTxInsert(
+                sttx.getTransactionID(), txSerializer, metaSerializer);
+    }
+    return metas;
+}
+
+void ReportingETL::doInitialLedgerLoad()
+{
+    if(method_ == LoadMethod::ITERATIVE)
+    {
+        loadIterative();
+    }
+    else if(method_ == LoadMethod::BUFFER)
+    {
+        loadBuffer();
+    }
+    else if(method_ == LoadMethod::PARALLEL)
+    {
+        loadParallel();
+    }
+}
+
+//TODO insert into ledger in parallel
+//Use ringbuffer? Or something simpler?
+void ReportingETL::loadParallel()
+{
+    auto markers = getMarkers();
+    std::vector<std::vector<std::shared_ptr<SLE>>> sles{markers.size()};
+    std::vector<std::thread> threads;
+    // std::mutex ledgerMutex;
+    std::cout << "starting data" << std::endl;
+    auto start = std::chrono::system_clock::now();
+
+    for (size_t i = 0; i < markers.size(); ++i)
+    {
+        auto& marker = markers[i];
+        std::optional<uint256> nextMarker;
+        if (i + 1 < markers.size())
+        {
+            nextMarker = markers[i + 1];
+        }
+        auto& vec = sles[i];
+
+        threads.emplace_back([marker, nextMarker, &vec, this]() {
+            // all of the ledger data
+            org::xrpl::rpc::v1::GetLedgerDataResponse replyData;
+            org::xrpl::rpc::v1::GetLedgerDataRequest requestData;
+            grpc::ClientContext context;
+            unsigned char nextPrefix = 0x00;
+            if (nextMarker)
+                nextPrefix = nextMarker->data()[0];
+
+            requestData.mutable_ledger()->set_sequence(this->currentIndex_);
+            if (marker != 0)
+                requestData.set_marker(marker.data(), marker.size());
+
+            // if (nextMarker)
+            //    requestDataLcl.set_end_marker(
+            //        nextMarker->data(), nextMarker->size());
+            grpc::Status status = stub_->GetLedgerData(
+                &context, requestData, &replyData);
+
+            while (not stopping_)
+            {
+                if (replyData.marker().size() > 0)
+                {
+                    std::string firstChar{replyData.marker()[0]};
+                    std::cout << "marker char = " << strHex(firstChar)
+                              << std::endl;
+                }
+                else
+                {
+                    std::cout << "empty marker" << std::endl;
+                }
+
+                for (auto& state : replyData.state_objects())
+                {
+                    auto& index = state.index();
+                    auto& data = state.data();
+
+                    auto key = uint256::fromVoid(index.data());
+
+                    SerialIter it{data.data(), data.size()};
+                    std::shared_ptr<SLE> sle = std::make_shared<SLE>(it, key);
+                    vec.push_back(sle);
+                }
+
+                if (replyData.marker().size() == 0)
+                    break;
+                unsigned char prefix = replyData.marker()[0];
+                if (nextPrefix != 0x00 and prefix >= nextPrefix)
+                    break;
+
+                grpc::ClientContext contextLocal;
+                requestData.set_marker(std::move(replyData.marker()));
+                status = stub_->GetLedgerData(
+                    &contextLocal, requestData, &replyData);
+            }
+        });
+    }
+
+    for (auto& t : threads)
+    {
+        t.join();
+    }
+
+    for (auto& vec : sles)
+    {
+        for (auto& sle : vec)
+        {
+            if (!ledger_->exists(sle->key()))
+                ledger_->rawInsert(sle);
+        }
+    }
+    auto end = std::chrono::system_clock::now();
+
+    std::chrono::duration<double> diff = end - start;
+    std::cout << "Time to download ledger = " << diff.count() << "seconds"
+              << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+}
+
+void ReportingETL::loadBuffer()
+{
+    // all of the ledger data
+    org::xrpl::rpc::v1::GetLedgerDataResponse replyData;
+    org::xrpl::rpc::v1::GetLedgerDataRequest requestData;
+
+    grpc::ClientContext context;
+    requestData.mutable_ledger()->set_sequence(this->currentIndex_);
+    RingBuffer buffer(25);
+
+    std::thread reader{[&buffer, this]() {
+        bool more = true;
+        while (more and not stopping_)
+        {
+            more =
+                buffer.consume([this](std::string& index, std::string& data) {
+                    auto key = uint256::fromVoid(index.data());
+
+                    SerialIter it{data.data(), data.size()};
+                    std::shared_ptr<SLE> sle = std::make_shared<SLE>(it, key);
+                    if (!this->ledger_->exists(key))
+                        this->ledger_->rawInsert(sle);
+                });
+        }
+    }};
+
+    std::cout << "starting data" << std::endl;
+    auto start = std::chrono::system_clock::now();
+    grpc::Status status =
+        stub_->GetLedgerData(&context, requestData, &replyData);
+
+    // TODO: improve the performance of this
+    while (not stopping_)
+    {
+        if (replyData.marker().size() > 0)
+        {
+            std::string firstChar{replyData.marker()[0]};
+            std::cout << "marker char = " << strHex(firstChar) << std::endl;
+        }
+        else
+        {
+            std::cout << "empty marker" << std::endl;
+        }
+        for (auto& state : *replyData.mutable_state_objects())
+        {
+            auto& index = *state.mutable_index();
+            auto& data = *state.mutable_data();
+            buffer.push(std::move(index), std::move(data));
+        }
+
+        if (replyData.marker().size() == 0)
+        {
+            buffer.writeFinished();
+            break;
+        }
+
+        grpc::ClientContext contextLocal;
+        requestData.set_marker(std::move(replyData.marker()));
+        status =
+            stub_->GetLedgerData(&contextLocal, requestData, &replyData);
+    }
+    reader.join();
+    auto end = std::chrono::system_clock::now();
+
+    std::chrono::duration<double> diff = end - start;
+    std::cout << "Time to download ledger = " << diff.count() << "seconds"
+              << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+}
+
+void ReportingETL::loadIterative()
+{
+    
+    grpc::ClientContext context;
+    org::xrpl::rpc::v1::GetLedgerDataResponse replyData;
+    org::xrpl::rpc::v1::GetLedgerDataRequest requestData;
+
+    requestData.mutable_ledger()->set_sequence(this->currentIndex_);
+    std::cout << "starting data" << std::endl;
+    auto start = std::chrono::system_clock::now();
+    grpc::Status status =
+        stub_->GetLedgerData(&context, requestData, &replyData);
+    // TODO: improve the performance of this
+    while (not stopping_)
+    {
+        if (replyData.marker().size() > 0)
+        {
+            std::string firstChar{replyData.marker()[0]};
+            std::cout << "marker char = " << strHex(firstChar) << std::endl;
+        }
+        else
+        {
+            std::cout << "empty marker" << std::endl;
+        }
+
+        for (auto& state : replyData.state_objects())
+        {
+            auto& index = state.index();
+            auto& data = state.data();
+
+            auto key = uint256::fromVoid(index.data());
+
+            SerialIter it{data.data(), data.size()};
+            std::shared_ptr<SLE> sle = std::make_shared<SLE>(it, key);
+            if (!this->ledger_->exists(key))
+                this->ledger_->rawInsert(sle);
+        }
+
+        if (replyData.marker().size() == 0)
+            break;
+
+        grpc::ClientContext contextLocal;
+        requestData.set_marker(std::move(replyData.marker()));
+        status =
+            stub_->GetLedgerData(&contextLocal, requestData, &replyData);
+    }
+
+    auto end = std::chrono::system_clock::now();
+
+    std::chrono::duration<double> diff = end - start;
+    std::cout << "Time to download ledger = " << diff.count() << "seconds"
+              << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+}
+
+void
+ReportingETL::storeLedger()
+{
+    ledger_->setImmutable(app_.config());
+
+    std::cout << strHex(ledger_->stateMap().getHash().as_uint256())
+              << std::endl;
+    std::cout << strHex(ledger_->info().accountHash) << std::endl;
+
+    std::cout << strHex(ledger_->txMap().getHash().as_uint256())
+              << std::endl;
+    std::cout << strHex(ledger_->info().txHash) << std::endl;
+
+    ledger_->stateMap().flushDirty(
+        hotACCOUNT_NODE, ledger_->info().seq);
+
+    ledger_->txMap().flushDirty(
+        hotTRANSACTION_NODE, ledger_->info().seq);
+
+    std::cout << strHex(ledger_->stateMap().getHash().as_uint256())
+              << std::endl;
+    std::cout << strHex(ledger_->info().accountHash) << std::endl;
+
+    std::cout << strHex(ledger_->txMap().getHash().as_uint256())
+              << std::endl;
+    std::cout << strHex(ledger_->info().txHash) << std::endl;
+
+    assert(
+        ledger_->txMap().getHash().as_uint256() ==
+        ledger_->info().txHash);
+
+    assert(
+        ledger_->stateMap().getHash().as_uint256() ==
+        ledger_->info().accountHash);
+
+    app_.setOpenLedger(ledger_);
+
+    app_.getLedgerMaster().storeLedger(ledger_);
+
+    app_.getLedgerMaster().switchLCL(ledger_);
+}
+
+void
+ReportingETL::continousUpdate()
+{
+    while (not stopping_)
+    {
+        auto metas = loadNextLedger();
+        // signals stop
+        if (metas.size() == 0)
+            continue;
+        std::set<uint256> indices;
+        for (auto& meta : metas)
+        {
+            STArray& nodes = meta.getNodes();
+            for (auto it = nodes.begin(); it != nodes.end(); ++it)
+            {
+                // ledger index
+                indices.insert(it->getFieldH256(sfLedgerIndex));
+            }
+        }
+
+        for (auto iter = indices.begin(); iter != indices.end();)
+        {
+            auto& idx = *iter;
+            org::xrpl::rpc::v1::GetLedgerEntryResponse replyEntry;
+            org::xrpl::rpc::v1::GetLedgerEntryRequest requestEntry;
+
+            grpc::ClientContext grpcContextEntry;
+            requestEntry.mutable_ledger()->set_sequence(currentIndex_);
+            requestEntry.set_index(idx.data(), idx.size());
+            grpc::Status status = stub_->GetLedgerEntry(
+                &grpcContextEntry, requestEntry, &replyEntry);
+
+            std::cout << status.error_message() << " : " << status.error_code()
+                      << " : " << replyEntry.DebugString()
+                      << " index : " << strHex(idx) << std::endl;
+
+            if (status.error_code() == grpc::StatusCode::NOT_FOUND)
+            {
+                if (ledger_->exists(idx))
+                {
+                    std::cout << "erasing" << std::endl;
+                    ledger_->rawErase(idx);
+                }
+                else
+                {
+                    std::cout << "noop" << std::endl;
+                }
+                ++iter;
+            }
+            else if (status.ok())
+            {
+                auto& objRaw = replyEntry.object_binary();
+                SerialIter it{objRaw.data(), objRaw.size()};
+
+                std::shared_ptr<SLE> sle = std::make_shared<SLE>(it, idx);
+                if (ledger_->exists(idx))
+                {
+                    std::cout << "replacing" << std::endl;
+                    ledger_->rawReplace(sle);
+                }
+                else
+                {
+                    std::cout << "inserting" << std::endl;
+                    ledger_->rawInsert(sle);
+                }
+                ++iter;
+            }
+            else if (status.error_code() == 8)
+            {
+                std::cout << "usage balance. pausing" << std::endl;
+
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+            }
+            else
+            {
+                std::cout << "unexpected error, trying again" << std::endl;
+            }
+        }
+
+        ledger_->updateSkipList();
+        storeLedger();
+        std::cout << "Stored ledger " + std::to_string(currentIndex_)
+                  << std::endl;
+    }
 }
 
 void
@@ -489,9 +935,11 @@ ReportingETL::doWork()
         }
         else
         {
+
             auto markers = getMarkers();
+            std::vector<std::vector<std::shared_ptr<SLE>>> sles{markers.size()};
             std::vector<std::thread> threads;
-            std::mutex ledgerMutex;
+            //std::mutex ledgerMutex;
             std::cout << "starting data" << std::endl;
             auto start = std::chrono::system_clock::now();
 
@@ -503,8 +951,9 @@ ReportingETL::doWork()
                 {
                     nextMarker = markers[i+1];
                 }
+                auto& vec = sles[i];
 
-                threads.emplace_back([marker, nextMarker, &ledgerMutex, this]() {
+                threads.emplace_back([marker, nextMarker, &vec, this]() {
                     // all of the ledger data
                     org::xrpl::rpc::v1::GetLedgerDataResponse replyDataLcl;
                     org::xrpl::rpc::v1::GetLedgerDataRequest requestDataLcl;
@@ -547,14 +996,18 @@ ReportingETL::doWork()
                             SerialIter it{data.data(), data.size()};
                             std::shared_ptr<SLE> sle =
                                 std::make_shared<SLE>(it, key);
+                            vec.push_back(sle);
+
                             //std::cout << (!sle->key()) << std::endl;
                             
+                            /*
                             std::unique_lock<std::mutex> lck(ledgerMutex);
                             if (!this->ledger_->exists(key))
                                 this->ledger_->rawInsert(sle);
                             else
                                 std::cout << "exists" << std::endl;
-                               
+                              
+                               */ 
                         }
 
                         if (replyDataLcl.marker().size() == 0)
@@ -575,6 +1028,15 @@ ReportingETL::doWork()
             for(auto& t : threads)
             {
                 t.join();
+            }
+
+            for(auto& vec : sles)
+            {
+                for(auto& sle : vec)
+                {
+                    if(!this->ledger_->exists(sle->key()))
+                        this->ledger_->rawInsert(sle);
+                }
             }
             auto end = std::chrono::system_clock::now();
 
