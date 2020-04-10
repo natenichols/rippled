@@ -44,6 +44,7 @@ namespace ripple {
 
 class ReportingETL
 {
+    //TODO some logging in the queue
     class LedgerIndexQueue
     {
         std::queue<uint32_t> queue_;
@@ -113,6 +114,9 @@ private:
 
     uint32_t currentIndex_ = 0;
 
+    //TODO stopping logic needs to be better
+    //There are a variety of loops and mutexs in play
+    //Sometimes, the software can't stop
     std::atomic_bool stopping_ = false;
 
     std::shared_ptr<Ledger> ledger_;
@@ -129,6 +133,7 @@ private:
     LoadMethod method_ = ITERATIVE;
    
 
+    //TODO better names for these functions
     void loadIterative();
 
     void loadParallel();

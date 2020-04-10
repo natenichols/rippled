@@ -46,12 +46,8 @@ std::vector<uint256> getMarkers()
     
     for(size_t i = 0; i < 15; ++i)
     {
-        std::cout << "key is " << strHex(key)
-            << std::endl;
         key += incr;
         markers.push_back(key);
-
-        
     }
     return markers;
 }
@@ -197,10 +193,8 @@ ReportingETL::doSubscribe()
                 ws.read(buffer);
                 Json::Value response;
                 Json::Reader reader;
-                std::cout << reader.parse(
-                                 static_cast<char const*>(buffer.data().data()),
-                                 response)
-                          << std::endl;
+                reader.parse(
+                    static_cast<char const*>(buffer.data().data()), response);
 
                 uint32_t ledgerIndex = 0;
                 if (response.isMember("result"))
@@ -209,9 +203,8 @@ ReportingETL::doSubscribe()
                 else
                     ledgerIndex = response[jss::ledger_index].asUInt();
                 queue_.push(ledgerIndex);
-                std::cout << "ledger = " << ledgerIndex << std::endl;
-
-                std::cout << beast::make_printable(buffer.data()) << std::endl;
+                JLOG(journal_.info()) << "received ledger = " << ledgerIndex
+                   << " on subscription stream";
             }
 
             queue_.stop();
@@ -235,24 +228,14 @@ ReportingETL::loadNextLedger()
     // ledger header with txns and metadata
     org::xrpl::rpc::v1::GetLedgerResponse reply;
     org::xrpl::rpc::v1::GetLedgerRequest request;
-    if (false and this->currentIndex_ == 0)
+    currentIndex_ = queue_.pop();
+    if (currentIndex_ == 0)
     {
-        request.mutable_ledger()->set_shortcut(
-            org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED);
+        return std::vector<TxMeta>{};
     }
-    else
-    {
-        this->currentIndex_ = queue_.pop();
-        if (this->currentIndex_ == 0)
-        {
-            return std::vector<TxMeta>{};
-        }
-        request.mutable_ledger()->set_sequence(this->currentIndex_);
-    }
+    request.mutable_ledger()->set_sequence(currentIndex_);
     request.set_transactions(true);
     request.set_expand(true);
-    std::cout << "calling get ledger" << std::endl;
-    std::cout << "ledger index = " << this->currentIndex_ << std::endl;
 
     bool validated = false;
 
@@ -269,10 +252,11 @@ ReportingETL::loadNextLedger()
             toWait = 1;
             continue;
         }
-        std::cout << "reply = " << reply.DebugString() << std::endl;
-        std::cout << "status = " << status.error_code()
-                  << " msg = " << status.error_message() << std::endl;
-        std::cout << "request = " << request.DebugString() << std::endl;
+        JLOG(journal_.warn())
+            << "Ledger = " << currentIndex_
+            << " not validated yet. reply = "
+            << reply.DebugString();
+        //TODO is this waiting logic still needed?
         std::this_thread::sleep_for(std::chrono::seconds(toWait));
         toWait *= 2;
     }
@@ -282,54 +266,67 @@ ReportingETL::loadNextLedger()
     std::cout << "deserialize header" << std::endl;
     LedgerInfo lgrInfo = deserializeHeader(
         makeSlice(reply.ledger_header()), true);
-    std::cout << "make ledger" << std::endl;
-    this->currentIndex_ = lgrInfo.seq;
+    currentIndex_ = lgrInfo.seq;
 
-    if (!this->ledger_)
+    JLOG(journal_.info()) << "Loading ledger header : "
+                           << " seq = " << lgrInfo.seq << " hash - "
+                           << to_string(lgrInfo.hash) << " account_hash = "
+                           << to_string(lgrInfo.accountHash)
+                           << " tx_hash = " << to_string(lgrInfo.txHash);
+
+    if (!ledger_)
     {
-        this->ledger_ = std::make_shared<Ledger>(
-            lgrInfo, this->app_.config(), this->app_.getNodeFamily());
+        ledger_ = std::make_shared<Ledger>(
+            lgrInfo, app_.config(), app_.getNodeFamily());
     }
     else
     {
-        this->ledger_ =
-            std::make_shared<Ledger>(*this->ledger_, NetClock::time_point{});
-        this->ledger_->setLedgerInfo(lgrInfo);
+        ledger_ =
+            std::make_shared<Ledger>(*ledger_, NetClock::time_point{});
+        ledger_->setLedgerInfo(lgrInfo);
     }
 
-    this->ledger_->stateMap().clearSynching();
-    this->ledger_->txMap().clearSynching();
+    ledger_->stateMap().clearSynching();
+    ledger_->txMap().clearSynching();
     std::vector<TxMeta> metas;
 
-    std::cout << "process txns" << std::endl;
+    JLOG(journal_.debug()) << "Loading transactions...";
     for (auto& txn : reply.transactions_list().transactions())
     {
-        std::cout << "process txn" << std::endl;
         auto& raw = txn.transaction_blob();
 
         SerialIter it{raw.data(), raw.size()};
         STTx sttx{it};
 
-        std::cout << "made sttx" << std::endl;
         auto txSerializer = std::make_shared<Serializer>(sttx.getSerializer());
-        std::cout << "made sttx serializer" << std::endl;
 
         TxMeta txMeta{sttx.getTransactionID(),
-                      this->ledger_->info().seq,
+                      ledger_->info().seq,
                       txn.metadata_blob()};
         metas.push_back(txMeta);
 
-        std::cout << "made txMeta" << std::endl;
 
         auto metaSerializer =
             std::make_shared<Serializer>(txMeta.getAsObject().getSerializer());
 
-        std::cout << "made txMeta serializer" << std::endl;
 
-        if (!this->ledger_->txExists(sttx.getTransactionID()))
-            this->ledger_->rawTxInsert(
+        if (!ledger_->txExists(sttx.getTransactionID()))
+        {
+            ledger_->rawTxInsert(
                 sttx.getTransactionID(), txSerializer, metaSerializer);
+            JLOG(journal_.debug()) << "Inserted transaction = "
+                << strHex(sttx.getTransactionID())
+                << " into ledger = " << currentIndex_;
+        }
+        else
+        {
+            JLOG(journal_.warn())
+                << " Transaction = " << strHex(sttx.getTransactionID())
+                << " already exists in ledger = " << currentIndex_;
+        }
     }
+    JLOG(journal_.debug())
+        << "Loaded transactions for ledger = " << currentIndex_;
     return metas;
 }
 
@@ -357,7 +354,7 @@ void ReportingETL::loadParallel()
     std::vector<std::vector<std::shared_ptr<SLE>>> sles{markers.size()};
     std::vector<std::thread> threads;
     // std::mutex ledgerMutex;
-    std::cout << "starting data" << std::endl;
+    JLOG(journal_.debug()) << "starting data download. method == PARALLEL";
     auto start = std::chrono::system_clock::now();
 
     for (size_t i = 0; i < markers.size(); ++i)
@@ -394,12 +391,12 @@ void ReportingETL::loadParallel()
                 if (replyData.marker().size() > 0)
                 {
                     std::string firstChar{replyData.marker()[0]};
-                    std::cout << "marker char = " << strHex(firstChar)
-                              << std::endl;
+                    JLOG(journal_.trace())
+                        << "marker char = " << strHex(firstChar);
                 }
                 else
                 {
-                    std::cout << "empty marker" << std::endl;
+                    JLOG(journal_.trace()) << "empty marker";
                 }
 
                 for (auto& state : replyData.state_objects())
@@ -433,10 +430,12 @@ void ReportingETL::loadParallel()
         t.join();
     }
 
+    //TODO do this while data is being received
     for (auto& vec : sles)
     {
         for (auto& sle : vec)
         {
+            JLOG(journal_.trace()) << "Inserting SLE = " << strHex(sle->key());
             if (!ledger_->exists(sle->key()))
                 ledger_->rawInsert(sle);
         }
@@ -444,9 +443,8 @@ void ReportingETL::loadParallel()
     auto end = std::chrono::system_clock::now();
 
     std::chrono::duration<double> diff = end - start;
-    std::cout << "Time to download ledger = " << diff.count() << "seconds"
-              << std::endl;
-    std::this_thread::sleep_for(std::chrono::seconds(5));
+    JLOG(journal_.debug()) << "Time to download ledger via parallel = "
+                           << diff.count() << "seconds";
 }
 
 void ReportingETL::loadBuffer()
@@ -475,7 +473,7 @@ void ReportingETL::loadBuffer()
         }
     }};
 
-    std::cout << "starting data" << std::endl;
+    JLOG(journal_.debug()) << "starting data download. method == BUFFER";
     auto start = std::chrono::system_clock::now();
     grpc::Status status =
         stub_->GetLedgerData(&context, requestData, &replyData);
@@ -486,11 +484,11 @@ void ReportingETL::loadBuffer()
         if (replyData.marker().size() > 0)
         {
             std::string firstChar{replyData.marker()[0]};
-            std::cout << "marker char = " << strHex(firstChar) << std::endl;
+            JLOG(journal_.trace()) << "marker char = " << strHex(firstChar);
         }
         else
         {
-            std::cout << "empty marker" << std::endl;
+            JLOG(journal_.trace()) << "empty marker";
         }
         for (auto& state : *replyData.mutable_state_objects())
         {
@@ -514,9 +512,8 @@ void ReportingETL::loadBuffer()
     auto end = std::chrono::system_clock::now();
 
     std::chrono::duration<double> diff = end - start;
-    std::cout << "Time to download ledger = " << diff.count() << "seconds"
-              << std::endl;
-    std::this_thread::sleep_for(std::chrono::seconds(5));
+    JLOG(journal_.debug()) << "Time to download ledger via buffer = "
+                           << diff.count() << "seconds";
 }
 
 void ReportingETL::loadIterative()
@@ -526,8 +523,8 @@ void ReportingETL::loadIterative()
     org::xrpl::rpc::v1::GetLedgerDataResponse replyData;
     org::xrpl::rpc::v1::GetLedgerDataRequest requestData;
 
-    requestData.mutable_ledger()->set_sequence(this->currentIndex_);
-    std::cout << "starting data" << std::endl;
+    requestData.mutable_ledger()->set_sequence(currentIndex_);
+    JLOG(journal_.debug()) << "starting data download. method == ITERATIVE";
     auto start = std::chrono::system_clock::now();
     grpc::Status status =
         stub_->GetLedgerData(&context, requestData, &replyData);
@@ -537,11 +534,11 @@ void ReportingETL::loadIterative()
         if (replyData.marker().size() > 0)
         {
             std::string firstChar{replyData.marker()[0]};
-            std::cout << "marker char = " << strHex(firstChar) << std::endl;
+            JLOG(journal_.trace()) << "marker char = " << strHex(firstChar);
         }
         else
         {
-            std::cout << "empty marker" << std::endl;
+            JLOG(journal_.trace()) << "empty marker";
         }
 
         for (auto& state : replyData.state_objects())
@@ -553,8 +550,8 @@ void ReportingETL::loadIterative()
 
             SerialIter it{data.data(), data.size()};
             std::shared_ptr<SLE> sle = std::make_shared<SLE>(it, key);
-            if (!this->ledger_->exists(key))
-                this->ledger_->rawInsert(sle);
+            if (!ledger_->exists(key))
+                ledger_->rawInsert(sle);
         }
 
         if (replyData.marker().size() == 0)
@@ -569,37 +566,23 @@ void ReportingETL::loadIterative()
     auto end = std::chrono::system_clock::now();
 
     std::chrono::duration<double> diff = end - start;
-    std::cout << "Time to download ledger = " << diff.count() << "seconds"
-              << std::endl;
-    std::this_thread::sleep_for(std::chrono::seconds(5));
+    JLOG(journal_.debug()) << "Time to download ledger via iterative = "
+                           << diff.count() << "seconds";
 }
 
 void
 ReportingETL::storeLedger()
 {
+
+    JLOG(journal_.debug()) << "Storing ledger = "
+        << currentIndex_;
     ledger_->setImmutable(app_.config());
-
-    std::cout << strHex(ledger_->stateMap().getHash().as_uint256())
-              << std::endl;
-    std::cout << strHex(ledger_->info().accountHash) << std::endl;
-
-    std::cout << strHex(ledger_->txMap().getHash().as_uint256())
-              << std::endl;
-    std::cout << strHex(ledger_->info().txHash) << std::endl;
 
     ledger_->stateMap().flushDirty(
         hotACCOUNT_NODE, ledger_->info().seq);
 
     ledger_->txMap().flushDirty(
         hotTRANSACTION_NODE, ledger_->info().seq);
-
-    std::cout << strHex(ledger_->stateMap().getHash().as_uint256())
-              << std::endl;
-    std::cout << strHex(ledger_->info().accountHash) << std::endl;
-
-    std::cout << strHex(ledger_->txMap().getHash().as_uint256())
-              << std::endl;
-    std::cout << strHex(ledger_->info().txHash) << std::endl;
 
     assert(
         ledger_->txMap().getHash().as_uint256() ==
@@ -614,6 +597,9 @@ ReportingETL::storeLedger()
     app_.getLedgerMaster().storeLedger(ledger_);
 
     app_.getLedgerMaster().switchLCL(ledger_);
+    
+    JLOG(journal_.info()) << "SUCCESS!!! Stored ledger = "
+        << currentIndex_;
 }
 
 void
@@ -635,6 +621,9 @@ ReportingETL::continousUpdate()
                 indices.insert(it->getFieldH256(sfLedgerIndex));
             }
         }
+        JLOG(journal_.info()) << "Ledger = " << currentIndex_
+            << "transactions = " << metas.size()
+            << "objects = " << indices.size();
 
         for (auto iter = indices.begin(); iter != indices.end();)
         {
@@ -648,20 +637,24 @@ ReportingETL::continousUpdate()
             grpc::Status status = stub_->GetLedgerEntry(
                 &grpcContextEntry, requestEntry, &replyEntry);
 
-            std::cout << status.error_message() << " : " << status.error_code()
-                      << " : " << replyEntry.DebugString()
-                      << " index : " << strHex(idx) << std::endl;
+
+
+            JLOG(journal_.trace()) 
+                << "index = " << idx
+                << "error_message = " << status.error_message()
+                << " . error_code = " << status.error_code()
+                << " reply = " << replyEntry.DebugString();
 
             if (status.error_code() == grpc::StatusCode::NOT_FOUND)
             {
                 if (ledger_->exists(idx))
                 {
-                    std::cout << "erasing" << std::endl;
+                    JLOG(journal_.trace()) << "erasing = " << idx;
                     ledger_->rawErase(idx);
                 }
                 else
                 {
-                    std::cout << "noop" << std::endl;
+                    JLOG(journal_.trace()) << "noop = " << idx;
                 }
                 ++iter;
             }
@@ -673,32 +666,36 @@ ReportingETL::continousUpdate()
                 std::shared_ptr<SLE> sle = std::make_shared<SLE>(it, idx);
                 if (ledger_->exists(idx))
                 {
-                    std::cout << "replacing" << std::endl;
+
+                    JLOG(journal_.trace()) << "replacing = " << idx;
                     ledger_->rawReplace(sle);
                 }
                 else
                 {
-                    std::cout << "inserting" << std::endl;
+
+                    JLOG(journal_.trace()) << "inserting = " << idx;
                     ledger_->rawInsert(sle);
                 }
                 ++iter;
             }
             else if (status.error_code() == 8)
             {
-                std::cout << "usage balance. pausing" << std::endl;
+                JLOG(journal_.warn()) << "usage balance. pausing";
 
                 std::this_thread::sleep_for(std::chrono::seconds(2));
             }
             else
             {
-                std::cout << "unexpected error, trying again" << std::endl;
+                JLOG(journal_.warn()) << "unexpected error, trying again";
             }
         }
+        JLOG(journal_.debug())
+            << "Updated ledger = " << currentIndex_;
 
         ledger_->updateSkipList();
         storeLedger();
-        std::cout << "Stored ledger " + std::to_string(currentIndex_)
-                  << std::endl;
+        JLOG(journal_.info()) << "SUCCESS! Stored ledger = "
+                << currentIndex_;
     }
 }
 
@@ -706,487 +703,21 @@ void
 ReportingETL::doWork()
 {
     worker_ = std::thread([this]() {
-        // TODO move these lambdas to functions
-        auto loadLedger = [this]() {
-            // ledger header with txns and metadata
-            org::xrpl::rpc::v1::GetLedgerResponse reply;
-            org::xrpl::rpc::v1::GetLedgerRequest request;
-            if (false and this->currentIndex_ == 0)
-            {
-                request.mutable_ledger()->set_shortcut(
-                    org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED);
-            }
-            else
-            {
-                this->currentIndex_ = queue_.pop();
-                if (this->currentIndex_ == 0)
-                {
-                    return std::vector<TxMeta>{};
-                }
-                request.mutable_ledger()->set_sequence(this->currentIndex_);
-            }
-            request.set_transactions(true);
-            request.set_expand(true);
-            std::cout << "calling get ledger" << std::endl;
-            std::cout << "ledger index = " << this->currentIndex_ << std::endl;
 
-            bool validated = false;
+        JLOG(journal_.info()) << "Starting worker";
+        loadNextLedger();
 
-            int toWait = 1;
-            while (not validated)
-            {
-                grpc::ClientContext grpcContext;
-                grpc::Status status =
-                    stub_->GetLedger(&grpcContext, request, &reply);
-                if (status.ok())
-                {
-                    validated = reply.validated();
-                    if (!validated)
-                        std::this_thread::sleep_for(std::chrono::seconds(2));
-                    toWait = 1;
-                    continue;
-                }
-                std::cout << "reply = " << reply.DebugString() << std::endl;
-                std::cout << "status = " << status.error_code()
-                          << " msg = " << status.error_message() << std::endl;
-                std::cout << "request = " << request.DebugString() << std::endl;
-                std::this_thread::sleep_for(std::chrono::seconds(toWait));
-                toWait *= 2;
-            }
+        JLOG(journal_.info()) << "Downloading initial ledger";
 
-            std::cout << reply.DebugString() << std::endl;
+        doInitialLedgerLoad();
 
-            std::cout << "deserialize header" << std::endl;
-            LedgerInfo lgrInfo = deserializeHeader(
-                makeSlice(reply.ledger_header()), true);
-            std::cout << "make ledger" << std::endl;
-            this->currentIndex_ = lgrInfo.seq;
-
-            if (!this->ledger_)
-            {
-                this->ledger_ = std::make_shared<Ledger>(
-                    lgrInfo, this->app_.config(), this->app_.getNodeFamily());
-            }
-            else
-            {
-                this->ledger_ = std::make_shared<Ledger>(
-                    *this->ledger_, NetClock::time_point{});
-                this->ledger_->setLedgerInfo(lgrInfo);
-            }
-
-            this->ledger_->stateMap().clearSynching();
-            this->ledger_->txMap().clearSynching();
-            std::vector<TxMeta> metas;
-
-            std::cout << "process txns" << std::endl;
-            for (auto& txn : reply.transactions_list().transactions())
-            {
-                std::cout << "process txn" << std::endl;
-                auto& raw = txn.transaction_blob();
-
-                SerialIter it{raw.data(), raw.size()};
-                STTx sttx{it};
-
-                std::cout << "made sttx" << std::endl;
-                auto txSerializer =
-                    std::make_shared<Serializer>(sttx.getSerializer());
-                std::cout << "made sttx serializer" << std::endl;
-
-                TxMeta txMeta{sttx.getTransactionID(),
-                              this->ledger_->info().seq,
-                              txn.metadata_blob()};
-                metas.push_back(txMeta);
-
-                std::cout << "made txMeta" << std::endl;
-
-                auto metaSerializer = std::make_shared<Serializer>(
-                    txMeta.getAsObject().getSerializer());
-
-                std::cout << "made txMeta serializer" << std::endl;
-
-                if (!this->ledger_->txExists(sttx.getTransactionID()))
-                    this->ledger_->rawTxInsert(
-                        sttx.getTransactionID(), txSerializer, metaSerializer);
-            }
-            return metas;
-        };
-
-        loadLedger();
-
-        // all of the ledger data
-        org::xrpl::rpc::v1::GetLedgerDataResponse replyData;
-        org::xrpl::rpc::v1::GetLedgerDataRequest requestData;
-
-        grpc::ClientContext grpcContextData;
-        requestData.mutable_ledger()->set_sequence(this->currentIndex_);
-        if (method_ == LoadMethod::BUFFER)
-        {
-            RingBuffer buffer(25);
-
-            std::thread reader{[&buffer, this]() {
-                bool more = true;
-                while (more and not stopping_)
-                {
-                    more = buffer.consume(
-                        [this](std::string& index, std::string& data) {
-                            auto key = uint256::fromVoid(index.data());
-
-                            SerialIter it{data.data(), data.size()};
-                            std::shared_ptr<SLE> sle =
-                                std::make_shared<SLE>(it, key);
-                            if (!this->ledger_->exists(key))
-                                this->ledger_->rawInsert(sle);
-                        });
-                }
-            }};
-
-            std::cout << "starting data" << std::endl;
-            auto start = std::chrono::system_clock::now();
-            grpc::Status status =
-                stub_->GetLedgerData(&grpcContextData, requestData, &replyData);
-
-            // TODO: improve the performance of this
-            while (not stopping_)
-            {
-                if (replyData.marker().size() > 0)
-                {
-                    std::string firstChar{replyData.marker()[0]};
-                    std::cout << "marker char = " << strHex(firstChar)
-                              << std::endl;
-                }
-                else
-                {
-                    std::cout << "empty marker" << std::endl;
-                }
-                for (auto& state : *replyData.mutable_state_objects())
-                {
-                    auto& index = *state.mutable_index();
-                    auto& data = *state.mutable_data();
-                    buffer.push(std::move(index), std::move(data));
-                }
-
-                if (replyData.marker().size() == 0)
-                {
-                    buffer.writeFinished();
-                    break;
-                }
-
-                grpc::ClientContext grpcContextData2;
-                requestData.set_marker(std::move(replyData.marker()));
-                status = stub_->GetLedgerData(
-                    &grpcContextData2, requestData, &replyData);
-            }
-            reader.join();
-            auto end = std::chrono::system_clock::now();
-
-            std::chrono::duration<double> diff = end - start;
-            std::cout << "Time to download ledger = " << diff.count()
-                      << "seconds" << std::endl;
-            std::this_thread::sleep_for(std::chrono::seconds(5));
-        }
-        else if(method_ == LoadMethod::ITERATIVE)
-        {
-            std::cout << "starting data" << std::endl;
-            auto start = std::chrono::system_clock::now();
-            grpc::Status status =
-                stub_->GetLedgerData(&grpcContextData, requestData, &replyData);
-            // TODO: improve the performance of this
-            while (not stopping_)
-            {
-                if (replyData.marker().size() > 0)
-                {
-                    std::string firstChar{replyData.marker()[0]};
-                    std::cout << "marker char = " << strHex(firstChar)
-                              << std::endl;
-                }
-                else
-                {
-                    std::cout << "empty marker" << std::endl;
-                }
-
-                for (auto& state : replyData.state_objects())
-                {
-                    auto& index = state.index();
-                    auto& data = state.data();
-
-                    auto key = uint256::fromVoid(index.data());
-
-                    SerialIter it{data.data(), data.size()};
-                    std::shared_ptr<SLE> sle = std::make_shared<SLE>(it, key);
-                    if (!this->ledger_->exists(key))
-                        this->ledger_->rawInsert(sle);
-                }
-
-                if (replyData.marker().size() == 0)
-                    break;
-
-                grpc::ClientContext grpcContextData2;
-                requestData.set_marker(std::move(replyData.marker()));
-                status = stub_->GetLedgerData(
-                    &grpcContextData2, requestData, &replyData);
-            }
-
-            auto end = std::chrono::system_clock::now();
-
-            std::chrono::duration<double> diff = end - start;
-            std::cout << "Time to download ledger = " << diff.count()
-                      << "seconds" << std::endl;
-            std::this_thread::sleep_for(std::chrono::seconds(5));
-        }
-        else
-        {
-
-            auto markers = getMarkers();
-            std::vector<std::vector<std::shared_ptr<SLE>>> sles{markers.size()};
-            std::vector<std::thread> threads;
-            //std::mutex ledgerMutex;
-            std::cout << "starting data" << std::endl;
-            auto start = std::chrono::system_clock::now();
-
-            for(size_t i = 0; i < markers.size(); ++i)
-            {
-                auto& marker = markers[i];
-                std::optional<uint256> nextMarker;
-                if( i + 1 < markers.size())
-                {
-                    nextMarker = markers[i+1];
-                }
-                auto& vec = sles[i];
-
-                threads.emplace_back([marker, nextMarker, &vec, this]() {
-                    // all of the ledger data
-                    org::xrpl::rpc::v1::GetLedgerDataResponse replyDataLcl;
-                    org::xrpl::rpc::v1::GetLedgerDataRequest requestDataLcl;
-                    unsigned char nextPrefix = 0x00;
-                    if (nextMarker)
-                        nextPrefix = nextMarker->data()[0];
-                    grpc::ClientContext grpcContextDataLcl;
-
-                    requestDataLcl.mutable_ledger()->set_sequence(
-                        this->currentIndex_);
-                    if(marker != 0)
-                        requestDataLcl.set_marker(marker.data(), marker.size());
-                    
-                    //if (nextMarker)
-                    //    requestDataLcl.set_end_marker(
-                    //        nextMarker->data(), nextMarker->size());
-                    grpc::Status status =
-                        stub_->GetLedgerData(&grpcContextDataLcl, requestDataLcl, &replyDataLcl);
-
-                    while (not stopping_)
-                    {
-                        if (replyDataLcl.marker().size() > 0)
-                        {
-                            std::string firstChar{replyDataLcl.marker()[0]};
-                            std::cout << "marker char = " << strHex(firstChar)
-                                      << std::endl;
-                        }
-                        else
-                        {
-                            std::cout << "empty marker" << std::endl;
-                        }
-
-                        for (auto& state : replyDataLcl.state_objects())
-                        {
-                            auto& index = state.index();
-                            auto& data = state.data();
-
-                            auto key = uint256::fromVoid(index.data());
-
-                            SerialIter it{data.data(), data.size()};
-                            std::shared_ptr<SLE> sle =
-                                std::make_shared<SLE>(it, key);
-                            vec.push_back(sle);
-
-                            //std::cout << (!sle->key()) << std::endl;
-                            
-                            /*
-                            std::unique_lock<std::mutex> lck(ledgerMutex);
-                            if (!this->ledger_->exists(key))
-                                this->ledger_->rawInsert(sle);
-                            else
-                                std::cout << "exists" << std::endl;
-                              
-                               */ 
-                        }
-
-                        if (replyDataLcl.marker().size() == 0)
-                            break;
-                        unsigned char prefix = replyDataLcl.marker()[0];
-                        if(nextPrefix != 0x00 and prefix >= nextPrefix)
-                            break;
-
-                        grpc::ClientContext grpcContextData2;
-                        requestDataLcl.set_marker(
-                            std::move(replyDataLcl.marker()));
-                        status = stub_->GetLedgerData(
-                            &grpcContextData2, requestDataLcl, &replyDataLcl);
-                    }
-                });
-            }
-
-            for(auto& t : threads)
-            {
-                t.join();
-            }
-
-            for(auto& vec : sles)
-            {
-                for(auto& sle : vec)
-                {
-                    if(!this->ledger_->exists(sle->key()))
-                        this->ledger_->rawInsert(sle);
-                }
-            }
-            auto end = std::chrono::system_clock::now();
-
-            std::chrono::duration<double> diff = end - start;
-            std::cout << "Time to download ledger = " << diff.count()
-                      << "seconds" << std::endl;
-            std::this_thread::sleep_for(std::chrono::seconds(5));
-        
-            
-        }
-
-        std::cout << "finished data. storing" << std::endl;
-        auto storeLedger = [this]() {
-            this->ledger_->setImmutable(this->app_.config());
-
-            std::cout << strHex(
-                             this->ledger_->stateMap().getHash().as_uint256())
-                      << std::endl;
-            std::cout << strHex(this->ledger_->info().accountHash) << std::endl;
-
-            std::cout << strHex(this->ledger_->txMap().getHash().as_uint256())
-                      << std::endl;
-            std::cout << strHex(this->ledger_->info().txHash) << std::endl;
-
-            this->ledger_->stateMap().flushDirty(
-                hotACCOUNT_NODE, this->ledger_->info().seq);
-
-            this->ledger_->txMap().flushDirty(
-                hotTRANSACTION_NODE, this->ledger_->info().seq);
-
-            std::cout << strHex(
-                             this->ledger_->stateMap().getHash().as_uint256())
-                      << std::endl;
-            std::cout << strHex(this->ledger_->info().accountHash) << std::endl;
-
-            std::cout << strHex(this->ledger_->txMap().getHash().as_uint256())
-                      << std::endl;
-            std::cout << strHex(this->ledger_->info().txHash) << std::endl;
-
-            assert(
-                this->ledger_->txMap().getHash().as_uint256() ==
-                this->ledger_->info().txHash);
-
-            assert(
-                this->ledger_->stateMap().getHash().as_uint256() ==
-                this->ledger_->info().accountHash);
-
-            this->app_.setOpenLedger(this->ledger_);
-
-            this->app_.getLedgerMaster().storeLedger(this->ledger_);
-
-            this->app_.getLedgerMaster().switchLCL(this->ledger_);
-        };
+        JLOG(journal_.info()) << "Done downloading initial ledger";
 
         storeLedger();
-        std::cout << "stored initial ledger!" << std::endl;
+        JLOG(journal_.info()) << "Stored initial ledger! "
+        << "Starting continous update";
 
-        std::cout << "starting continous update" << std::endl;
-
-        while (not stopping_)
-        {
-            auto metas = loadLedger();
-            // signals stop
-            if (metas.size() == 0)
-                continue;
-            std::set<uint256> indices;
-            for (auto& meta : metas)
-            {
-                STArray& nodes = meta.getNodes();
-                for (auto it = nodes.begin(); it != nodes.end(); ++it)
-                {
-                    // ledger index
-                    indices.insert(it->getFieldH256(sfLedgerIndex));
-                }
-            }
-
-            for (auto iter = indices.begin(); iter != indices.end();)
-            {
-                auto& idx = *iter;
-                org::xrpl::rpc::v1::GetLedgerEntryResponse replyEntry;
-                org::xrpl::rpc::v1::GetLedgerEntryRequest requestEntry;
-
-                grpc::ClientContext grpcContextEntry;
-                requestEntry.mutable_ledger()->set_sequence(
-                    this->currentIndex_);
-                requestEntry.set_index(idx.data(), idx.size());
-                grpc::Status status = stub_->GetLedgerEntry(
-                    &grpcContextEntry, requestEntry, &replyEntry);
-
-                std::cout << status.error_message() << " : "
-                          << status.error_code() << " : "
-                          << replyEntry.DebugString()
-                          << " index : " << strHex(idx) << std::endl;
-
-                if (status.error_code() == grpc::StatusCode::NOT_FOUND)
-                {
-                    if (this->ledger_->exists(idx))
-                    {
-                        std::cout << "erasing" << std::endl;
-                        this->ledger_->rawErase(idx);
-                    }
-                    else
-                    {
-                        std::cout << "noop" << std::endl;
-                    }
-                    ++iter;
-                }
-                else if (status.ok())
-                {
-                    auto& objRaw = replyEntry.object_binary();
-                    SerialIter it{objRaw.data(), objRaw.size()};
-
-                    std::shared_ptr<SLE> sle = std::make_shared<SLE>(it, idx);
-                    if (this->ledger_->exists(idx))
-                    {
-                        std::cout << "replacing" << std::endl;
-                        this->ledger_->rawReplace(sle);
-                    }
-                    else
-                    {
-                        std::cout << "inserting" << std::endl;
-                        this->ledger_->rawInsert(sle);
-                    }
-                    ++iter;
-                }
-                else if (status.error_code() == 8)
-                {
-                    std::cout << "usage balance. pausing" << std::endl;
-
-                    std::this_thread::sleep_for(std::chrono::seconds(2));
-                }
-                else
-                {
-                    std::cout << "unexpected error, trying again" << std::endl;
-                }
-            }
-
-            this->ledger_->updateSkipList();
-            storeLedger();
-            std::cout << "Stored ledger " + std::to_string(this->currentIndex_)
-                      << std::endl;
-        }
-
-        // save the ledger, create next
-
-        // fetch ledger header with txns and metadata
-        // store txns
-        // process metadata to get list of object ids
-        // fetch each object and store
-        // repeat
+        continousUpdate();
     });
 }
 }  // namespace ripple
