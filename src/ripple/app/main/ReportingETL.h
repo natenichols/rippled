@@ -122,8 +122,13 @@ private:
     std::string ip_;
     std::string wsPort_;
 
+    beast::Journal journal_;
+
+    bool useBuffer_ = false;
+
 public:
-    ReportingETL(Application& app) : app_(app)
+    ReportingETL(Application& app)
+        : app_(app), journal_(app.journal("ReportingETL"))
     {
         // if present, get endpoint from config
         if (app_.config().exists("reporting"))
@@ -152,6 +157,9 @@ public:
                 currentIndex_ = std::stoi(startIndexPair.first);
                 queue_.push(currentIndex_);
             }
+
+            std::pair<std::string, bool> useBuffer = section.find("use_buffer");
+            useBuffer_ = useBuffer.second;
             try
             {
                 stub_ = org::xrpl::rpc::v1::XRPLedgerAPIService::NewStub(
