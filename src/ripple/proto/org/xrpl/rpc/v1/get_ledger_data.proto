@@ -12,6 +12,8 @@ message GetLedgerDataRequest
     bytes marker = 1;
 
     LedgerSpecifier ledger = 2;
+
+    bytes end_marker = 3;
 }
 
 message GetLedgerDataResponse

@@ -124,7 +124,10 @@ private:
 
     beast::Journal journal_;
 
-    bool useBuffer_ = false;
+    enum LoadMethod { ITERATIVE, BUFFER, PARALLEL};
+
+    LoadMethod method_ = ITERATIVE;
+
 
 public:
     ReportingETL(Application& app)
@@ -158,8 +161,16 @@ public:
                 queue_.push(currentIndex_);
             }
 
-            std::pair<std::string, bool> useBuffer = section.find("use_buffer");
-            useBuffer_ = useBuffer.second;
+            std::pair<std::string, bool> loadMethod = section.find("load_method");
+            if(loadMethod.second)
+            {
+                if(loadMethod.first == "parallel")
+                    method_ = PARALLEL;
+                else if(loadMethod.first == "iterative")
+                    method_ = ITERATIVE;
+                else if(loadMethod.first == "buffer")
+                    method_ = BUFFER;
+            }
             try
             {
                 stub_ = org::xrpl::rpc::v1::XRPLedgerAPIService::NewStub(

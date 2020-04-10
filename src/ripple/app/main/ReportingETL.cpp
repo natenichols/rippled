@@ -33,13 +33,34 @@
 namespace ripple {
 
 
+std::vector<uint256> getMarkers()
+{
+    std::vector<uint256> markers;
+    uint256 key{0};
+    markers.push_back(key);
+    uint256 incr{1};
+    for(size_t i = 0; i < 252; ++i)
+    {
+        incr += incr;
+    }
+    
+    for(size_t i = 0; i < 15; ++i)
+    {
+        std::cout << "key is " << strHex(key)
+            << std::endl;
+        key += incr;
+        markers.push_back(key);
+
+        
+    }
+    return markers;
+}
 
 class RingBuffer
 {
     struct Cell
     {
-    
-        private:
+    private:
         std::mutex m;
         std::condition_variable cv;
         std::string index;
@@ -47,13 +68,14 @@ class RingBuffer
         bool dirty = true;
         bool finished = false;
 
-        public:
+    public:
         template <class Func>
-        bool read(Func f)
+        bool
+        read(Func f)
         {
             std::unique_lock<std::mutex> lck(m);
-            cv.wait(lck,[this](){return !dirty;});
-            if(finished)
+            cv.wait(lck, [this]() { return !dirty; });
+            if (finished)
                 return false;
             f(index, data);
             dirty = true;
@@ -61,51 +83,53 @@ class RingBuffer
             return true;
         }
 
-        void write(std::string&& indexIn, std::string&& dataIn)
+        void
+        write(std::string&& indexIn, std::string&& dataIn)
         {
             std::unique_lock<std::mutex> lck(m);
-            cv.wait(lck,[this]() { return dirty;});
+            cv.wait(lck, [this]() { return dirty; });
             index = std::move(indexIn);
             data = std::move(dataIn);
             dirty = false;
             cv.notify_one();
         }
 
-        void writeFinished()
+        void
+        writeFinished()
         {
-
             std::unique_lock<std::mutex> lck(m);
-            cv.wait(lck,[this]() { return dirty;});
+            cv.wait(lck, [this]() { return dirty; });
             finished = true;
             dirty = false;
             cv.notify_one();
         }
-
     };
 
     std::vector<Cell> cells_;
     size_t readIdx_;
     size_t writeIdx_;
 
-    public:
-
+public:
     RingBuffer(size_t size) : cells_(size), readIdx_(0), writeIdx_(0)
     {
     }
 
-    void push(std::string&& index, std::string&& data)
+    void
+    push(std::string&& index, std::string&& data)
     {
         cells_[writeIdx_].write(std::move(index), std::move(data));
         writeIdx_ = (writeIdx_ + 1) % cells_.size();
     }
 
-    void writeFinished()
+    void
+    writeFinished()
     {
         cells_[writeIdx_].writeFinished();
     }
 
     template <class Func>
-    bool consume(Func f)
+    bool
+    consume(Func f)
     {
         bool res = cells_[readIdx_].read(f);
         readIdx_ = (readIdx_ + 1) % cells_.size();
@@ -349,7 +373,7 @@ ReportingETL::doWork()
 
         grpc::ClientContext grpcContextData;
         requestData.mutable_ledger()->set_sequence(this->currentIndex_);
-        if (useBuffer_)
+        if (method_ == LoadMethod::BUFFER)
         {
             RingBuffer buffer(25);
 
@@ -414,7 +438,7 @@ ReportingETL::doWork()
                       << "seconds" << std::endl;
             std::this_thread::sleep_for(std::chrono::seconds(5));
         }
-        else
+        else if(method_ == LoadMethod::ITERATIVE)
         {
             std::cout << "starting data" << std::endl;
             auto start = std::chrono::system_clock::now();
@@ -462,6 +486,104 @@ ReportingETL::doWork()
             std::cout << "Time to download ledger = " << diff.count()
                       << "seconds" << std::endl;
             std::this_thread::sleep_for(std::chrono::seconds(5));
+        }
+        else
+        {
+            auto markers = getMarkers();
+            std::vector<std::thread> threads;
+            std::mutex ledgerMutex;
+            std::cout << "starting data" << std::endl;
+            auto start = std::chrono::system_clock::now();
+
+            for(size_t i = 0; i < markers.size(); ++i)
+            {
+                auto& marker = markers[i];
+                std::optional<uint256> nextMarker;
+                if( i + 1 < markers.size())
+                {
+                    nextMarker = markers[i+1];
+                }
+
+                threads.emplace_back([marker, nextMarker, &ledgerMutex, this]() {
+                    // all of the ledger data
+                    org::xrpl::rpc::v1::GetLedgerDataResponse replyDataLcl;
+                    org::xrpl::rpc::v1::GetLedgerDataRequest requestDataLcl;
+                    unsigned char nextPrefix = 0x00;
+                    if (nextMarker)
+                        nextPrefix = nextMarker->data()[0];
+                    grpc::ClientContext grpcContextDataLcl;
+
+                    requestDataLcl.mutable_ledger()->set_sequence(
+                        this->currentIndex_);
+                    if(marker != 0)
+                        requestDataLcl.set_marker(marker.data(), marker.size());
+                    
+                    //if (nextMarker)
+                    //    requestDataLcl.set_end_marker(
+                    //        nextMarker->data(), nextMarker->size());
+                    grpc::Status status =
+                        stub_->GetLedgerData(&grpcContextDataLcl, requestDataLcl, &replyDataLcl);
+
+                    while (not stopping_)
+                    {
+                        if (replyDataLcl.marker().size() > 0)
+                        {
+                            std::string firstChar{replyDataLcl.marker()[0]};
+                            std::cout << "marker char = " << strHex(firstChar)
+                                      << std::endl;
+                        }
+                        else
+                        {
+                            std::cout << "empty marker" << std::endl;
+                        }
+
+                        for (auto& state : replyDataLcl.state_objects())
+                        {
+                            auto& index = state.index();
+                            auto& data = state.data();
+
+                            auto key = uint256::fromVoid(index.data());
+
+                            SerialIter it{data.data(), data.size()};
+                            std::shared_ptr<SLE> sle =
+                                std::make_shared<SLE>(it, key);
+                            //std::cout << (!sle->key()) << std::endl;
+                            
+                            std::unique_lock<std::mutex> lck(ledgerMutex);
+                            if (!this->ledger_->exists(key))
+                                this->ledger_->rawInsert(sle);
+                            else
+                                std::cout << "exists" << std::endl;
+                               
+                        }
+
+                        if (replyDataLcl.marker().size() == 0)
+                            break;
+                        unsigned char prefix = replyDataLcl.marker()[0];
+                        if(nextPrefix != 0x00 and prefix >= nextPrefix)
+                            break;
+
+                        grpc::ClientContext grpcContextData2;
+                        requestDataLcl.set_marker(
+                            std::move(replyDataLcl.marker()));
+                        status = stub_->GetLedgerData(
+                            &grpcContextData2, requestDataLcl, &replyDataLcl);
+                    }
+                });
+            }
+
+            for(auto& t : threads)
+            {
+                t.join();
+            }
+            auto end = std::chrono::system_clock::now();
+
+            std::chrono::duration<double> diff = end - start;
+            std::cout << "Time to download ledger = " << diff.count()
+                      << "seconds" << std::endl;
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        
+            
         }
 
         std::cout << "finished data. storing" << std::endl;

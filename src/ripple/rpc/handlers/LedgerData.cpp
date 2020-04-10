@@ -160,10 +160,24 @@ doLedgerDataGrpc(
         }
     }
 
+    auto e = ledger->sles.end();
+    ReadView::key_type stopKey = ReadView::key_type();
+    if(request.end_marker().size() != 0)
+    {
+        stopKey = uint256::fromVoid(request.end_marker().data());
+        if(stopKey.size() != request.marker().size())
+        {
+            
+            grpc::Status errorStatus{grpc::StatusCode::INVALID_ARGUMENT,
+                                     "end marker malformed"};
+            return {response, errorStatus};
+        }   
+        e = ledger->sles.upper_bound(stopKey);
+    }
+
     
     int maxLimit = RPC::Tuning::pageLength(true);
 
-    auto e = ledger->sles.end();
     for (auto i = ledger->sles.upper_bound(key); i != e; ++i)
     {
         auto sle = ledger->read(keylet::unchecked((*i)->key()));
