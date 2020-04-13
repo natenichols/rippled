@@ -128,9 +128,11 @@ private:
 
     beast::Journal journal_;
 
-    enum LoadMethod { ITERATIVE, BUFFER, PARALLEL};
+    enum LoadMethod { ITERATIVE, BUFFER, PARALLEL, ASYNC};
 
     LoadMethod method_ = ITERATIVE;
+
+    bool onlyDownload_ = false;
    
 
     //TODO better names for these functions
@@ -139,6 +141,8 @@ private:
     void loadParallel();
 
     void loadBuffer();
+
+    void loadAsync();
     
     void doInitialLedgerLoad();
 
@@ -147,6 +151,8 @@ private:
     void storeLedger();
 
     void continousUpdate();
+
+    void diffLedgers();
 
 
 public:
@@ -190,6 +196,15 @@ public:
                     method_ = ITERATIVE;
                 else if(loadMethod.first == "buffer")
                     method_ = BUFFER;
+                else if(loadMethod.first == "async")
+                    method_ = ASYNC;
+            }
+
+            std::pair<std::string, bool> onlyDownload = section.find("download");
+            if(onlyDownload.second)
+            {
+                if(onlyDownload.first == "true")
+                    onlyDownload_ = true;
             }
             try
             {
@@ -214,11 +229,16 @@ public:
 
     ~ReportingETL()
     {
+        JLOG(journal_.debug()) << "Stopping Reporting ETL";
         stopping_ = true;
         if (subscriber_.joinable())
             subscriber_.join();
+        
+        JLOG(journal_.debug()) << "Joined subscriber thread";
         if (worker_.joinable())
             worker_.join();
+
+        JLOG(journal_.debug()) << "Joined worker thread";
     }
 
     void

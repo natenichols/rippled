@@ -33,6 +33,8 @@
 namespace ripple {
 
 
+//TODO manipulate the characters instead of doing addition
+//TODO take number of marekrs as argument
 std::vector<uint256> getMarkers()
 {
     std::vector<uint256> markers;
@@ -48,6 +50,22 @@ std::vector<uint256> getMarkers()
     {
         key += incr;
         markers.push_back(key);
+    }
+    return markers;
+}
+
+std::vector<uint256> getMarkers(size_t numMarkers)
+{
+    assert(numMarkers <  255);
+
+    unsigned char incr = 255 / numMarkers;
+
+    std::vector<uint256> markers;
+    uint256 base{0};
+    for(size_t i = 0; i < numMarkers; ++i)
+    {
+        markers.push_back(base);
+        base.data()[0] += incr;
     }
     return markers;
 }
@@ -206,8 +224,10 @@ ReportingETL::doSubscribe()
                 JLOG(journal_.info()) << "received ledger = " << ledgerIndex
                    << " on subscription stream";
             }
+            JLOG(journal_.info()) << "Exited suscribe loop. Stopping queue";
 
             queue_.stop();
+            JLOG(journal_.info()) << "Stopped queue";
 
             // Close the WebSocket connection
             ws.close(websocket::close_code::normal);
@@ -240,7 +260,7 @@ ReportingETL::loadNextLedger()
     bool validated = false;
 
     int toWait = 1;
-    while (not validated)
+    while (not validated and not stopping_)
     {
         grpc::ClientContext grpcContext;
         grpc::Status status = stub_->GetLedger(&grpcContext, request, &reply);
@@ -332,6 +352,7 @@ ReportingETL::loadNextLedger()
 
 void ReportingETL::doInitialLedgerLoad()
 {
+    //TODO change to switch
     if(method_ == LoadMethod::ITERATIVE)
     {
         loadIterative();
@@ -344,6 +365,184 @@ void ReportingETL::doInitialLedgerLoad()
     {
         loadParallel();
     }
+    else if(method_ == LoadMethod::ASYNC)
+    {
+        loadAsync();
+    }
+}
+
+struct AsyncCallData
+{
+    std::unique_ptr<org::xrpl::rpc::v1::GetLedgerDataResponse> cur;
+    std::unique_ptr<org::xrpl::rpc::v1::GetLedgerDataResponse> next;
+
+    org::xrpl::rpc::v1::GetLedgerDataRequest request;
+    std::unique_ptr<grpc::ClientContext> context;
+
+    grpc::Status status;
+
+    unsigned char nextPrefix;
+
+    beast::Journal journal_;
+    
+
+    AsyncCallData(uint256& marker, uint32_t seq, beast::Journal& j) : journal_(j)
+    {
+        std::cout << "setting marker = " << strHex(marker) << std::endl;
+
+        request.mutable_ledger()->set_sequence(seq);
+        if(marker.isNonZero())
+        {
+            request.set_marker(marker.data(), marker.size());
+        }
+        unsigned char prefix = marker.data()[0];
+
+        nextPrefix = prefix + 0x10;
+
+        JLOG(journal_.debug()) << "Setting up AsyncCallData. marker = "
+            << strHex(marker) << " . prefix = "
+            << strHex(prefix) << " . nextPrefix = "
+            << strHex(nextPrefix);
+
+        assert(nextPrefix > prefix || nextPrefix == 0x00); 
+
+        cur = std::make_unique<org::xrpl::rpc::v1::GetLedgerDataResponse>();
+
+        next = std::make_unique<org::xrpl::rpc::v1::GetLedgerDataResponse>();
+
+        context = std::make_unique<grpc::ClientContext>();
+    }
+
+    bool
+    process(
+        std::shared_ptr<Ledger>& ledger,
+        std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>& stub,
+        grpc::CompletionQueue& cq)
+    {
+        /*
+           std::cout << status.error_code() 
+           << " : " << status.error_message()
+           << " : " << next->DebugString() << std::endl;
+           */
+        std::swap(cur, next);
+
+        bool more = true;
+
+        //if no marker returned, we are done
+        if (cur->marker().size() == 0)
+            more = false;
+
+        //if returned marker is greater than our end, we are done
+        unsigned char prefix = cur->marker()[0];
+        if (nextPrefix != 0x00 and prefix >= nextPrefix)
+            more = false;
+
+        //if we are not done, make the next async call
+        if(more)
+        {
+            request.set_marker(std::move(cur->marker()));
+            call(stub, cq);
+        }
+
+
+        for (auto& state : cur->state_objects())
+        {
+            auto& index = state.index();
+            auto& data = state.data();
+
+            auto key = uint256::fromVoid(index.data());
+
+            SerialIter it{data.data(), data.size()};
+            std::shared_ptr<SLE> sle = std::make_shared<SLE>(it, key);
+            if (!ledger->exists(sle->key()))
+                ledger->rawInsert(sle);
+        }
+        return more;
+    }
+
+    void
+    call(
+        std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>& stub,
+        grpc::CompletionQueue& cq)
+    {
+        context = std::make_unique<grpc::ClientContext>();
+
+        std::unique_ptr<grpc::ClientAsyncResponseReader<
+            org::xrpl::rpc::v1::GetLedgerDataResponse>>
+            rpc(stub->PrepareAsyncGetLedgerData(context.get(), request, &cq));
+        
+        rpc->StartCall();
+
+        rpc->Finish(next.get(), &status, this);
+    }
+};
+
+void ReportingETL::loadAsync()
+{
+    grpc::CompletionQueue cq;
+
+    void* tag;
+
+    bool ok = false;
+
+    //TODO make parallelism configurable
+    //const size_t parallelism = 16;
+
+    std::vector<AsyncCallData> calls;
+    std::vector<uint256> markers{getMarkers()};
+
+
+    for(auto& m : markers)
+        calls.emplace_back(m, currentIndex_, journal_);
+
+
+    JLOG(journal_.debug()) << "Starting data download. method == ASYNC";
+
+    auto start = std::chrono::system_clock::now();
+    for(auto& c : calls)
+        c.call(stub_, cq);
+
+    size_t numFinished = 0;
+    while(numFinished < calls.size() and not stopping_ and cq.Next(&tag, &ok))
+    {
+        assert(tag);
+
+        auto ptr = static_cast<AsyncCallData*>(tag);
+
+        if(!ok)
+        {
+            //handle cancelled
+        }
+        else
+        {
+
+            if(ptr->next->marker().size() != 0)
+            {
+                std::string prefix{ptr->next->marker().data()[0]};
+                JLOG(journal_.debug()) << "Marker prefix = " << strHex(prefix);
+            }
+            else
+            {
+                JLOG(journal_.debug()) << "Empty marker";
+            }
+            if(!ptr->process(ledger_, stub_, cq))
+            {
+
+                auto interim = std::chrono::system_clock::now();
+                std::chrono::duration<double> diff = interim - start;
+                numFinished++;
+                JLOG(journal_.debug()) << "Finished a marker. "
+                    << "Current number of finished = " << numFinished
+                    << " . Seconds = " << diff.count();
+            }
+        }
+    }
+    auto end = std::chrono::system_clock::now();
+
+    std::chrono::duration<double> diff = end - start;
+    JLOG(journal_.debug()) << "Time to download ledger via async = "
+                           << diff.count() << "seconds";
+    JLOG(journal_.debug()) << "Done downloading initial ledger";
 }
 
 //TODO insert into ledger in parallel
@@ -391,12 +590,12 @@ void ReportingETL::loadParallel()
                 if (replyData.marker().size() > 0)
                 {
                     std::string firstChar{replyData.marker()[0]};
-                    JLOG(journal_.trace())
+                    JLOG(journal_.debug())
                         << "marker char = " << strHex(firstChar);
                 }
                 else
                 {
-                    JLOG(journal_.trace()) << "empty marker";
+                    JLOG(journal_.debug()) << "empty marker";
                 }
 
                 for (auto& state : replyData.state_objects())
@@ -430,6 +629,15 @@ void ReportingETL::loadParallel()
         t.join();
     }
 
+    auto interm = std::chrono::system_clock::now();
+
+    std::chrono::duration<double> diff = interm - start;
+    JLOG(journal_.debug()) << "Finished downloading raw data. "
+        << "Time to download raw data via parallel = "
+                           << diff.count() << "seconds";
+    JLOG(journal_.debug())
+        << "Finished downloaded raw data, inserting into ledger";
+
     //TODO do this while data is being received
     for (auto& vec : sles)
     {
@@ -442,7 +650,7 @@ void ReportingETL::loadParallel()
     }
     auto end = std::chrono::system_clock::now();
 
-    std::chrono::duration<double> diff = end - start;
+    diff = end - start;
     JLOG(journal_.debug()) << "Time to download ledger via parallel = "
                            << diff.count() << "seconds";
 }
@@ -584,6 +792,11 @@ ReportingETL::storeLedger()
     ledger_->txMap().flushDirty(
         hotTRANSACTION_NODE, ledger_->info().seq);
 
+    JLOG(journal_.debug()) << "header account hash = "
+        << strHex(ledger_->info().accountHash)
+        << " . calculated account hash = "
+        << strHex(ledger_->stateMap().getHash().as_uint256());
+
     assert(
         ledger_->txMap().getHash().as_uint256() ==
         ledger_->info().txHash);
@@ -712,6 +925,9 @@ ReportingETL::doWork()
         doInitialLedgerLoad();
 
         JLOG(journal_.info()) << "Done downloading initial ledger";
+
+        if (onlyDownload_)
+            return;
 
         storeLedger();
         JLOG(journal_.info()) << "Stored initial ledger! "
