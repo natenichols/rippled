@@ -56,9 +56,9 @@ std::vector<uint256> getMarkers()
 
 std::vector<uint256> getMarkers(size_t numMarkers)
 {
-    assert(numMarkers <  255);
+    assert(numMarkers <=  256);
 
-    unsigned char incr = 255 / numMarkers;
+    unsigned char incr = 256 / numMarkers;
 
     std::vector<uint256> markers;
     uint256 base{0};
@@ -384,9 +384,13 @@ struct AsyncCallData
     unsigned char nextPrefix;
 
     beast::Journal journal_;
-    
 
-    AsyncCallData(uint256& marker, uint32_t seq, beast::Journal& j) : journal_(j)
+    AsyncCallData(
+        uint256& marker,
+        std::optional<uint256> nextMarker,
+        uint32_t seq,
+        beast::Journal& j)
+        : journal_(j)
     {
         std::cout << "setting marker = " << strHex(marker) << std::endl;
 
@@ -395,9 +399,12 @@ struct AsyncCallData
         {
             request.set_marker(marker.data(), marker.size());
         }
+        nextPrefix = 0x00;
+        if(nextMarker)
+            nextPrefix = nextMarker->data()[0];
+
         unsigned char prefix = marker.data()[0];
 
-        nextPrefix = prefix + 0x10;
 
         JLOG(journal_.debug()) << "Setting up AsyncCallData. marker = "
             << strHex(marker) << " . prefix = "
@@ -485,16 +492,18 @@ void ReportingETL::loadAsync()
 
     bool ok = false;
 
-    //TODO make parallelism configurable
-    //const size_t parallelism = 16;
 
     std::vector<AsyncCallData> calls;
-    std::vector<uint256> markers{getMarkers()};
+    std::vector<uint256> markers{getMarkers(parallelism_)};
 
 
-    for(auto& m : markers)
-        calls.emplace_back(m, currentIndex_, journal_);
-
+    for(size_t i = 0; i < markers.size(); ++i)
+    {
+        std::optional<uint256> nextMarker;
+        if(i+1 < markers.size())
+            nextMarker = markers[i+1];
+        calls.emplace_back(markers[i], nextMarker, currentIndex_, journal_);
+    }
 
     JLOG(journal_.debug()) << "Starting data download. method == ASYNC";
 
@@ -926,12 +935,13 @@ ReportingETL::doWork()
 
         JLOG(journal_.info()) << "Done downloading initial ledger";
 
-        if (onlyDownload_)
-            return;
+
 
         storeLedger();
         JLOG(journal_.info()) << "Stored initial ledger! "
         << "Starting continous update";
+        if (onlyDownload_)
+            return;
 
         continousUpdate();
     });

@@ -133,6 +133,8 @@ private:
     LoadMethod method_ = ITERATIVE;
 
     bool onlyDownload_ = false;
+
+    size_t parallelism_ = 16;
    
 
     //TODO better names for these functions
@@ -206,6 +208,10 @@ public:
                 if(onlyDownload.first == "true")
                     onlyDownload_ = true;
             }
+
+            std::pair<std::string, bool> p = section.find("parallelism");
+            if(p.second)
+                parallelism_ = std::stoi(p.first);
             try
             {
                 stub_ = org::xrpl::rpc::v1::XRPLedgerAPIService::NewStub(
