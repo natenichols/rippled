@@ -130,7 +130,7 @@ private:
 
     enum LoadMethod { ITERATIVE, BUFFER, PARALLEL, ASYNC};
 
-    LoadMethod method_ = ITERATIVE;
+    LoadMethod method_ = ASYNC;
 
     bool onlyDownload_ = false;
 
