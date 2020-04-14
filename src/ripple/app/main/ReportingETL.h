@@ -102,6 +102,40 @@ class ReportingETL
             cv_.notify_all();
         }
     };
+    public:
+struct ThreadSafeQueue
+{
+
+    std::queue<std::shared_ptr<SLE>> queue_;
+
+    std::mutex m_;
+    std::condition_variable cv_;
+
+    void push(std::shared_ptr<SLE> const& sle)
+    {
+        std::unique_lock<std::mutex> lck(m_);
+        queue_.push(sle);
+        cv_.notify_all();
+    }
+
+    std::shared_ptr<SLE> pop()
+    {
+        std::unique_lock<std::mutex> lck(m_);
+        cv_.wait(lck,[this](){ return !queue_.empty();});
+        auto ret = queue_.front();
+        queue_.pop();
+        return ret;
+    }
+
+    void finish()
+    {
+        std::unique_lock<std::mutex> lck(m_);
+        std::shared_ptr<SLE> null;
+        queue_.push(null);
+        cv_.notify_all();
+    }
+    
+};
 
 private:
     Application& app_;
@@ -134,7 +168,13 @@ private:
 
     bool onlyDownload_ = false;
 
+    bool flushDuringDownload_ = false;
+
+    size_t flushInterval_ = 256;
+
     size_t parallelism_ = 16;
+
+    bool asyncFlush_ = false;
    
 
     //TODO better names for these functions
@@ -155,6 +195,13 @@ private:
     void continousUpdate();
 
     void diffLedgers();
+
+    void doAsyncFlush();
+    
+    std::thread flusher_;
+
+    ThreadSafeQueue flushQueue_;
+
 
 
 public:
@@ -209,9 +256,29 @@ public:
                     onlyDownload_ = true;
             }
 
+
+            std::pair<std::string, bool> flush = section.find("flush");
+            if(flush.second)
+            {
+                if(flush.first == "true")
+                    flushDuringDownload_ = true;
+            }
+            std::pair<std::string, bool> flushInterval = section.find("flush_interval");
+            if(flushInterval.second)
+            {
+                flushInterval_ = std::stoi(flushInterval.first);
+            }
+
             std::pair<std::string, bool> p = section.find("parallelism");
             if(p.second)
                 parallelism_ = std::stoi(p.first);
+
+            std::pair<std::string, bool> asyncFlush = section.find("async_flush");
+            if(asyncFlush.second)
+            {
+                if(asyncFlush.first == "true")
+                    asyncFlush_ = true;
+            }
             try
             {
                 stub_ = org::xrpl::rpc::v1::XRPLedgerAPIService::NewStub(
