@@ -170,11 +170,11 @@ private:
 
     bool flushDuringDownload_ = false;
 
-    size_t flushInterval_ = 256;
+    size_t flushInterval_ = 0;
 
     size_t parallelism_ = 16;
 
-    bool asyncFlush_ = false;
+    bool asyncFlush_ = true;
    
 
     //TODO better names for these functions
