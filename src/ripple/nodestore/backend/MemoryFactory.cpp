@@ -56,7 +56,8 @@ public:
         size_t keyBytes,
         Section const& keyValues,
         Scheduler& scheduler,
-        beast::Journal journal) override;
+        beast::Journal journal,
+        std::shared_ptr<PgPool> pool) override;
 
     MemoryDB&
     open(std::string const& path)
@@ -222,7 +223,8 @@ MemoryFactory::createInstance(
     size_t keyBytes,
     Section const& keyValues,
     Scheduler& scheduler,
-    beast::Journal journal)
+    beast::Journal journal,
+    std::shared_ptr<PgPool> pool)
 {
     return std::make_unique<MemoryBackend>(
         keyBytes, keyValues, scheduler, journal);

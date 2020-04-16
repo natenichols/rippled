@@ -18,6 +18,7 @@
 //==============================================================================
 
 #include <ripple/basics/contract.h>
+#include <ripple/nodestore/impl/EncodedBlob.h>
 #include <ripple/shamap/SHAMap.h>
 
 namespace ripple {

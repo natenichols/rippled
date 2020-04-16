@@ -23,6 +23,8 @@
 #include <ripple/nodestore/Manager.h>
 
 namespace ripple {
+
+class PgPool;
 namespace NodeStore {
 
 class ManagerImp : public Manager
@@ -55,7 +57,8 @@ public:
     make_Backend(
         Section const& parameters,
         Scheduler& scheduler,
-        beast::Journal journal) override;
+        beast::Journal journal,
+        std::shared_ptr<PgPool> pool) override;
 
     std::unique_ptr<Database>
     make_Database(
@@ -64,7 +67,8 @@ public:
         int readThreads,
         Stoppable& parent,
         Section const& config,
-        beast::Journal journal) override;
+        beast::Journal journal,
+        std::shared_ptr<PgPool> pool) override;
 };
 
 }  // namespace NodeStore

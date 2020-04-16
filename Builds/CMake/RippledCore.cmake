@@ -3,6 +3,7 @@
    core functionality, useable by some client software perhaps
 #]===================================================================]
 
+set(CMAKE_VERBOSE_MAKEFILE ON)
 
 file (GLOB_RECURSE rb_headers
   src/ripple/beast/*.h
@@ -13,6 +14,9 @@ add_library (xrpl_core
 if (unity)
   set_target_properties(xrpl_core PROPERTIES UNITY_BUILD ON)
 endif ()
+
+find_package(PostgreSQL REQUIRED)
+message("postgresql include,libs ${PostgreSQL_INCLUDE_DIRS} ${PostgreSQL_LIBRARIES}")
 
 #[===============================[
     beast/legacy FILES:
@@ -120,6 +124,7 @@ target_sources (xrpl_core PRIVATE
 add_library (Ripple::xrpl_core ALIAS xrpl_core)
 target_include_directories (xrpl_core
   PUBLIC
+    ${PostgreSQL_INCLUDE_DIRS}
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/ripple>
     # this one is for beast/legacy files:
@@ -135,6 +140,7 @@ target_compile_options (xrpl_core
     $<$<BOOL:${is_gcc}>:-Wno-maybe-uninitialized>)
 target_link_libraries (xrpl_core
   PUBLIC
+    PostgreSQL::PostgreSQL
     OpenSSL::Crypto
     Ripple::boost
     Ripple::syslibs
@@ -467,6 +473,7 @@ target_sources (rippled PRIVATE
   src/ripple/core/impl/Stoppable.cpp
   src/ripple/core/impl/TimeKeeper.cpp
   src/ripple/core/impl/Workers.cpp
+  src/ripple/core/Pg.cpp
   #[===============================[
      main sources:
        subdir: consensus
@@ -510,6 +517,7 @@ target_sources (rippled PRIVATE
   src/ripple/nodestore/backend/MemoryFactory.cpp
   src/ripple/nodestore/backend/NuDBFactory.cpp
   src/ripple/nodestore/backend/NullFactory.cpp
+  src/ripple/nodestore/backend/PgFactory.cpp
   src/ripple/nodestore/backend/RocksDBFactory.cpp
   src/ripple/nodestore/impl/BatchWriter.cpp
   src/ripple/nodestore/impl/Database.cpp

@@ -168,7 +168,7 @@ InboundLedger::getPeerCount() const
 void
 InboundLedger::queueJob()
 {
-    if (app_.getJobQueue().getJobCountTotal(jtLEDGER_DATA) > 4)
+    if (app_.getJobQueue ().getJobCountTotal (jtLEDGER_DATA) > 12)
     {
         JLOG(m_journal.debug()) << "Deferring InboundLedger timer due to load";
         setTimer();
@@ -285,7 +285,7 @@ deserializeHeader(Slice data, bool hasHash)
     info.closeTimeResolution = NetClock::duration{sit.get8()};
     info.closeFlags = sit.get8();
 
-    if(hasHash)
+    if (hasHash)
         info.hash = sit.get256();
 
     return info;

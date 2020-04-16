@@ -108,24 +108,20 @@ std::pair<org::xrpl::rpc::v1::GetLedgerResponse, grpc::Status>
 doLedgerGrpc(
     RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
 {
-
     org::xrpl::rpc::v1::GetLedgerRequest& request = context.params;
     org::xrpl::rpc::v1::GetLedgerResponse response;
     grpc::Status status = grpc::Status::OK;
 
-
     std::shared_ptr<ReadView const> ledger;
-    if(RPC::ledgerFromRequest(ledger, context) != RPC::Status::OK)
+    if (RPC::ledgerFromRequest(ledger, context) != RPC::Status::OK)
     {
-        
         grpc::Status errorStatus{grpc::StatusCode::NOT_FOUND,
                                  "ledger not found"};
         return {response, errorStatus};
     }
 
-
     Serializer s;
-    addRaw(ledger->info(), s);
+    addRaw(ledger->info(), s, true);
     std::cout << "serialized ledger header" << std::endl;
 
     response.set_ledger_header(s.peekData().data(), s.getLength());
@@ -141,8 +137,38 @@ doLedgerGrpc(
                     response.mutable_transactions_list()->add_transactions();
                 Serializer sTxn = i.first->getSerializer();
                 txn->set_transaction_blob(sTxn.data(), sTxn.getLength());
-                if(i.second)
+                if (i.second)
                 {
+                    if (request.get_objects())
+                    {
+                        std::set<uint256> indices;
+                        TxMeta meta{i.first->getTransactionID(),
+                                    ledger->info().seq,
+                                    *i.second};
+                        STArray& nodes = meta.getNodes();
+                        for (auto it = nodes.begin(); it != nodes.end(); ++it)
+                        {
+                            indices.insert(it->getFieldH256(sfLedgerIndex));
+                        }
+
+                        for (auto& k : indices)
+                        {
+                            auto obj = response.add_ledger_objects();
+                            auto const sle = ledger->read(keylet::unchecked(k));
+                            if (!sle)
+                            {
+                                obj->set_index(k.data(), k.size());
+                            }
+                            else
+                            {
+                                Serializer s;
+                                sle->add(s);
+                                obj->set_index(k.data(), k.size());
+                                obj->set_data(
+                                    s.peekData().data(), s.getLength());
+                            }
+                        }
+                    }
                     Serializer sMeta = i.second->getSerializer();
                     txn->set_metadata_blob(sMeta.data(), sMeta.getLength());
                 }
@@ -156,8 +182,9 @@ doLedgerGrpc(
         }
     }
     std::cout << "processed transactions" << std::endl;
-    
-    response.set_validated(RPC::isValidated (context.ledgerMaster, *ledger, context.app));
+
+    response.set_validated(
+        RPC::isValidated(context.ledgerMaster, *ledger, context.app));
 
     return {response, status};
 }

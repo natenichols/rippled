@@ -25,6 +25,9 @@
 #include <ripple/nodestore/Factory.h>
 
 namespace ripple {
+
+class PgPool;
+
 namespace NodeStore {
 
 /** Singleton for managing NodeStore factories and back ends. */
@@ -57,11 +60,11 @@ public:
     find(std::string const& name) = 0;
 
     /** Create a backend. */
-    virtual std::unique_ptr<Backend>
-    make_Backend(
-        Section const& parameters,
-        Scheduler& scheduler,
-        beast::Journal journal) = 0;
+    virtual
+    std::unique_ptr <Backend>
+    make_Backend (Section const& parameters,
+        Scheduler& scheduler, beast::Journal journal,
+        std::shared_ptr<PgPool> pool) = 0;
 
     /** Construct a NodeStore database.
 
@@ -97,7 +100,8 @@ public:
         int readThreads,
         Stoppable& parent,
         Section const& backendParameters,
-        beast::Journal journal) = 0;
+        beast::Journal journal,
+        std::shared_ptr<PgPool> pool) = 0;
 };
 
 //------------------------------------------------------------------------------

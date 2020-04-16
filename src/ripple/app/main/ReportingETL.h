@@ -40,6 +40,7 @@
 #include <mutex>
 #include <queue>
 
+#include <chrono>
 namespace ripple {
 
 class ReportingETL
@@ -103,38 +104,31 @@ class ReportingETL
         }
     };
     public:
+template <class T>
 struct ThreadSafeQueue
 {
 
-    std::queue<std::shared_ptr<SLE>> queue_;
+    std::queue<T> queue_;
 
     std::mutex m_;
     std::condition_variable cv_;
 
-    void push(std::shared_ptr<SLE> const& sle)
+    void push(T const& elt)
     {
         std::unique_lock<std::mutex> lck(m_);
-        queue_.push(sle);
+        queue_.push(elt);
         cv_.notify_all();
     }
 
-    std::shared_ptr<SLE> pop()
+    T pop()
     {
         std::unique_lock<std::mutex> lck(m_);
+        //TODO: is this able to be aborted?
         cv_.wait(lck,[this](){ return !queue_.empty();});
         auto ret = queue_.front();
         queue_.pop();
         return ret;
     }
-
-    void finish()
-    {
-        std::unique_lock<std::mutex> lck(m_);
-        std::shared_ptr<SLE> null;
-        queue_.push(null);
-        cv_.notify_all();
-    }
-    
 };
 
 private:
@@ -144,9 +138,13 @@ private:
 
     std::thread subscriber_;
 
-    std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub> stub_;
+    LedgerIndexQueue indexQueue_;
 
-    uint32_t currentIndex_ = 0;
+    std::thread writer_;
+
+    ThreadSafeQueue<std::shared_ptr<SLE>> writeQueue_;
+
+    std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub> stub_;
 
     //TODO stopping logic needs to be better
     //There are a variety of loops and mutexs in play
@@ -155,54 +153,94 @@ private:
 
     std::shared_ptr<Ledger> ledger_;
 
-    LedgerIndexQueue queue_;
-
     std::string ip_;
+
     std::string wsPort_;
 
     beast::Journal journal_;
 
-    enum LoadMethod { ITERATIVE, BUFFER, PARALLEL, ASYNC};
-
-    LoadMethod method_ = ASYNC;
-
-    bool onlyDownload_ = false;
-
-    bool flushDuringDownload_ = false;
-
     size_t flushInterval_ = 0;
 
-    size_t parallelism_ = 16;
+    size_t numMarkers_ = 2;
 
-    bool asyncFlush_ = true;
-   
+    void
+    loadInitialLedger();
 
-    //TODO better names for these functions
-    void loadIterative();
+    void
+    doETL();
 
-    void loadParallel();
+    void
+    fetchLedger(
+        org::xrpl::rpc::v1::GetLedgerResponse& out,
+        bool getObjects = true);
 
-    void loadBuffer();
+    void
+    updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in);
 
-    void loadAsync();
-    
-    void doInitialLedgerLoad();
+    void
+    flushLedger();
 
-    std::vector<TxMeta> loadNextLedger();
+    void
+    storeLedger();
 
-    void storeLedger();
+    void
+    outputMetrics();
 
-    void continousUpdate();
+    void
+    startWriter();
 
-    void diffLedgers();
+    void
+    joinWriter();
 
-    void doAsyncFlush();
-    
-    std::thread flusher_;
+    struct Metrics
+    {
+        size_t txnCount = 0;
 
-    ThreadSafeQueue flushQueue_;
+        size_t objectCount = 0;
 
+        double flushTime = 0;
 
+        double updateTime = 0;
+
+        double storeTime = 0;
+
+        void
+        printMetrics(beast::Journal& j)
+        {
+            auto totalTime = updateTime + flushTime + storeTime;
+            auto kvTime = updateTime + flushTime;
+            JLOG(j.info()) << " Metrics: "
+                           << " txnCount = " << txnCount
+                           << " objectCount = " << objectCount
+                           << " updateTime = " << updateTime
+                           << " flushTime = " << flushTime
+                           << " storeTime = " << storeTime
+                           << " update tps = " << txnCount / updateTime
+                           << " flush tps = " << txnCount / flushTime
+                           << " store tps = " << txnCount / storeTime
+                           << " update ops = " << objectCount / updateTime
+                           << " flush ops = " << objectCount / flushTime
+                           << " store ops = " << objectCount / storeTime
+                           << " total tps = " << txnCount / totalTime
+                           << " total ops = " << objectCount / totalTime
+                           << " key-value tps = " << txnCount / kvTime
+                           << " key-value ops = " << objectCount / kvTime
+                           << " (All times in seconds)";
+        }
+
+        void
+        addMetrics(Metrics& round)
+        {
+            txnCount += round.txnCount;
+            objectCount += round.objectCount;
+            flushTime += round.flushTime;
+            updateTime += round.updateTime;
+            storeTime += round.storeTime;
+        }
+    };
+
+    Metrics totalMetrics;
+    Metrics roundMetrics;
 
 public:
     ReportingETL(Application& app)
@@ -232,53 +270,20 @@ public:
 
             if (startIndexPair.second)
             {
-                currentIndex_ = std::stoi(startIndexPair.first);
-                queue_.push(currentIndex_);
+                indexQueue_.push(std::stoi(startIndexPair.first));
             }
 
-            std::pair<std::string, bool> loadMethod = section.find("load_method");
-            if(loadMethod.second)
-            {
-                if(loadMethod.first == "parallel")
-                    method_ = PARALLEL;
-                else if(loadMethod.first == "iterative")
-                    method_ = ITERATIVE;
-                else if(loadMethod.first == "buffer")
-                    method_ = BUFFER;
-                else if(loadMethod.first == "async")
-                    method_ = ASYNC;
-            }
-
-            std::pair<std::string, bool> onlyDownload = section.find("download");
-            if(onlyDownload.second)
-            {
-                if(onlyDownload.first == "true")
-                    onlyDownload_ = true;
-            }
-
-
-            std::pair<std::string, bool> flush = section.find("flush");
-            if(flush.second)
-            {
-                if(flush.first == "true")
-                    flushDuringDownload_ = true;
-            }
-            std::pair<std::string, bool> flushInterval = section.find("flush_interval");
-            if(flushInterval.second)
+            std::pair<std::string, bool> flushInterval =
+                section.find("flush_interval");
+            if (flushInterval.second)
             {
                 flushInterval_ = std::stoi(flushInterval.first);
             }
 
-            std::pair<std::string, bool> p = section.find("parallelism");
+            std::pair<std::string, bool> p = section.find("num_markers");
             if(p.second)
-                parallelism_ = std::stoi(p.first);
+                numMarkers_ = std::stoi(p.first);
 
-            std::pair<std::string, bool> asyncFlush = section.find("async_flush");
-            if(asyncFlush.second)
-            {
-                if(asyncFlush.first == "true")
-                    asyncFlush_ = true;
-            }
             try
             {
                 stub_ = org::xrpl::rpc::v1::XRPLedgerAPIService::NewStub(

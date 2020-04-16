@@ -129,10 +129,15 @@ public:
         return "none";
     }
 
-    std::unique_ptr<Backend>
-    createInstance(size_t, Section const&, Scheduler&, beast::Journal) override
+    std::unique_ptr <Backend>
+    createInstance (
+        size_t,
+        Section const&,
+        Scheduler&, beast::Journal,
+        std::shared_ptr<PgPool> pool) override
     {
-        return std::make_unique<NullBackend>();
+        boost::ignore_unused(pool);
+        return std::make_unique <NullBackend> ();
     }
 };
 

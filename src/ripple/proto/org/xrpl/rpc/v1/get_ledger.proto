@@ -5,6 +5,7 @@ option java_package = "org.xrpl.rpc.v1";
 option java_multiple_files = true;
 
 import "org/xrpl/rpc/v1/ledger.proto";
+import "org/xrpl/rpc/v1/get_ledger_data.proto";
 
 message GetLedgerRequest
 {
@@ -14,6 +15,8 @@ message GetLedgerRequest
     bool transactions = 2;
 
     bool expand = 3;
+
+    bool get_objects = 4;
 }
 
 message GetLedgerResponse
@@ -28,6 +31,8 @@ message GetLedgerResponse
     }
 
     bool validated = 4;
+
+    repeated LedgerState ledger_objects = 5;
 }
 
 message TransactionHashList

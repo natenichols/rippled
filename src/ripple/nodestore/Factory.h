@@ -26,6 +26,9 @@
 #include <nudb/store.hpp>
 
 namespace ripple {
+
+class PgPool;
+
 namespace NodeStore {
 
 /** Base class for backend factories. */
@@ -50,7 +53,8 @@ public:
         size_t keyBytes,
         Section const& parameters,
         Scheduler& scheduler,
-        beast::Journal journal) = 0;
+        beast::Journal journal,
+        std::shared_ptr<PgPool> pool) = 0;
 
     /** Create an instance of this factory's backend.
 

@@ -40,17 +40,20 @@ namespace ripple {
 //------------------------------------------------------------------------------
 
 void
-addRaw(LedgerInfo const& info, Serializer& s)
+addRaw(LedgerInfo const& info, Serializer& s, bool includeHash)
 {
-    s.add32(info.seq);
-    s.add64(info.drops.drops());
+    s.add32 (info.seq);
+    s.add64 (info.drops.drops ());
     s.addBitString(info.parentHash);
     s.addBitString(info.txHash);
     s.addBitString(info.accountHash);
-    s.add32(info.parentCloseTime.time_since_epoch().count());
-    s.add32(info.closeTime.time_since_epoch().count());
-    s.add8(info.closeTimeResolution.count());
-    s.add8(info.closeFlags);
+    s.add32 (info.parentCloseTime.time_since_epoch().count());
+    s.add32 (info.closeTime.time_since_epoch().count());
+    s.add8 (info.closeTimeResolution.count());
+    s.add8 (info.closeFlags);
+
+    if (includeHash)
+        s.addBitString(info.hash);
 }
 
 bool

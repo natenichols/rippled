@@ -21,10 +21,12 @@
 #define RIPPLE_SHAMAP_TESTS_COMMON_H_INCLUDED
 
 #include <ripple/basics/chrono.h>
+#include <ripple/core/Pg.h>
 #include <ripple/nodestore/DatabaseShard.h>
 #include <ripple/nodestore/DummyScheduler.h>
 #include <ripple/nodestore/Manager.h>
 #include <ripple/shamap/Family.h>
+#include <memory>
 
 namespace ripple {
 namespace tests {
@@ -60,8 +62,9 @@ public:
         Section testSection;
         testSection.set("type", "memory");
         testSection.set("Path", "SHAMap_test");
-        db_ = NodeStore::Manager::instance().make_Database(
-            "test", scheduler_, 1, parent_, testSection, j);
+        db_ = NodeStore::Manager::instance ().make_Database (
+            "test", scheduler_, 1, parent_, testSection, j,
+            std::shared_ptr<PgPool>());
     }
 
     NodeStore::Database&
