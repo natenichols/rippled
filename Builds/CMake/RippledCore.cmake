@@ -586,6 +586,7 @@ target_sources (rippled PRIVATE
   src/ripple/rpc/handlers/LedgerClosed.cpp
   src/ripple/rpc/handlers/LedgerCurrent.cpp
   src/ripple/rpc/handlers/LedgerData.cpp
+  src/ripple/rpc/handlers/LedgerDiff.cpp
   src/ripple/rpc/handlers/LedgerEntry.cpp
   src/ripple/rpc/handlers/LedgerHandler.cpp
   src/ripple/rpc/handlers/LedgerHeader.cpp

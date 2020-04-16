@@ -134,7 +134,7 @@ std::pair<org::xrpl::rpc::v1::GetLedgerDataResponse, grpc::Status>
 doLedgerDataGrpc(
     RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerDataRequest>& context)
 {
-    org::xrpl::rpc::v1::GetLedgerDataRequest request = context.params;
+    org::xrpl::rpc::v1::GetLedgerDataRequest& request = context.params;
     org::xrpl::rpc::v1::GetLedgerDataResponse response;
     grpc::Status status = grpc::Status::OK;
 

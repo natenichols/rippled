@@ -503,6 +503,7 @@ void ReportingETL::doAsyncFlush()
         
         std::shared_ptr<SLE> sle;
         size_t num = 0;
+        //TODO: if this call blocks, flushDirty in the meantime
         while((sle = flushQueue_.pop()))
         {
             assert(sle);
@@ -515,6 +516,11 @@ void ReportingETL::doAsyncFlush()
                     << strHex(sle->key());
                 ledger_->stateMap().flushDirty(
                         hotACCOUNT_NODE, ledger_->info().seq);
+            }
+            if(num % 256 == 0)
+            {
+                JLOG(journal_.debug())
+                    << "Downloaded " << num << " ledger objects";
             }
             ++num;
         }
@@ -597,6 +603,10 @@ void ReportingETL::loadAsync()
             numCalls++;
         }
     }
+    auto interim = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = interim - start;
+    JLOG(journal_.debug()) << "Time to page through ledger via async = "
+                           << diff.count() << "seconds";
 
     if(asyncFlush_)
     {
@@ -605,7 +615,7 @@ void ReportingETL::loadAsync()
     }
     auto end = std::chrono::system_clock::now();
 
-    std::chrono::duration<double> diff = end - start;
+    diff = end - start;
     JLOG(journal_.debug()) << "Time to download ledger via async = "
                            << diff.count() << "seconds";
     JLOG(journal_.debug()) << "Done downloading initial ledger";

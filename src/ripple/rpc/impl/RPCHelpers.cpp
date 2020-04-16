@@ -262,50 +262,8 @@ ledgerFromRequest(
     T& ledger,
     GRPCContext<R>& context)
 {
-    ledger.reset();
-
     R& request = context.params;
-
-    using LedgerCase = org::xrpl::rpc::v1::LedgerSpecifier::LedgerCase;
-    LedgerCase ledgerCase = request.ledger().ledger_case();
-    switch (ledgerCase)
-    {
-        case LedgerCase::kHash: {
-            uint256 ledgerHash =
-                uint256::fromVoid(request.ledger().hash().data());
-            return getLedger(ledger, ledgerHash, context);
-        }
-        case LedgerCase::kSequence:
-            return getLedger(ledger, request.ledger().sequence(), context);
-        case LedgerCase::kShortcut:
-            [[fallthrough]];
-        case LedgerCase::LEDGER_NOT_SET: {
-            auto const shortcut = request.ledger().shortcut();
-            if (shortcut ==
-                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED)
-                return getLedger(ledger, LedgerShortcut::VALIDATED, context);
-            else
-            {
-                // note, if unspecified, defaults to current ledger
-                if (shortcut ==
-                        org::xrpl::rpc::v1::LedgerSpecifier::
-                            SHORTCUT_UNSPECIFIED ||
-                    shortcut ==
-                        org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT)
-                {
-                    return getLedger(ledger, LedgerShortcut::CURRENT, context);
-                }
-                else if (
-                    shortcut ==
-                    org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CLOSED)
-                {
-                    return getLedger(ledger, LedgerShortcut::CLOSED, context);
-                }
-            }
-        }
-    }
-
-    return Status::OK;
+    return ledgerFromSpecifier(ledger, request.ledger(), context);
 }
 
 // explicit instantiation of above function
@@ -335,9 +293,63 @@ ledgerFromRequest<>(
     std::shared_ptr<ReadView const>&,
     GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>&);
 
+template <class T>
+Status
+ledgerFromSpecifier(
+    T& ledger,
+    org::xrpl::rpc::v1::LedgerSpecifier const& specifier,
+    Context& context)
+{
+    ledger.reset();
+
+    using LedgerCase = org::xrpl::rpc::v1::LedgerSpecifier::LedgerCase;
+    LedgerCase ledgerCase = specifier.ledger_case();
+    switch (ledgerCase)
+    {
+        case LedgerCase::kHash: {
+            uint256 ledgerHash =
+                uint256::fromVoid(specifier.hash().data());
+            return getLedger(ledger, ledgerHash, context);
+        }
+        case LedgerCase::kSequence:
+            return getLedger(ledger, specifier.sequence(), context);
+        case LedgerCase::kShortcut:
+            [[fallthrough]];
+        case LedgerCase::LEDGER_NOT_SET:
+        {
+            auto const shortcut = specifier.shortcut();
+            if (shortcut ==
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED)
+                return getLedger(ledger, LedgerShortcut::VALIDATED, context);
+            else
+            {
+                // note, if unspecified, defaults to current ledger
+                if (shortcut ==
+                        org::xrpl::rpc::v1::LedgerSpecifier::
+                            SHORTCUT_UNSPECIFIED ||
+                    shortcut ==
+                        org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT)
+                {
+                    return getLedger(ledger, LedgerShortcut::CURRENT, context);
+                }
+                else if (
+                    shortcut ==
+                    org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CLOSED)
+                {
+                    return getLedger(ledger, LedgerShortcut::CLOSED, context);
+                }
+            }
+        }
+    }
+
+    return Status::OK;
+}
+
+
+template <class T>
 Status
 getLedger(
-    std::shared_ptr<ReadView const>& ledger,
+    T& ledger,
     uint256 const& ledgerHash,
     Context& context)
 {
@@ -446,6 +458,10 @@ getLedger<>(
     std::shared_ptr<ReadView const>&,
     LedgerShortcut shortcut,
     Context&);
+
+template Status
+getLedger<>(std::shared_ptr<ReadView const>&,
+        uint256 const&, Context&);
 
 bool
 isValidated(

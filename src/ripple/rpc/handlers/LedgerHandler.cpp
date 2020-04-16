@@ -109,7 +109,7 @@ doLedgerGrpc(
     RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
 {
 
-    org::xrpl::rpc::v1::GetLedgerRequest request = context.params;
+    org::xrpl::rpc::v1::GetLedgerRequest& request = context.params;
     org::xrpl::rpc::v1::GetLedgerResponse response;
     grpc::Status status = grpc::Status::OK;
 

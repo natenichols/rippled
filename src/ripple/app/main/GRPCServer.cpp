@@ -456,6 +456,21 @@ GRPCServerImpl::setupListeners()
             RPC::NO_CONDITION,
             Resource::feeReferenceRPC));
     }
+    {
+        using cd = CallData<
+            org::xrpl::rpc::v1::GetLedgerDiffRequest,
+            org::xrpl::rpc::v1::GetLedgerDiffResponse>;
+
+        addToRequests(std::make_shared<cd>(
+            service_,
+            *cq_,
+            app_,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
+                RequestGetLedgerDiff,
+            doLedgerDiffGrpc,
+            RPC::NO_CONDITION,
+            Resource::feeReferenceRPC));
+    }
     return requests;
 };
 

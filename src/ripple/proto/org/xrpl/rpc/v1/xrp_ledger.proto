@@ -13,6 +13,7 @@ import "org/xrpl/rpc/v1/meta.proto";
 import "org/xrpl/rpc/v1/get_ledger.proto";
 import "org/xrpl/rpc/v1/get_ledger_entry.proto";
 import "org/xrpl/rpc/v1/get_ledger_data.proto";
+import "org/xrpl/rpc/v1/get_ledger_diff.proto";
 
 
 // RPCs available to interact with the XRP Ledger.
@@ -39,5 +40,7 @@ service XRPLedgerAPIService {
   rpc GetLedgerEntry(GetLedgerEntryRequest) returns (GetLedgerEntryResponse);
 
   rpc GetLedgerData(GetLedgerDataRequest) returns (GetLedgerDataResponse);
+
+  rpc GetLedgerDiff(GetLedgerDiffRequest) returns (GetLedgerDiffResponse);
 
 }

@@ -71,6 +71,10 @@ std::pair<org::xrpl::rpc::v1::GetLedgerDataResponse, grpc::Status>
 doLedgerDataGrpc(
     RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerDataRequest>& context);
 
+std::pair<org::xrpl::rpc::v1::GetLedgerDiffResponse, grpc::Status>
+doLedgerDiffGrpc(
+    RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerDiffRequest>& context);
+
 }  // namespace ripple
 
 #endif

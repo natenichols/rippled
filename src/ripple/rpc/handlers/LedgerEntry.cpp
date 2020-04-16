@@ -313,7 +313,7 @@ std::pair<org::xrpl::rpc::v1::GetLedgerEntryResponse, grpc::Status>
 doLedgerEntryGrpc(
     RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerEntryRequest>& context)
 {
-    org::xrpl::rpc::v1::GetLedgerEntryRequest request = context.params;
+    org::xrpl::rpc::v1::GetLedgerEntryRequest& request = context.params;
     org::xrpl::rpc::v1::GetLedgerEntryResponse response;
     grpc::Status status = grpc::Status::OK;
 

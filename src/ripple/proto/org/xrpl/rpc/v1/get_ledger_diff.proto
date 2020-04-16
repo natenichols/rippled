@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package org.xrpl.rpc.v1;
+option java_package = "org.xrpl.rpc.v1";
+option java_multiple_files = true;
+
+import "org/xrpl/rpc/v1/ledger.proto";
+message GetLedgerDiffRequest
+{
+
+    LedgerSpecifier base_ledger = 1;
+
+    LedgerSpecifier desired_ledger = 2;
+
+    // defaults to false
+    bool include_blobs = 3;
+}
+
+message GetLedgerDiffResponse
+{
+
+    repeated Diff diffs = 1;
+}
+
+message Diff
+{
+    bytes key = 1;
+
+    bool deleted = 2;
+
+    // only returned if include_blobs is true
+    bytes blob = 3;
+}
