@@ -23,6 +23,7 @@
 
 #include <ripple/app/main/Application.h>
 #include <ripple/core/JobQueue.h>
+#include <ripple/core/Stoppable.h>
 #include <ripple/net/InfoSub.h>
 #include <ripple/protocol/ErrorCodes.h>
 #include <ripple/resource/Charge.h>
@@ -32,6 +33,8 @@
 #include <ripple/rpc/impl/Handler.h>
 #include <ripple/rpc/impl/RPCHelpers.h>
 #include <ripple/rpc/impl/Tuning.h>
+
+#include <boost/beast/websocket.hpp>
 
 #include "org/xrpl/rpc/v1/xrp_ledger.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
@@ -43,7 +46,7 @@
 #include <chrono>
 namespace ripple {
 
-class ReportingETL
+class ReportingETL : Stoppable
 {
     //TODO some logging in the queue
     class LedgerIndexQueue
@@ -146,6 +149,10 @@ private:
 
     std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub> stub_;
 
+    std::unique_ptr<
+        boost::beast::websocket::stream<boost::asio::ip::tcp::socket>>
+        ws_;
+
     //TODO stopping logic needs to be better
     //There are a variety of loops and mutexs in play
     //Sometimes, the software can't stop
@@ -169,7 +176,7 @@ private:
     void
     doETL();
 
-    void
+    bool
     fetchLedger(
         org::xrpl::rpc::v1::GetLedgerResponse& out,
         bool getObjects = true);
@@ -243,8 +250,10 @@ private:
     Metrics roundMetrics;
 
 public:
-    ReportingETL(Application& app)
-        : app_(app), journal_(app.journal("ReportingETL"))
+    ReportingETL(Application& app, Stoppable& parent)
+        : Stoppable("ReportingETL", parent)
+        , app_(app)
+        , journal_(app.journal("ReportingETL"))
     {
         // if present, get endpoint from config
         if (app_.config().exists("reporting"))
@@ -307,16 +316,6 @@ public:
 
     ~ReportingETL()
     {
-        JLOG(journal_.debug()) << "Stopping Reporting ETL";
-        stopping_ = true;
-        if (subscriber_.joinable())
-            subscriber_.join();
-        
-        JLOG(journal_.debug()) << "Joined subscriber thread";
-        if (worker_.joinable())
-            worker_.join();
-
-        JLOG(journal_.debug()) << "Joined worker thread";
     }
 
     void
@@ -334,6 +333,43 @@ public:
         stopping_ = false;
         doSubscribe();
         doWork();
+    }
+
+    void
+    onStop() override
+    {
+        JLOG(journal_.info()) << "onStop called";
+        JLOG(journal_.debug()) << "Stopping Reporting ETL";
+        stopping_ = true;
+        indexQueue_.stop();
+        if (ws_)
+        {
+            JLOG(journal_.debug()) << "Closing websocket";
+            try
+            {
+                ws_->async_close(
+                    boost::beast::websocket::close_code::normal,
+                    [this](auto const& ec) {
+                        JLOG(journal_.debug())
+                            << "async_close callback. ec = " << ec;
+                    });
+            }
+            catch (std::exception const& e)
+            {
+                JLOG(journal_.error())
+                    << "Error closing websocket : " << e.what();
+            }
+            JLOG(journal_.debug()) << "Closed websocket";
+        }
+        if (subscriber_.joinable())
+            subscriber_.join();
+
+        JLOG(journal_.debug()) << "Joined subscriber thread";
+        if (worker_.joinable())
+            worker_.join();
+
+        JLOG(journal_.debug()) << "Joined worker thread";
+        stopped();
     }
 
 private:

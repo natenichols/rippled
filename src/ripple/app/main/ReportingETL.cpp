@@ -61,6 +61,12 @@ ReportingETL::doSubscribe()
 
     subscriber_ = std::thread([this]() {
         // Sends a WebSocket message and prints the response
+        // TODO only use async websocket API in this function. Will facilitate
+        // cleaner shutdown. Currently, only the read is async, which allows
+        // onStop() to terminate the async_read. However, the other websocket
+        // calls in this function are synchronous, which doesn't play nice with
+        // async_close (called in onStop()). Using the async API may simplify
+        // the threading model as well (but maybe not).
         try
         {
             auto const host = ip_;
@@ -71,16 +77,19 @@ ReportingETL::doSubscribe()
 
             // These objects perform our I/O
             tcp::resolver resolver{ioc};
-            websocket::stream<tcp::socket> ws{ioc};
+
+            JLOG(journal_.debug()) << "Creating subscriber websocket";
+            ws_ = std::make_unique<websocket::stream<tcp::socket>>(ioc);
 
             // Look up the domain name
             auto const results = resolver.resolve(host, port);
 
+            JLOG(journal_.debug()) << "Connecting subscriber websocket";
             // Make the connection on the IP address we get from a lookup
-            net::connect(ws.next_layer(), results.begin(), results.end());
+            net::connect(ws_->next_layer(), results.begin(), results.end());
 
             // Set a decorator to change the User-Agent of the handshake
-            ws.set_option(websocket::stream_base::decorator(
+            ws_->set_option(websocket::stream_base::decorator(
                 [](websocket::request_type& req) {
                     req.set(
                         http::field::user_agent,
@@ -88,8 +97,10 @@ ReportingETL::doSubscribe()
                             " websocket-client-coro");
                 }));
 
+            JLOG(journal_.debug())
+                << "Performing subscriber websocket handshake";
             // Perform the websocket handshake
-            ws.handshake(host, "/");
+            ws_->handshake(host, "/");
 
             Json::Value jv;
             jv["command"] = "subscribe";
@@ -99,21 +110,48 @@ ReportingETL::doSubscribe()
             jv["streams"].append(stream);
             Json::FastWriter fastWriter;
 
+            JLOG(journal_.debug()) << "Sending subscribe stream message";
             // Send the message
-            ws.write(net::buffer(fastWriter.write(jv)));
+            ws_->write(net::buffer(fastWriter.write(jv)));
 
+            JLOG(journal_.info()) << "Starting subscription stream loop";
             while (not stopping_)
             {
                 // This buffer will hold the incoming message
                 beast::flat_buffer buffer;
+
+                JLOG(journal_.debug())
+                    << "Calling async read on subscription websocket";
+
                 // Read a message into our buffer
-                ws.read(buffer);
+                ws_->async_read(buffer, [this](auto const& ec, auto size) {
+                    JLOG(journal_.debug()) << "Subscription callback executed."
+                                           << " ec : " << ec;
+                });
+
+                JLOG(journal_.debug())
+                    << "Running io_context in subscription loop";
+                ioc.restart();
+                // Note, this returns when there is no more work to do. Usually,
+                // the only outstanding work is the above async read. So when
+                // ioc.run() returns, the async read has finished (Or the
+                // websocket was closed)
+                ioc.run();
+
+                JLOG(journal_.debug()) << "ioc.run() returned. Reading message";
                 Json::Value response;
                 Json::Reader reader;
-                reader.parse(
-                    static_cast<char const*>(buffer.data().data()), response);
-                JLOG(journal_.info()) << "sub message = "
-                    << response.toStyledString();
+                if (!reader.parse(
+                        static_cast<char const*>(buffer.data().data()),
+                        response))
+                {
+                    JLOG(journal_.error()) << "Error parsing stream message."
+                                           << "Exiting subscribe loop";
+                    return;
+                }
+                JLOG(journal_.info()) << "Received a message on ledger "
+                                      << " subscription stream. Message : "
+                                      << response.toStyledString();
 
                 uint32_t ledgerIndex = 0;
                 // TODO is this index always validated?
@@ -134,17 +172,18 @@ ReportingETL::doSubscribe()
             }
             JLOG(journal_.info()) << "Exited suscribe loop. Stopping queue";
 
-            indexQueue_.stop();
-            JLOG(journal_.info()) << "Stopped queue";
+            // TODO should this be where the index queue is stopped from?
+            // indexQueue_.stop();
 
             // Close the WebSocket connection
-            ws.close(websocket::close_code::normal);
+            ws_->close(websocket::close_code::normal);
 
             // If we get here then the connection is closed gracefully
         }
         catch (std::exception const& e)
         {
-            std::cerr << "Error: " << e.what() << std::endl;
+            JLOG(journal_.error())
+                << "Error in subscribe loop. Error : " << e.what();
             return;
         }
     });
@@ -171,7 +210,6 @@ struct AsyncCallData
         beast::Journal& j)
         : journal_(j)
     {
-        std::cout << "setting marker = " << strHex(marker) << std::endl;
 
         request.mutable_ledger()->set_sequence(seq);
         if(marker.isNonZero())
@@ -199,6 +237,8 @@ struct AsyncCallData
         context = std::make_unique<grpc::ClientContext>();
     }
 
+    // TODO change bool to enum. Three possible results. Success + more to do.
+    // Success + finished. Error.
     bool
     process(
         std::shared_ptr<Ledger>& ledger,
@@ -276,7 +316,7 @@ ReportingETL::startWriter()
         std::shared_ptr<SLE> sle;
         size_t num = 0;
         //TODO: if this call blocks, flushDirty in the meantime
-        while ((sle = writeQueue_.pop()))
+        while (not stopping_ and (sle = writeQueue_.pop()))
         {
             assert(sle);
             // TODO get rid of this conditional
@@ -292,7 +332,8 @@ ReportingETL::startWriter()
             }
             ++num;
         }
-        ledger_->stateMap().flushDirty(
+        if (not stopping_)
+            ledger_->stateMap().flushDirty(
                 hotACCOUNT_NODE, ledger_->info().seq);
     }};
 }
@@ -301,7 +342,8 @@ void
 ReportingETL::loadInitialLedger()
 {
     org::xrpl::rpc::v1::GetLedgerResponse response;
-    fetchLedger(response, false);
+    if (not fetchLedger(response, false))
+        return;
     updateLedger(response);
 
     grpc::CompletionQueue cq;
@@ -368,8 +410,13 @@ ReportingETL::loadInitialLedger()
                            << ((interim - start).count()) / 1000000000.0
                            << " seconds";
     joinWriter();
-    flushLedger();
-    storeLedger();
+    // TODO handle case when there is a network error (other side dies)
+    // Shouldn't try to flush in that scenario
+    if (not stopping_)
+    {
+        flushLedger();
+        storeLedger();
+    }
     auto end = std::chrono::system_clock::now();
     JLOG(journal_.debug()) << "Time to download and store ledger = "
                            << ((end - start).count()) / 1000000000.0
@@ -434,7 +481,7 @@ ReportingETL::storeLedger()
                            << " = " << roundMetrics.storeTime;
 }
 
-void
+bool
 ReportingETL::fetchLedger(
     org::xrpl::rpc::v1::GetLedgerResponse& out,
     bool getObjects)
@@ -447,7 +494,7 @@ ReportingETL::fetchLedger(
     if (idx == 0)
     {
         JLOG(journal_.debug()) << "Popped 0 from index queue. Stopping";
-        return;
+        return false;
     }
 
     request.mutable_ledger()->set_sequence(idx);
@@ -479,6 +526,7 @@ ReportingETL::fetchLedger(
         }
     }
     JLOG(journal_.trace()) << "GetLedger reply : " << out.DebugString();
+    return not stopping_;
 }
 
 void
@@ -592,7 +640,8 @@ ReportingETL::doETL()
 {
     org::xrpl::rpc::v1::GetLedgerResponse fetchResponse;
 
-    fetchLedger(fetchResponse);
+    if (not fetchLedger(fetchResponse))
+        return;
 
     updateLedger(fetchResponse);
 

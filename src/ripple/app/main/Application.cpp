@@ -449,7 +449,7 @@ public:
               std::chrono::milliseconds(100),
               get_io_service())
         , grpcServer_(std::make_unique<GRPCServer>(*this))
-        , reportingETL_(std::make_unique<ReportingETL>(*this))
+        , reportingETL_(std::make_unique<ReportingETL>(*this, *m_ledgerMaster))
     {
         add(m_resourceManager.get());
 
