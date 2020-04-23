@@ -234,14 +234,14 @@ ledgerFromRequest(T& ledger, JsonContext& context)
     }
     else
     {
-        auto const index = indexValue.asString();
-        if (index == "validated")
+        auto const index = indexValue.asString ();
+        if (index.empty() || index == "validated")
         {
             return getLedger(ledger, LedgerShortcut::VALIDATED, context);
         }
         else
         {
-            if (index.empty() || index == "current")
+            if (index == "current")
                 return getLedger(ledger, LedgerShortcut::CURRENT, context);
             else if (index == "closed")
                 return getLedger(ledger, LedgerShortcut::CLOSED, context);
@@ -318,17 +318,18 @@ ledgerFromSpecifier(
         case LedgerCase::LEDGER_NOT_SET:
         {
             auto const shortcut = specifier.shortcut();
+            // note, unspecified defaults to validated
             if (shortcut ==
-                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED)
+                    org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED ||
+                shortcut ==
+                    org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_UNSPECIFIED)
+            {
                 return getLedger(ledger, LedgerShortcut::VALIDATED, context);
+            }
             else
             {
-                // note, if unspecified, defaults to current ledger
                 if (shortcut ==
-                        org::xrpl::rpc::v1::LedgerSpecifier::
-                            SHORTCUT_UNSPECIFIED ||
-                    shortcut ==
-                        org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT)
+                    org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT)
                 {
                     return getLedger(ledger, LedgerShortcut::CURRENT, context);
                 }
