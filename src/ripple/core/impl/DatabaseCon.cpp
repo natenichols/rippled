@@ -96,7 +96,8 @@ setup_DatabaseCon(Config const& c, boost::optional<beast::Journal> j)
 
     setup.startUp = c.START_UP;
     setup.standAlone = c.standalone();
-    setup.dataDir = c.legacy("database_path");
+    setup.reporting = c.reporting();
+    setup.dataDir = c.legacy ("database_path");
     if (!setup.standAlone && setup.dataDir.empty())
     {
         Throw<std::runtime_error>("database_path must be set.");
