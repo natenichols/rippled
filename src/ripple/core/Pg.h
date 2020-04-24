@@ -45,8 +45,17 @@ namespace ripple {
 using pg_result_type = std::unique_ptr<PGresult, void(*)(PGresult*)>;
 using pg_connection_type = std::unique_ptr<PGconn, void(*)(PGconn*)>;
 
-/* first: command
- * second: parameter values */
+/** first: command
+ * second: parameter values
+ *
+ * The 2nd member takes an optional string is to
+ * distinguish between NULL parameters and empty strings. An empty
+ * item corresponds to a NULL parameter.
+ *
+ * Postgres reads each parameter as a c-string, regardless of actual type.
+ * Binary types (bytea) need to be converted to hex and prepended with
+ * \x ("\\x").
+ */
 using pg_params = std::pair<char const*,
     std::vector<std::optional<std::string>>>;
 
