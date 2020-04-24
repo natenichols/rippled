@@ -18,8 +18,8 @@ Example:
 ```
 psql -f schema.sql postgres://marktest3.rc.ripple.com/testing2
 ```
-
-Example usage for inserting a transaction:
+---
+### Insert transaction
 
 The field values as they correspond to SQLITE are:
 ```
@@ -50,9 +50,8 @@ pg_params cmd = {
     {}};
 cmd.second.push_back(std::to_string(LedgerSeq);
 cmd.second.push_back(std::to_string(transaction_index);
-cmd.second.push_back(std::to_string("\\x" + <hex transaction hash>);
-cmd.second.push_back(std::to_string("\\x" + <hex transaction object>);
-cmd.second.push_back(std::to_string("\\x" + <hex metadata object>);
+cmd.second.push_back(std::to_string("\\x" + <hex transaction object hash>);
+cmd.second.push_back(std::to_string("\\x" + <hex metadata object hash>);
 auto res = PgQuery(app_.pgPool()).querySync(cmd);
 ```
 
@@ -65,7 +64,8 @@ with 1 field containing the number of rows affected, either 0 or 1.
     using pg_params = std::pair<char const*,
         std::vector<std::optional<std::string>>>;
 ```
-For AccountTransactions:
+
+### Insert to account_transaction table
 
 ```
 pg_params cmd = {

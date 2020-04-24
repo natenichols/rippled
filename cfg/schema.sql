@@ -56,7 +56,6 @@ CREATE TABLE IF NOT EXISTS public.transactions (
     ledger_seq bigint NOT NULL,
     transaction_index bigint NOT NULL,
     transaction_id bytea UNIQUE NOT NULL,
-    tx bytea NOT NULL,
     meta bytea NOT NULL
 );
 
