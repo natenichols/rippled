@@ -17,6 +17,11 @@
 */
 //==============================================================================
 
+#include <ripple/app/misc/Transaction.h>
+#include <ripple/app/tx/apply.h>
+#include <ripple/basics/Log.h>
+#include <ripple/core/DatabaseCon.h>
+#include <ripple/core/Pg.h>
 #include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/main/Application.h>
 #include <ripple/app/misc/HashRouter.h>
@@ -121,6 +126,41 @@ Transaction::load(
     using op = boost::optional<ClosedInterval<uint32_t>>;
 
     return load(id, app, op{range}, ec);
+}
+
+uint32_t Transaction::getLedgerSeq(uint256 const& id, Application& app)
+{
+    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app.pgPool());
+
+    //TODO why cant we get the transaction index as well? Only ledger seq is coming through
+    auto baseCmd = boost::format(
+            R"(SELECT (ledger_seq) from transactions where
+            transaction_id = '%s';)");
+
+    std::string txHash = "\\x" + strHex(id);
+    std::string sql = boost::str(baseCmd % txHash);
+
+    auto res = pg->querySync(sql.data());
+
+    assert(PQntuples(res.get()) == 1);
+    //TODO this should be two
+    assert(PQnfields(res.get()) == 1);
+
+    assert(PQresultStatus(res.get()) == PGRES_TUPLES_OK
+            || PQresultStatus(res.get()) == PGRES_SINGLE_TUPLE);
+
+    char const* ledgerSeqStr = PQgetvalue(res.get(),0,0);
+
+    //char const* transactionIdxStr = PQgetvalue(res.get(),0,1);
+
+    try
+    {
+        return std::stoi(ledgerSeqStr);
+    }
+    catch(std::exception const& e)
+    {
+        return 0;
+    }
 }
 
 boost::variant<Transaction::pointer, bool>

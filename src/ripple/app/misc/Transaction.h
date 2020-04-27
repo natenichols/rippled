@@ -300,6 +300,9 @@ public:
     Json::Value
     getJson(JsonOptions options, bool binary = false) const;
 
+    static uint32_t
+        getLedgerSeq(uint256 const& id, Application& app);
+
     static pointer
     load(uint256 const& id, Application& app, error_code_i& ec);
 

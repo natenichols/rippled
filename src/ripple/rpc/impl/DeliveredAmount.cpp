@@ -205,12 +205,22 @@ insertDeliveredAmount(
     std::shared_ptr<Transaction> const& transaction,
     TxMeta const& transactionMeta)
 {
-    auto const serializedTx = transaction->getSTransaction();
-    if (canHaveDeliveredAmount(context, serializedTx, transactionMeta))
+    insertDeliveredAmount(
+        meta, context, transaction->getSTransaction(), transactionMeta);
+}
+
+void
+insertDeliveredAmount(
+    Json::Value& meta,
+    RPC::JsonContext const& context,
+    std::shared_ptr<STTx const> const& transaction,
+    TxMeta const& transactionMeta)
+{
+    if (canHaveDeliveredAmount(context, transaction, transactionMeta))
     {
         auto amt = getDeliveredAmount(
-            context, serializedTx, transactionMeta, [&transaction]() {
-                return transaction->getLedger();
+            context, transaction, transactionMeta, [&transactionMeta]() {
+                return transactionMeta.getLgrSeq();
             });
 
         if (amt)

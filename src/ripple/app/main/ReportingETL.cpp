@@ -22,6 +22,7 @@
 
 #include <ripple/json/json_reader.h>
 #include <ripple/json/json_writer.h>
+#include <ripple/core/Pg.h>
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/core.hpp>
@@ -568,6 +569,7 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
 
     ledger_->stateMap().clearSynching();
     ledger_->txMap().clearSynching();
+    std::vector<std::pair<uint256,uint32_t>> hashesAndIndices;
 
     for (auto& txn : in.transactions_list().transactions())
     {
@@ -588,6 +590,8 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
 
         JLOG(journal_.trace())
             << "Inserting transaction = " << sttx.getTransactionID();
+        hashesAndIndices.push_back(std::make_pair(sttx.getTransactionID(),
+                    txMeta.getIndex()));
         ledger_->rawTxInsert(
             sttx.getTransactionID(), txSerializer, metaSerializer);
     }
@@ -635,6 +639,8 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
     if (in.ledger_objects().size())
         ledger_->updateSkipList();
 
+    writeToTxDB(hashesAndIndices, lgrInfo.seq);
+
     // update metrics
     auto end = std::chrono::system_clock::now();
 
@@ -644,6 +650,49 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
 
     JLOG(journal_.debug()) << "Update time for ledger " << lgrInfo.seq << " = "
                            << roundMetrics.updateTime;
+}
+
+void
+ReportingETL::writeToTxDB(
+    std::vector<std::pair<uint256,uint32_t>>& hashesAndIndices,
+    uint32_t ledgerSeq)
+{
+
+    JLOG(journal_.debug()) << "writeToTxDB";
+    assert(app_.pgPool());
+    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
+    JLOG(journal_.debug()) << "createdPqQuery";
+    auto res = pg->querySync("BEGIN;");
+    assert(res);
+    auto result = PQresultStatus(res.get());
+    JLOG(journal_.debug()) << "writeToTxDB - result = " << result;
+
+    assert(result == PGRES_COMMAND_OK);
+
+    auto baseCmd = boost::format(
+        R"(INSERT INTO transactions 
+            VALUES (%u, %u, '%s', '%s') 
+            ON CONFLICT DO NOTHING;)");
+
+    std::string sql;
+
+    for(auto& [h,i] : hashesAndIndices)
+    {
+        std::string txHash = "\\x" + strHex(h);
+        std::string meta = "";
+        sql = boost::str(baseCmd % ledgerSeq % i % txHash % meta);
+        res = pg->querySync(sql.data());
+        assert(res);
+        result = PQresultStatus(res.get());
+        JLOG(journal_.debug()) << "writeToTxDB - result = " << result;
+        assert(result == PGRES_COMMAND_OK);
+    }
+
+    res = pg->querySync("COMMIT;");
+    assert(res);
+    result = PQresultStatus(res.get());
+    JLOG(journal_.debug()) << "writeToTxDB - result = " << result;
+    assert(result == PGRES_COMMAND_OK);
 }
 
 void

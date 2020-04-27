@@ -205,6 +205,11 @@ private:
     storeLedger();
 
     void
+    writeToTxDB(
+        std::vector<std::pair<uint256, uint32_t>>& hashesAndIndices,
+        uint32_t ledgerSeq);
+
+    void
     outputMetrics();
 
     void

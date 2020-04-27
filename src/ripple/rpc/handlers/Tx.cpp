@@ -98,6 +98,105 @@ struct TxArgs
     std::optional<std::pair<uint32_t, uint32_t>> ledgerRange;
 };
 
+std::variant<
+    RPC::Status,
+    std::pair<Blob, Blob>,
+    std::pair<std::shared_ptr<const STTx>, std::shared_ptr<TxMeta>>>
+doTxReporting(RPC::Context& context, TxArgs const& args)
+{
+    //TODO range stuff
+    //
+    
+    auto ledgerSeq = Transaction::getLedgerSeq(args.hash, context.app);
+    if(ledgerSeq == 0)
+        return {rpcTXN_NOT_FOUND};
+    auto ledger = context.ledgerMaster.getLedgerBySeq(ledgerSeq);
+
+    if(args.binary)
+    {
+        auto const item = ledger->txMap().peekItem(args.hash);
+        SerialIter it(item->slice());
+        Blob txnBlob = it.getVL();
+        it.skip(it.getVLDataLength());
+        Blob metaBlob = it.getVL();
+        auto p = std::make_pair(txnBlob, metaBlob);
+        return p;
+    }
+    else
+    {
+        auto [txn,meta] = ledger->txRead(args.hash);
+
+        
+        auto txMeta = std::make_shared<TxMeta>(args.hash, ledgerSeq, *meta);
+        auto p = std::make_pair(txn, txMeta);
+        return p;
+    }
+}
+
+Json::Value
+doTxReportingJson(RPC::JsonContext& context)
+{
+    
+    if (!context.params.isMember(jss::transaction))
+        return rpcError(rpcINVALID_PARAMS);
+
+    std::string txHash = context.params[jss::transaction].asString();
+    if (!isHexTxID(txHash))
+        return rpcError(rpcNOT_IMPL);
+
+    TxArgs args;
+    args.hash = from_hex_text<uint256>(txHash);
+
+    args.binary = context.params.isMember(jss::binary) &&
+        context.params[jss::binary].asBool();
+
+    if (context.params.isMember(jss::min_ledger) &&
+        context.params.isMember(jss::max_ledger))
+    {
+        try
+        {
+            args.ledgerRange = std::make_pair(
+                context.params[jss::min_ledger].asUInt(),
+                context.params[jss::max_ledger].asUInt());
+        }
+        catch (...)
+        {
+            // One of the calls to `asUInt ()` failed.
+            return rpcError(rpcINVALID_LGR_RANGE);
+        }
+    }
+    auto result = doTxReporting(context, args);
+
+    Json::Value response;
+    response[jss::hash] = txHash;
+    if(auto blobs = std::get_if<std::pair<Blob, Blob>>(&result))
+    {
+        response[jss::tx] = strHex(blobs->first);
+        response[jss::meta] = strHex(blobs->second);
+    }
+    else if (
+        auto pair = std::get_if<
+            std::pair<std::shared_ptr<const STTx>, std::shared_ptr<TxMeta>>>(&result))
+    {
+        response[jss::tx] = pair->first->getJson(JsonOptions::include_date);
+        response[jss::meta] = pair->second->getJson(JsonOptions::none);
+
+        insertDeliveredAmount(
+                response[jss::meta], context, pair->first, *pair->second);
+    }
+    else if(auto err = std::get_if<RPC::Status>(&result))
+    {
+       err->inject(response); 
+    }
+    else
+    {
+        assert(false);
+    }
+    response[jss::validated] = true;
+    response["used_postgres"] = true;
+    return response;
+}
+
 std::pair<TxResult, RPC::Status>
 doTxHelp(RPC::Context& context, TxArgs const& args)
 {
