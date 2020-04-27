@@ -23,6 +23,7 @@
 #include <libpq-fe.h>
 #include <ripple/basics/BasicConfig.h>
 #include <ripple/basics/Log.h>
+#include <ripple/protocol/Protocol.h>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/io_context_strand.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -307,11 +308,35 @@ public:
      * @param dbParams
      * @return PostgreSQL API result struct.
      */
-    pg_result_type querySync(pg_params const& dbParams);
-    pg_result_type querySync(char const* command);
+
+    pg_result_type querySync(pg_params const& dbParams,
+              std::shared_ptr<Pg>& conn);
+
+    pg_result_type
+    querySync(pg_params const& dbParams)
+    {
+        std::shared_ptr<Pg> conn;
+        return querySync(dbParams, conn);
+    }
+
+    pg_result_type
+    querySync(char const* command, std::shared_ptr<Pg>& conn)
+    {
+        return querySync(pg_params{command, {}}, conn);
+    }
+
+    pg_result_type
+    querySync(char const* command)
+    {
+        std::shared_ptr<Pg> conn;
+        return querySync(command, conn);
+    }
+
     void store(std::shared_ptr<NodeObject> const& no, size_t const keyBytes);
     void store(std::vector<std::shared_ptr<NodeObject>> const& nos,
         size_t const keyBytes);
+    std::pair<std::shared_ptr<Pg>, std::optional<LedgerIndex>>
+    lockLedger(std::optional<LedgerIndex> seq = {});
 
 };
 
