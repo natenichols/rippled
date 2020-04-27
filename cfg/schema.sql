@@ -65,6 +65,9 @@ ALTER TABLE ONLY public.account_transactions
     ADD CONSTRAINT account_transactions_pkey PRIMARY KEY (
     account, ledger_seq, transaction_index);
 
+CREATE INDEX account_transactions_trans_id ON public.account_transactions
+    USING btree (trans_id);
+
 
 --
 -- Name: ledgers ledgers_hash_unique; Type: CONSTRAINT;
