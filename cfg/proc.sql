@@ -77,8 +77,41 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Equivalent to rippled method tx()
 CREATE OR REPLACE FUNCTION tx (
+    _in_trans_id bytea
+) RETURNS jsonb AS $$
+DECLARE
+    _min_seq           bigint := (SELECT ledger_seq
+	                            FROM ledgers
+				   WHERE ledger_seq = min_ledger()
+			             FOR UPDATE);
+    _max_seq           bigint := max_ledger();
+    _ledger_seq        bigint;
+    _transaction_index bigint;
+BEGIN
+    IF _min_seq IS NULL THEN
+        RETURN jsonb_build_object('error', 'empty database');
+    END IF;
+    IF length(_in_trans_id) != 20 THEN
+        RETURN jsonb_build_object('error', '_in_trans_id size: '
+            || to_char(length(_in_trans_id), '999'));
+    END IF;
+
+    EXECUTE 'SELECT ledger_seq, transaction_id
+               FROM account_transactions
+	      WHERE trans_id = $1
+	      LIMIT 1
+    ' INTO _ledger_seq, _transaction_index USING _in_trans_id;
+    IF _ledger_seq IS NULL THEN
+        RETURN jsonb_build_object('min', _min_seq, 'max', _max_seq);
+    END IF;
+    RETURN jsonb_build_object('ledger_seq', _ledger_seq,
+        'transaction_index', _transaction_index);
+END;
+$$ LANGUAGE plpgsql;
+
+-- Equivalent to rippled method tx()
+CREATE OR REPLACE FUNCTION tx_old (
     _in_transaction text
 ) RETURNS jsonb AS $$
 DECLARE
@@ -134,10 +167,173 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION account_tx (
-) RETURNS jsonb as $$
+CREATE OR REPLACE FUNCTION play (
+) RETURNS RECORD AS $$
 DECLARE
+    _ret RECORD;
+    _arr bytea[];
 BEGIN
+    _arr := ARRAY[E'\\x0d0a'];
+    _arr := array_prepend(_arr, ARRAY[E'\\x0a0d']);
+    SELECT 'heh', 73, _arr into _ret;
+    RETURN _ret;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION account_tx (
+    _in_account_id bytea,
+    _in_forward bool,
+    _in_limit bigint,
+    _in_ledger_index_min bigint = NULL,
+    _in_ledger_index_max bigint = NULL,
+    _in_ledger_hash      bytea  = NULL,
+    _in_ledger_index     bigint = NULL,
+    _in_validated bool   = NULL,
+    _in_marker_seq       bigint = NULL,
+    _in_marker_index     bigint = NULL
+) RETURNS jsonb AS $$
+DECLARE
+    _min          bigint;
+    _max          bigint;
+    _sort_order   text       := (SELECT CASE WHEN _in_forward IS TRUE THEN
+	                         'ASC' ELSE 'DESC' END);
+    _marker       bool;
+    _between_min  bigint;
+    _between_max  bigint;
+    _sql          text;
+    _cursor       refcursor;
+    _result       jsonb;
+    _record       record;
+    _tally        bigint     := 0;
+    _ret_marker   jsonb;
+    _transactions jsonb[]    := '{}';
+BEGIN
+    IF _in_ledger_index_min IS NOT NULL OR
+            _in_ledger_index_max IS NOT NULL THEN
+        _min := (SELECT CASE WHEN _in_ledger_index_min IS NULL
+            THEN min_ledger() ELSE greatest(
+            _in_ledger_index_min, min_ledger()) END);
+        _max := (SELECT CASE WHEN _in_ledger_index_max IS NULL OR
+            _in_ledger_index_max = -1 THEN max_ledger() ELSE
+            least(_in_ledger_index_max, max_ledger()) END);
+
+        IF _max < _min THEN
+            RETURN jsonb_build_object('error', 'max is less than min ledger');
+        END IF;
+
+    ELSIF _in_ledger_hash IS NOT NULL OR _in_ledger_index IS NOT NULL
+            OR _in_validated IS TRUE THEN
+        IF _in_ledger_hash IS NOT NULL THEN
+            IF length(_in_ledger_hash) != 20 THEN
+                RETURN jsonb_build_object('error', '_in_ledger_hash size: '
+                    || to_char(length(_in_ledger_hash), '999'));
+            END IF;
+            EXECUTE 'SELECT ledger_seq
+                       FROM ledgers
+                      WHERE ledger_hash = $1'
+                INTO _min USING _in_ledger_hash::bytea;
+        ELSE
+            IF _in_ledger_index IS NOT NULL AND _in_validated IS TRUE THEN
+                RETURN jsonb_build_object('error',
+		    '_in_ledger_index cannot be set and _in_validated true');
+            END IF;
+            IF _in_validated IS TRUE THEN
+                _in_ledger_index := max_ledger();
+            END IF;
+            _min := (SELECT ledger_seq
+                       FROM ledgers
+                      WHERE ledger_seq = _in_ledger_index);
+        END IF;
+        IF _min IS NULL THEN
+            RETURN jsonb_build_object('error', 'ledger not found');
+        END IF;
+        _max := _min;
+    ELSE
+        _min := min_ledger();
+        _max := max_ledger();
+    END IF;
+
+    IF _in_marker_seq IS NOT NULL OR _in_marker_index IS NOT NULL THEN
+        _marker := TRUE;
+        IF _in_marker_seq IS NULL OR _in_marker_index IS NULL THEN
+            -- The rippled implementation returns no transaction results
+            -- if either of these values are missing.
+            _between_min := 0;
+            _between_max := 0;
+        ELSE
+            IF _in_forward IS TRUE THEN
+                _between_min := _in_marker_seq;
+                _between_max := _max;
+            ELSE
+                _between_min := _min;
+                _between_max := _in_marker_seq;
+            END IF;
+        END IF;
+    ELSE
+	_marker := FALSE;
+        _between_min := _min;
+        _between_max := _max;
+    END IF;
+    IF _between_max < _between_min THEN
+        RETURN jsonb_build_object('error', 'ledger search range is '
+	    || to_char(_between_min, '999') || '-'
+	    || to_char(_between_max, '999'));
+    END IF;
+
+    _sql := format('
+	SELECT ledger_seq, transaction_index, trans_id
+	  FROM account_transactions
+	 WHERE account = $1
+	   AND ledger_seq BETWEEN $2 AND $3
+	 ORDER BY ledger_seq %s,
+	       transaction_index %s
+	', _sort_order, _sort_order);
+
+    OPEN _cursor FOR EXECUTE _sql USING _in_account, _between_min,
+            _between_max;
+    LOOP
+        FETCH _cursor INTO _record;
+        IF _record IS NULL THEN EXIT; END IF;
+        IF _marker IS TRUE THEN
+            IF _in_marker_seq = _record.ledger_seq THEN
+                IF _in_forward IS TRUE THEN
+                    IF _in_marker_index > _record.transaction_index THEN
+                        CONTINUE;
+                    END IF;
+                ELSE
+                    IF _in_marker_index < _record.transaction_index THEN
+                        CONTINUE;
+                    END IF;
+                END IF;
+            END IF;
+            _marker := FALSE;
+        END IF;
+
+        _tally := _tally + 1;
+        IF _tally > _in_limit THEN
+            _ret_marker := jsonb_build_object(
+                'ledger', _record.ledger_seq,
+                'seq', _record.transaction_index);
+            EXIT;
+        END IF;
+
+        -- Is the transaction index in the tx object?
+        _transactions := _transactions || jsonb_build_object(
+            'ledger_seq', _record.ledger_seq,
+            'transaction_index', _record.transaction_index,
+            'trans_id', _record.trans_id);
+
+    END LOOP;
+    CLOSE _cursor;
+
+    _result := jsonb_build_object('ledger_index_min', _min,
+        'ledger_index_max', _max,
+        'transactions', _transactions);
+    IF _ret_marker IS NOT NULL THEN
+        _result := _result || jsonb_build_object('marker', _ret_marker);
+    END IF;
+    RETURN _result;
+
 END;
 $$ LANGUAGE plpgsql;
 
@@ -185,7 +381,7 @@ BEGIN
 
     IF _in_ledger_index_min IS NOT NULL OR
             _in_ledger_index_max IS NOT NULL THEN
-        _min := (SELECT CASE WHEN _in_ledger_index_min IS NULL 
+        _min := (SELECT CASE WHEN _in_ledger_index_min IS NULL
             THEN min_ledger() ELSE greatest(
             _in_ledger_index_min, min_ledger()) END);
         _max := (SELECT CASE WHEN _in_ledger_index_max IS NULL OR

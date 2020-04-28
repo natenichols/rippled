@@ -874,7 +874,7 @@ PgQuery::lockLedger(std::optional<LedgerIndex> seq)
 
               std::stringstream cmd;
               cmd << "BEGIN;"
-                     "SELECT 1"
+                     "SELECT ledger_seq"
                      "  FROM ledgers"
                      " WHERE ledger_seq = ";
               if (seq.has_value())
