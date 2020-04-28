@@ -34,7 +34,6 @@
 #include <boost/asio/strand.hpp>
 #include <algorithm>
 #include <cassert>
-#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -260,11 +259,20 @@ Pg::query(yield_context yield, boost::asio::io_context::strand& strand,
             if (!res)
                 break;
 
+            JLOG(j_.debug()) << "Pg::query looping - "
+                << "res = " << PQresultStatus(res.get())
+                << " error_msg = " << PQerrorMessage(conn_.get());
+
+            /*
+             TODO add this back in below the PGRES_COPY_IN check
             if (ret)
             {
                 Throw<std::runtime_error>("multiple results returned");
-            }
+            }*/
             ret.reset(res.release());
+            //Seems that ret is never null in this case, so need to break
+            if(PQresultStatus(ret.get()) == PGRES_COPY_IN)
+                break;
         }
 
         socket_->release();
@@ -284,7 +292,8 @@ Pg::query(yield_context yield, boost::asio::io_context::strand& strand,
 
     // Ensure proper query execution.
     if (! (PQresultStatus(ret.get()) == PGRES_TUPLES_OK
-        || PQresultStatus(ret.get()) == PGRES_COMMAND_OK))
+        || PQresultStatus(ret.get()) == PGRES_COMMAND_OK
+        || PQresultStatus(ret.get()) == PGRES_COPY_IN))
     {
         std::stringstream ss;
         ss << "bad query result: "

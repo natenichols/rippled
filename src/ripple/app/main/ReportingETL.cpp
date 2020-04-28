@@ -569,7 +569,7 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
 
     ledger_->stateMap().clearSynching();
     ledger_->txMap().clearSynching();
-    std::vector<std::pair<uint256,uint32_t>> hashesAndIndices;
+    std::vector<TxMeta> metas;
 
     for (auto& txn : in.transactions_list().transactions())
     {
@@ -590,10 +590,11 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
 
         JLOG(journal_.trace())
             << "Inserting transaction = " << sttx.getTransactionID();
-        hashesAndIndices.push_back(std::make_pair(sttx.getTransactionID(),
-                    txMeta.getIndex()));
         ledger_->rawTxInsert(
             sttx.getTransactionID(), txSerializer, metaSerializer);
+
+        //TODO use emplace to avoid this copy
+        metas.push_back(txMeta);
     }
 
     JLOG(journal_.trace()) << "Inserted all transactions. "
@@ -639,7 +640,7 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
     if (in.ledger_objects().size())
         ledger_->updateSkipList();
 
-    writeToTxDB(hashesAndIndices, lgrInfo.seq);
+    writeToTxDBCopy(lgrInfo, metas);
 
     // update metrics
     auto end = std::chrono::system_clock::now();
@@ -654,10 +655,8 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
 
 void
 ReportingETL::writeToTxDB(
-    std::vector<std::pair<uint256,uint32_t>>& hashesAndIndices,
-    uint32_t ledgerSeq)
+    std::vector<TxMeta>& metas)
 {
-
     JLOG(journal_.debug()) << "writeToTxDB";
     assert(app_.pgPool());
     std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
@@ -674,18 +673,39 @@ ReportingETL::writeToTxDB(
             VALUES (%u, %u, '%s', '%s') 
             ON CONFLICT DO NOTHING;)");
 
+    auto baseAccountCmd = boost::format(
+            R"(INSERT INTO account_transactions 
+                VALUES ('%s', %u, %u) 
+               ON CONFLICT DO NOTHING;)");
+
     std::string sql;
 
-    for(auto& [h,i] : hashesAndIndices)
+    for(auto& m : metas)
     {
-        std::string txHash = "\\x" + strHex(h);
+        std::string txHash = "\\x" + strHex(m.getTxID());
         std::string meta = "";
-        sql = boost::str(baseCmd % ledgerSeq % i % txHash % meta);
+        auto idx = m.getIndex();
+        auto ledgerSeq = m.getLgrSeq();
+        sql = boost::str(baseCmd % ledgerSeq % idx % txHash % meta);
         res = pg->querySync(sql.data());
         assert(res);
         result = PQresultStatus(res.get());
         JLOG(journal_.debug()) << "writeToTxDB - result = " << result;
         assert(result == PGRES_COMMAND_OK);
+
+        for(auto& a : m.getAffectedAccounts(journal_))
+        {
+            std::string acct = "\\x" + strHex(a);
+            sql = boost::str(baseAccountCmd % acct % ledgerSeq % idx);
+            JLOG(journal_.debug()) << "writing to account_transactions - "
+                << " account = " << acct << " ledgerSeq = "
+                << ledgerSeq << " idx = " << idx
+                << " sql = " << sql;
+            res = pg->querySync(sql.data());
+            assert(res);
+            result = PQresultStatus(res.get());
+            assert(result = PGRES_COMMAND_OK);
+        }
     }
 
     res = pg->querySync("COMMIT;");
@@ -693,6 +713,126 @@ ReportingETL::writeToTxDB(
     result = PQresultStatus(res.get());
     JLOG(journal_.debug()) << "writeToTxDB - result = " << result;
     assert(result == PGRES_COMMAND_OK);
+}
+
+void
+ReportingETL::writeToTxDBCopy(
+        LedgerInfo& info,
+    std::vector<TxMeta>& metas)
+{
+    //TODO: clean up this function to show to mark
+    JLOG(journal_.debug()) << "writeToTxDB";
+    assert(app_.pgPool());
+    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
+    std::shared_ptr<Pg> conn;
+    JLOG(journal_.debug()) << "createdPqQuery";
+
+    {
+    std::shared_ptr<PgQuery> pg2 = std::make_shared<PgQuery>(app_.pgPool());
+    auto res = pg2->querySync("BEGIN;");
+    assert(res);
+    auto result = PQresultStatus(res.get());
+    JLOG(journal_.debug()) << "writeToTxDB - BEGIN result = " << result;
+    assert(result == PGRES_COMMAND_OK);
+
+    
+    }
+
+    auto cmd = boost::format(
+            R"(INSERT INTO ledgers 
+                VALUES(%u,'%s', '%s',%u,%u,%u,%u,%u,'%s','%s')
+                ;)");
+
+    auto ledgerInsert = boost::str(cmd 
+            % info.seq 
+            % strHex(info.hash) 
+            % strHex(info.parentHash)
+            % info.drops.drops() 
+            % info.closeTime.time_since_epoch().count() 
+            % info.parentCloseTime.time_since_epoch().count()
+            % info.closeTimeResolution.count() 
+            % info.closeFlags 
+            % strHex(info.accountHash)
+            % strHex(info.txHash)
+            );
+    auto res = pg->querySync(ledgerInsert.data());
+
+    assert(res);
+    auto result = PQresultStatus(res.get());
+    assert(result == PGRES_COMMAND_OK);
+    res = pg->querySync("COPY account_transactions from STDIN", conn);
+    assert(res);
+    result = PQresultStatus(res.get());
+    assert(result == PGRES_COPY_IN);
+
+    JLOG(journal_.debug()) << "writeToTxDB - COPY result = " << result;
+
+    std::stringstream copyBuffer;
+    for(auto& m : metas)
+    {
+        //std::string txHash = "\\x" + strHex(m.getTxID());
+        std::string txHash = strHex(m.getTxID());
+        auto idx = m.getIndex();
+        auto ledgerSeq = m.getLgrSeq();
+
+        for(auto& a : m.getAffectedAccounts(journal_))
+        {
+
+            //std::string acct = "\\x" + strHex(a);
+            std::string acct = strHex(a);
+            copyBuffer
+                << '\'' << acct << '\'' << '\t'
+                << std::to_string(ledgerSeq) << '\t'
+                << std::to_string(idx) << '\t' 
+                << '\'' << txHash << '\'' << '\n';
+            JLOG(journal_.debug()) << "writing to account_transactions - "
+                << " account = " << acct << " ledgerSeq = "
+                << ledgerSeq << " idx = " << idx;
+        }
+    }
+
+
+    PQsetnonblocking(conn->getConn(), 0);
+
+    std::string bufString = copyBuffer.str();
+    JLOG(journal_.debug()) << "copy buffer = " << bufString;
+
+    auto resCode =
+        PQputCopyData(conn->getConn(), bufString.c_str(), bufString.size());
+
+    auto pqResult = PQgetResult(conn->getConn());
+    auto pqResultStatus = PQresultStatus(pqResult);
+    JLOG(journal_.debug()) << "putCopyData - resultCode = " << resCode
+        << " result = " << pqResultStatus;
+    assert(resCode != -1);
+    assert(resCode != 0);
+    assert(pqResultStatus == 4);
+
+    resCode = PQputCopyEnd(conn->getConn(), nullptr);
+    pqResult = PQgetResult(conn->getConn());
+    pqResultStatus = PQresultStatus(pqResult);
+
+    JLOG(journal_.debug()) << "putCopyEnd - resultCode = " << resCode
+                           << " result = " << pqResultStatus << " error_msg = "
+                           << PQerrorMessage(conn->getConn());
+    assert(resCode != -1);
+    assert(resCode != 0);
+    assert(pqResultStatus != 7);
+
+    {
+        //this works
+        auto execRes = PQexec(conn->getConn(), "COMMIT;");
+        /*
+        this doesnt work
+        std::shared_ptr<PgQuery> pg2 = std::make_shared<PgQuery>(app_.pgPool());
+        res = pg2->querySync("COMMIT;");
+        assert(res);
+        */
+        result = PQresultStatus(execRes);
+        JLOG(journal_.debug()) << "writeToTxDB - COMMIT result = " << result;
+        assert(result == PGRES_COMMAND_OK);
+    }
+    PQsetnonblocking(conn->getConn(), 1);
 }
 
 void

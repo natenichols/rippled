@@ -206,8 +206,12 @@ private:
 
     void
     writeToTxDB(
-        std::vector<std::pair<uint256, uint32_t>>& hashesAndIndices,
-        uint32_t ledgerSeq);
+        std::vector<TxMeta>& metas);
+
+    void
+    writeToTxDBCopy(
+            LedgerInfo& info,
+        std::vector<TxMeta>& metas);
 
     void
     outputMetrics();
