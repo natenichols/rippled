@@ -740,7 +740,7 @@ ReportingETL::writeToTxDBCopy(
 
     auto cmd = boost::format(
             R"(INSERT INTO ledgers 
-                VALUES(%u,'%s', '%s',%u,%u,%u,%u,%u,'%s','%s')
+                VALUES(%u,'\x%s', '\x%s',%u,%u,%u,%u,%u,'\x%s','\x%s')
                 ;)");
 
     auto ledgerInsert = boost::str(cmd 
@@ -755,6 +755,8 @@ ReportingETL::writeToTxDBCopy(
             % strHex(info.accountHash)
             % strHex(info.txHash)
             );
+    JLOG(journal_.debug()) << "writeToTxDB - ledgerInsert = "
+        << ledgerInsert;
     auto res = pg->querySync(ledgerInsert.data());
 
     assert(res);
