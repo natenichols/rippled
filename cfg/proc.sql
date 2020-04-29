@@ -87,7 +87,6 @@ DECLARE
 			             FOR UPDATE);
     _max_seq           bigint := max_ledger();
     _ledger_seq        bigint;
-    _transaction_index bigint;
 BEGIN
     IF _min_seq IS NULL THEN
         RETURN jsonb_build_object('error', 'empty database');
@@ -97,16 +96,16 @@ BEGIN
             || to_char(length(_in_trans_id), '999'));
     END IF;
 
-    EXECUTE 'SELECT ledger_seq, transaction_id
+    EXECUTE 'SELECT ledger_seq
                FROM account_transactions
 	      WHERE trans_id = $1
+                AND ledger_seq BETWEEN $2 AND $3
 	      LIMIT 1
-    ' INTO _ledger_seq, _transaction_index USING _in_trans_id;
+    ' INTO _ledger_seq USING _in_trans_id, _min_seq, _max_seq;
     IF _ledger_seq IS NULL THEN
-        RETURN jsonb_build_object('min', _min_seq, 'max', _max_seq);
+        RETURN jsonb_build_object('min_seq', _min_seq, 'max_seq', _max_seq);
     END IF;
-    RETURN jsonb_build_object('ledger_seq', _ledger_seq,
-        'transaction_index', _transaction_index);
+    RETURN jsonb_build_object('ledger_seq', _ledger_seq);
 END;
 $$ LANGUAGE plpgsql;
 
