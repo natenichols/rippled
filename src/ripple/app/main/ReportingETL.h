@@ -59,29 +59,43 @@ class ReportingETL : Stoppable
 
         std::atomic_bool stopping_ = false;
 
+        std::optional<uint32_t> last;
+
+        beast::Journal j;
+
     public:
+        LedgerIndexQueue(beast::Journal& journal) : j(journal)
+        {
+        }
+
         void
         push(uint32_t idx)
         {
             std::unique_lock<std::mutex> lck(mtx_);
-            if (queue_.size() > 0)
+
+            if (last)
             {
-                auto last = queue_.back();
                 if (idx <= last)
                 {
-                    std::cout << "push old index = " << idx << std::endl;
+                    JLOG(j.warn())
+                        << "Attempted to push old ledger index. index : " << idx
+                        << ". Ignoring";
                     return;
                 }
                 assert(idx > last);
-                if (idx > last + 1)
+                if (idx > *last + 1)
                 {
-                    for (size_t i = last + 1; i < idx; ++i)
+                    JLOG(j.warn())
+                        << "Encountered gap. Trying to push " << idx
+                        << ", but last = " << *last << ". Filling in gap";
+                    for (uint32_t i = *last + 1; i < idx; ++i)
                     {
                         queue_.push(i);
                     }
                 }
             }
             queue_.push(idx);
+            last = idx;
             cv_.notify_all();
         }
 
@@ -92,7 +106,7 @@ class ReportingETL : Stoppable
             cv_.wait(
                 lck, [this]() { return this->queue_.size() > 0 || stopping_; });
             if (stopping_)
-                return 0;
+                return 0;  // TODO return empty optional instead of 0
             uint32_t next = queue_.front();
             queue_.pop();
             return next;
@@ -137,6 +151,8 @@ struct ThreadSafeQueue
 private:
     Application& app_;
 
+    beast::Journal journal_;
+
     std::thread worker_;
 
     std::thread subscriber_;
@@ -163,8 +179,6 @@ private:
     std::string ip_;
 
     std::string wsPort_;
-
-    beast::Journal journal_;
 
     size_t flushInterval_ = 0;
 
@@ -254,6 +268,7 @@ public:
         : Stoppable("ReportingETL", parent)
         , app_(app)
         , journal_(app.journal("ReportingETL"))
+        , indexQueue_(journal_)
     {
         // if present, get endpoint from config
         if (app_.config().exists("reporting"))
