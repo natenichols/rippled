@@ -91,7 +91,7 @@ BEGIN
     IF _min_seq IS NULL THEN
         RETURN jsonb_build_object('error', 'empty database');
     END IF;
-    IF length(_in_trans_id) != 20 THEN
+    IF length(_in_trans_id) != 32 THEN
         RETURN jsonb_build_object('error', '_in_trans_id size: '
             || to_char(length(_in_trans_id), '999'));
     END IF;
