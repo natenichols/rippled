@@ -270,8 +270,7 @@ public:
         bool correctCloseTime,
         Config const& config);
 
-    void
-    setImmutable(Config const& config);
+    void setImmutable (Config const& config, bool rehash = true);
 
     bool
     isImmutable() const

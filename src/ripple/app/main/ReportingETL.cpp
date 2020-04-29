@@ -441,14 +441,22 @@ ReportingETL::flushLedger()
 
     auto start = std::chrono::system_clock::now();
 
-    ledger_->setImmutable(app_.config());
+    ledger_->setImmutable(app_.config(), false);
 
-    ledger_->stateMap().flushDirty(
+    auto numFlushed = ledger_->stateMap().flushDirty(
         hotACCOUNT_NODE, ledger_->info().seq);
 
-    ledger_->txMap().flushDirty(
+    auto numTxFlushed = ledger_->txMap().flushDirty(
         hotTRANSACTION_NODE, ledger_->info().seq);
 
+    JLOG(journal_.debug()) << "Flushed " << numFlushed
+        << " nodes to nodestore from stateMap";
+    JLOG(journal_.debug()) << "Flushed " << numTxFlushed
+        << " nodes to nodestore from txMap";
+
+    assert(numFlushed != 0 or roundMetrics.objectCount == 0);
+    assert(numTxFlushed!= 0 or roundMetrics.txnCount == 0);
+    
     auto end = std::chrono::system_clock::now();
 
     roundMetrics.flushTime = ((end - start).count()) / 1000000000.0;
