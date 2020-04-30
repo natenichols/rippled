@@ -141,7 +141,7 @@ Handler const handlerArray[]{
     {"crawl_shards", byRef(&doCrawlShards), Role::ADMIN, NO_CONDITION},
     {"stop", byRef(&doStop), Role::ADMIN, NO_CONDITION},
     {"transaction_entry", byRef(&doTransactionEntry), Role::USER, NO_CONDITION},
-    {"tx", byRef(&doTxReportingJson), Role::USER, NEEDS_NETWORK_CONNECTION},
+    {"tx", byRef(&doTxJson), Role::USER, NEEDS_NETWORK_CONNECTION},
     {"tx_history", byRef(&doTxHistory), Role::USER, NO_CONDITION},
     {"unl_list", byRef(&doUnlList), Role::ADMIN, NO_CONDITION},
     {"validation_create",
