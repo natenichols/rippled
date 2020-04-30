@@ -288,7 +288,7 @@ BEGIN
 	       transaction_index %s
 	', _sort_order, _sort_order);
 
-    OPEN _cursor FOR EXECUTE _sql USING _in_account, _between_min,
+    OPEN _cursor FOR EXECUTE _sql USING _in_account_id, _between_min,
             _between_max;
     LOOP
         FETCH _cursor INTO _record;

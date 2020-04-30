@@ -715,6 +715,7 @@ writeToAccountTransactionsDB(
             copyBuffer << "\\\\x" << acct << '\t' << std::to_string(ledgerSeq)
                        << '\t' << std::to_string(idx) << '\t' << "\\\\x"
                        << txHash << '\n';
+            JLOG(journal.debug()) << acct;
             /*
             JLOG(journal.debug())
                 << "writing to account_transactions - "
