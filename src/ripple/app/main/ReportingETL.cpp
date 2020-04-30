@@ -712,15 +712,15 @@ writeToAccountTransactionsDB(
         for (auto& a : m.getAffectedAccounts(journal))
         {
             std::string acct = strHex(a);
-            copyBuffer
-                << '\'' << acct << '\'' << '\t'
-                << std::to_string(ledgerSeq) << '\t'
-                << std::to_string(idx) << '\t' 
-                << '\'' << txHash << '\'' << '\n';
+            copyBuffer << "\\\\x" << acct << '\t' << std::to_string(ledgerSeq)
+                       << '\t' << std::to_string(idx) << '\t' << "\\\\x"
+                       << txHash << '\n';
+            /*
             JLOG(journal.debug())
                 << "writing to account_transactions - "
                 << " account = " << acct << " ledgerSeq = " << ledgerSeq
                 << " idx = " << idx;
+                */
         }
     }
 
