@@ -37,8 +37,8 @@ namespace ripple {
 //   transaction: <hex>
 // }
 
-static bool
-isHexTxID(std::string const& txid)
+bool
+RPC::isHexTxID(std::string const& txid)
 {
     if (txid.size() != 64)
         return false;
@@ -141,7 +141,7 @@ doTxReportingJson(RPC::JsonContext& context)
         return rpcError(rpcINVALID_PARAMS);
 
     std::string txHash = context.params[jss::transaction].asString();
-    if (!isHexTxID(txHash))
+    if (!RPC::isHexTxID(txHash))
         return rpcError(rpcNOT_IMPL);
 
     TxArgs args;
@@ -449,13 +449,17 @@ populateJsonResponse(
 Json::Value
 doTxJson(RPC::JsonContext& context)
 {
+    if (context.app.config().usePostgresTx())
+    {
+        return doTxReportingJson(context);
+    }
     // Deserialize and validate JSON arguments
 
     if (!context.params.isMember(jss::transaction))
         return rpcError(rpcINVALID_PARAMS);
 
     std::string txHash = context.params[jss::transaction].asString();
-    if (!isHexTxID(txHash))
+    if (!RPC::isHexTxID(txHash))
         return rpcError(rpcNOT_IMPL);
 
     TxArgs args;

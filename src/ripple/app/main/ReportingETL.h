@@ -307,9 +307,14 @@ public:
                 flushInterval_ = std::stoi(flushInterval.first);
             }
 
-            std::pair<std::string, bool> p = section.find("num_markers");
-            if(p.second)
-                numMarkers_ = std::stoi(p.first);
+            std::pair<std::string, bool> numMarkers =
+                section.find("num_markers");
+            if (numMarkers.second)
+                numMarkers_ = std::stoi(numMarkers.first);
+
+            std::pair<std::string, bool> pgTx = section.find("postgres_tx");
+            if (pgTx.second)
+                app_.config().setUsePostgresTx(pgTx.first == "true");
 
             try
             {

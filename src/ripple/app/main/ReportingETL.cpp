@@ -639,8 +639,8 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
 
     if (in.ledger_objects().size())
         ledger_->updateSkipList();
-
-    writeToPostgres(lgrInfo, metas);
+    if (app_.config().usePostgresTx())
+        writeToPostgres(lgrInfo, metas);
 
     // update metrics
     auto end = std::chrono::system_clock::now();
@@ -685,6 +685,16 @@ writeToLedgersDB(
     auto result = PQresultStatus(res.get());
     assert(result == PGRES_COMMAND_OK);
 }
+
+/*
+void
+ReportingETL::truncateDBs()
+{
+    assert(app_.pgPool());
+    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
+
+}
+*/
 
 void
 writeToAccountTransactionsDB(

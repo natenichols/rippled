@@ -104,6 +104,8 @@ private:
 
     bool RUN_REPORTING = false;
 
+    bool USE_POSTGRES_TX = false;
+
     /** Determines if the server will sign a tx, given an account's secret seed.
 
         In the past, this was allowed, but this functionality can have security
@@ -237,10 +239,18 @@ public:
     }
 
     bool
-    canSign() const
+    usePostgresTx() const
     {
-        return signingEnabled_;
+        return USE_POSTGRES_TX;
     }
+
+    void
+    setUsePostgresTx(bool b)
+    {
+        USE_POSTGRES_TX = b;
+    }
+
+    bool canSign() const { return signingEnabled_; }
 
     /** Retrieve the default value for the item at the specified node size
 
