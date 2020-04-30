@@ -139,7 +139,7 @@ doSubscribe(RPC::JsonContext&);
 Json::Value
 doTransactionEntry(RPC::JsonContext&);
 Json::Value
-doTxJson(RPC::JsonContext&);
+doTxReportingJson(RPC::JsonContext&);
 Json::Value
 doTxHistory(RPC::JsonContext&);
 Json::Value

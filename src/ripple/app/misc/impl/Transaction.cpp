@@ -17,11 +17,6 @@
 */
 //==============================================================================
 
-#include <ripple/app/misc/Transaction.h>
-#include <ripple/app/tx/apply.h>
-#include <ripple/basics/Log.h>
-#include <ripple/core/DatabaseCon.h>
-#include <ripple/core/Pg.h>
 #include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/main/Application.h>
 #include <ripple/app/misc/HashRouter.h>
@@ -30,6 +25,8 @@
 #include <ripple/basics/Log.h>
 #include <ripple/basics/safe_cast.h>
 #include <ripple/core/DatabaseCon.h>
+#include <ripple/core/Pg.h>
+#include <ripple/json/json_reader.h>
 #include <ripple/protocol/ErrorCodes.h>
 #include <ripple/protocol/Feature.h>
 #include <ripple/protocol/jss.h>
@@ -128,14 +125,15 @@ Transaction::load(
     return load(id, app, op{range}, ec);
 }
 
-uint32_t Transaction::getLedgerSeq(uint256 const& id, Application& app)
+uint32_t
+Transaction::getLedgerSeq(uint256 const& id, Application& app)
 {
     std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app.pgPool());
 
-    //TODO why cant we get the transaction index as well? Only ledger seq is coming through
+    // TODO why cant we get the transaction index as well? Only ledger seq is
+    // coming through
     auto baseCmd = boost::format(
-            R"(SELECT (ledger_seq) from transactions where
-            transaction_id = '%s';)");
+        R"(SELECT tx('%s');)");
 
     std::string txHash = "\\x" + strHex(id);
     std::string sql = boost::str(baseCmd % txHash);
@@ -143,21 +141,37 @@ uint32_t Transaction::getLedgerSeq(uint256 const& id, Application& app)
     auto res = pg->querySync(sql.data());
 
     assert(PQntuples(res.get()) == 1);
-    //TODO this should be two
+    // TODO this should be two
     assert(PQnfields(res.get()) == 1);
 
-    assert(PQresultStatus(res.get()) == PGRES_TUPLES_OK
-            || PQresultStatus(res.get()) == PGRES_SINGLE_TUPLE);
+    assert(
+        PQresultStatus(res.get()) == PGRES_TUPLES_OK ||
+        PQresultStatus(res.get()) == PGRES_SINGLE_TUPLE);
+    if (PQgetisnull(res.get(), 0, 0))
+        return 0;
 
-    char const* ledgerSeqStr = PQgetvalue(res.get(),0,0);
+    char const* resultStr = PQgetvalue(res.get(), 0, 0);
 
-    //char const* transactionIdxStr = PQgetvalue(res.get(),0,1);
+    JLOG(app.journal("Transaction").debug())
+        << "postgres result = " << resultStr;
 
-    try
+    std::string str{resultStr};
+
+    Json::Value v;
+    Json::Reader reader;
+    bool success = reader.parse(str, v);
+    if (success)
     {
-        return std::stoi(ledgerSeqStr);
+        if (v.isMember("ledger_seq"))
+        {
+            return v["ledger_seq"].asUInt();
+        }
+        else
+        {
+            return 0;
+        }
     }
-    catch(std::exception const& e)
+    else
     {
         return 0;
     }

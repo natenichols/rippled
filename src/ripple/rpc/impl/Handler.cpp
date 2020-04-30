@@ -141,7 +141,7 @@ Handler const handlerArray[]{
     {"crawl_shards", byRef(&doCrawlShards), Role::ADMIN, NO_CONDITION},
     {"stop", byRef(&doStop), Role::ADMIN, NO_CONDITION},
     {"transaction_entry", byRef(&doTransactionEntry), Role::USER, NO_CONDITION},
-    {"tx", byRef(&doTxJson), Role::USER, NEEDS_NETWORK_CONNECTION},
+    {"tx", byRef(&doTxReportingJson), Role::USER, NEEDS_NETWORK_CONNECTION},
     {"tx_history", byRef(&doTxHistory), Role::USER, NO_CONDITION},
     {"unl_list", byRef(&doUnlList), Role::ADMIN, NO_CONDITION},
     {"validation_create",
@@ -155,7 +155,6 @@ Handler const handlerArray[]{
      NO_CONDITION},
     {"validator_info", byRef(&doValidatorInfo), Role::ADMIN, NO_CONDITION},
     {"wallet_propose", byRef(&doWalletPropose), Role::ADMIN, NO_CONDITION},
-
     // Evented methods
     {"subscribe", byRef(&doSubscribe), Role::USER, NO_CONDITION},
     {"unsubscribe", byRef(&doUnsubscribe), Role::USER, NO_CONDITION},
