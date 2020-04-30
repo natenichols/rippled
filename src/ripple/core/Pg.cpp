@@ -264,11 +264,11 @@ Pg::query(yield_context yield, boost::asio::io_context::strand& strand,
                 << " error_msg = " << PQerrorMessage(conn_.get());
 
             /*
-             TODO add this back in below the PGRES_COPY_IN check
             if (ret)
             {
                 Throw<std::runtime_error>("multiple results returned");
-            }*/
+            }
+            */
             ret.reset(res.release());
             //Seems that ret is never null in this case, so need to break
             if(PQresultStatus(ret.get()) == PGRES_COPY_IN)

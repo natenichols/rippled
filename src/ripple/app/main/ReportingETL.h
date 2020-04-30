@@ -205,13 +205,7 @@ private:
     storeLedger();
 
     void
-    writeToTxDB(
-        std::vector<TxMeta>& metas);
-
-    void
-    writeToTxDBCopy(
-            LedgerInfo& info,
-        std::vector<TxMeta>& metas);
+    writeToPostgres(LedgerInfo& info, std::vector<TxMeta>& meta);
 
     void
     outputMetrics();

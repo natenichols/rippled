@@ -202,53 +202,6 @@ public:
         return conn_.get();
     }
 
-    //TODO get rid of this
-    int flush()
-    {
-        try
-        {
-            std::mutex mtx;
-            std::condition_variable cv;
-            int flushed;
-            do
-            {
-                flushed = PQflush(conn_.get());
-                if (flushed == 1)
-                {
-                    bool finished = false;
-                    socket_->async_wait(
-                        boost::asio::ip::tcp::socket::wait_write,
-                        [&mtx, &cv, &finished](auto const& ec) {
-                            std::unique_lock<std::mutex> lck(mtx);
-                            finished = true;
-                            cv.notify_one();
-                        }
-                    );
-
-                    std::unique_lock<std::mutex> lck(mtx);
-                    cv.wait(lck, [&finished](){ return finished;});
-                }
-                else if (flushed == -1)
-                {
-                    std::stringstream ss;
-                    ss << "error flushing query "
-                       << PQerrorMessage(conn_.get());
-                    Throw<std::runtime_error>(ss.str());
-                }
-            } while (flushed);
-            return flushed;
-        }
-        catch (std::exception const& e)
-        {
-            // Sever connection upon any error.
-            disconnect();
-            socket_.release();
-            std::stringstream ss;
-            ss << "query error: " << e.what();
-            Throw<std::runtime_error>(ss.str());
-        }
-        
-    }
 };
 
 //-----------------------------------------------------------------------------

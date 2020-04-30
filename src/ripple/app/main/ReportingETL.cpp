@@ -640,7 +640,7 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
     if (in.ledger_objects().size())
         ledger_->updateSkipList();
 
-    writeToTxDBCopy(lgrInfo, metas);
+    writeToPostgres(lgrInfo, metas);
 
     // update metrics
     auto end = std::chrono::system_clock::now();
@@ -654,89 +654,12 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
 }
 
 void
-ReportingETL::writeToTxDB(
-    std::vector<TxMeta>& metas)
+writeToLedgersDB(
+    LedgerInfo& info,
+    std::shared_ptr<PgQuery>& pgQuery,
+    std::shared_ptr<Pg>& conn,
+    beast::Journal& journal)
 {
-    JLOG(journal_.debug()) << "writeToTxDB";
-    assert(app_.pgPool());
-    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
-    JLOG(journal_.debug()) << "createdPqQuery";
-    auto res = pg->querySync("BEGIN;");
-    assert(res);
-    auto result = PQresultStatus(res.get());
-    JLOG(journal_.debug()) << "writeToTxDB - result = " << result;
-
-    assert(result == PGRES_COMMAND_OK);
-
-    auto baseCmd = boost::format(
-        R"(INSERT INTO transactions 
-            VALUES (%u, %u, '%s', '%s') 
-            ON CONFLICT DO NOTHING;)");
-
-    auto baseAccountCmd = boost::format(
-            R"(INSERT INTO account_transactions 
-                VALUES ('%s', %u, %u) 
-               ON CONFLICT DO NOTHING;)");
-
-    std::string sql;
-
-    for(auto& m : metas)
-    {
-        std::string txHash = "\\x" + strHex(m.getTxID());
-        std::string meta = "";
-        auto idx = m.getIndex();
-        auto ledgerSeq = m.getLgrSeq();
-        sql = boost::str(baseCmd % ledgerSeq % idx % txHash % meta);
-        res = pg->querySync(sql.data());
-        assert(res);
-        result = PQresultStatus(res.get());
-        JLOG(journal_.debug()) << "writeToTxDB - result = " << result;
-        assert(result == PGRES_COMMAND_OK);
-
-        for(auto& a : m.getAffectedAccounts(journal_))
-        {
-            std::string acct = "\\x" + strHex(a);
-            sql = boost::str(baseAccountCmd % acct % ledgerSeq % idx);
-            JLOG(journal_.debug()) << "writing to account_transactions - "
-                << " account = " << acct << " ledgerSeq = "
-                << ledgerSeq << " idx = " << idx
-                << " sql = " << sql;
-            res = pg->querySync(sql.data());
-            assert(res);
-            result = PQresultStatus(res.get());
-            assert(result = PGRES_COMMAND_OK);
-        }
-    }
-
-    res = pg->querySync("COMMIT;");
-    assert(res);
-    result = PQresultStatus(res.get());
-    JLOG(journal_.debug()) << "writeToTxDB - result = " << result;
-    assert(result == PGRES_COMMAND_OK);
-}
-
-void
-ReportingETL::writeToTxDBCopy(
-        LedgerInfo& info,
-    std::vector<TxMeta>& metas)
-{
-    //TODO: clean up this function to show to mark
-    JLOG(journal_.debug()) << "writeToTxDB";
-    assert(app_.pgPool());
-    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
-    std::shared_ptr<Pg> conn;
-    JLOG(journal_.debug()) << "createdPqQuery";
-
-    {
-    std::shared_ptr<PgQuery> pg2 = std::make_shared<PgQuery>(app_.pgPool());
-    auto res = pg2->querySync("BEGIN;");
-    assert(res);
-    auto result = PQresultStatus(res.get());
-    JLOG(journal_.debug()) << "writeToTxDB - BEGIN result = " << result;
-    assert(result == PGRES_COMMAND_OK);
-
-    
-    }
 
     auto cmd = boost::format(
             R"(INSERT INTO ledgers 
@@ -755,41 +678,49 @@ ReportingETL::writeToTxDBCopy(
             % strHex(info.accountHash)
             % strHex(info.txHash)
             );
-    JLOG(journal_.debug()) << "writeToTxDB - ledgerInsert = "
-        << ledgerInsert;
-    auto res = pg->querySync(ledgerInsert.data());
+    JLOG(journal.debug()) << "writeToTxDB - ledgerInsert = " << ledgerInsert;
+    auto res = pgQuery->querySync(ledgerInsert.data());
 
     assert(res);
     auto result = PQresultStatus(res.get());
     assert(result == PGRES_COMMAND_OK);
-    res = pg->querySync("COPY account_transactions from STDIN", conn);
+}
+
+void
+writeToAccountTransactionsDB(
+    std::vector<TxMeta>& metas,
+    std::shared_ptr<PgQuery>& pgQuery,
+    std::shared_ptr<Pg>& conn,
+    beast::Journal& journal)
+{
+    // Initiate COPY operation
+    auto res = pgQuery->querySync("COPY account_transactions from STDIN", conn);
     assert(res);
-    result = PQresultStatus(res.get());
+    auto result = PQresultStatus(res.get());
     assert(result == PGRES_COPY_IN);
 
-    JLOG(journal_.debug()) << "writeToTxDB - COPY result = " << result;
+    JLOG(journal.debug()) << "writeToTxDB - COPY result = " << result;
 
+    // Write data to stream
     std::stringstream copyBuffer;
     for(auto& m : metas)
     {
-        //std::string txHash = "\\x" + strHex(m.getTxID());
         std::string txHash = strHex(m.getTxID());
         auto idx = m.getIndex();
         auto ledgerSeq = m.getLgrSeq();
 
-        for(auto& a : m.getAffectedAccounts(journal_))
+        for (auto& a : m.getAffectedAccounts(journal))
         {
-
-            //std::string acct = "\\x" + strHex(a);
             std::string acct = strHex(a);
             copyBuffer
                 << '\'' << acct << '\'' << '\t'
                 << std::to_string(ledgerSeq) << '\t'
                 << std::to_string(idx) << '\t' 
                 << '\'' << txHash << '\'' << '\n';
-            JLOG(journal_.debug()) << "writing to account_transactions - "
-                << " account = " << acct << " ledgerSeq = "
-                << ledgerSeq << " idx = " << idx;
+            JLOG(journal.debug())
+                << "writing to account_transactions - "
+                << " account = " << acct << " ledgerSeq = " << ledgerSeq
+                << " idx = " << idx;
         }
     }
 
@@ -797,43 +728,65 @@ ReportingETL::writeToTxDBCopy(
     PQsetnonblocking(conn->getConn(), 0);
 
     std::string bufString = copyBuffer.str();
-    JLOG(journal_.debug()) << "copy buffer = " << bufString;
+    JLOG(journal.debug()) << "copy buffer = " << bufString;
 
+    // write the data to Postgres
     auto resCode =
         PQputCopyData(conn->getConn(), bufString.c_str(), bufString.size());
 
     auto pqResult = PQgetResult(conn->getConn());
     auto pqResultStatus = PQresultStatus(pqResult);
-    JLOG(journal_.debug()) << "putCopyData - resultCode = " << resCode
-        << " result = " << pqResultStatus;
+    JLOG(journal.debug()) << "putCopyData - resultCode = " << resCode
+                          << " result = " << pqResultStatus;
     assert(resCode != -1);
     assert(resCode != 0);
     assert(pqResultStatus == 4);
 
+    // Tell Postgres we are done with the COPY operation
     resCode = PQputCopyEnd(conn->getConn(), nullptr);
     pqResult = PQgetResult(conn->getConn());
     pqResultStatus = PQresultStatus(pqResult);
 
-    JLOG(journal_.debug()) << "putCopyEnd - resultCode = " << resCode
-                           << " result = " << pqResultStatus << " error_msg = "
-                           << PQerrorMessage(conn->getConn());
+    JLOG(journal.debug()) << "putCopyEnd - resultCode = " << resCode
+                          << " result = " << pqResultStatus
+                          << " error_msg = " << PQerrorMessage(conn->getConn());
     assert(resCode != -1);
     assert(resCode != 0);
     assert(pqResultStatus != 7);
+}
 
-    {
-        //this works
-        auto execRes = PQexec(conn->getConn(), "COMMIT;");
-        /*
-        this doesnt work
-        std::shared_ptr<PgQuery> pg2 = std::make_shared<PgQuery>(app_.pgPool());
-        res = pg2->querySync("COMMIT;");
-        assert(res);
-        */
-        result = PQresultStatus(execRes);
-        JLOG(journal_.debug()) << "writeToTxDB - COMMIT result = " << result;
-        assert(result == PGRES_COMMAND_OK);
-    }
+void
+ReportingETL::writeToPostgres(LedgerInfo& info, std::vector<TxMeta>& metas)
+{
+    // TODO: clean this up a bit. use less auto, better error handling, etc
+    JLOG(journal_.debug()) << "writeToTxDB";
+    assert(app_.pgPool());
+    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
+    std::shared_ptr<Pg> conn;
+    JLOG(journal_.debug()) << "createdPqQuery";
+
+    auto res = pg->querySync("BEGIN;");
+    assert(res);
+    auto result = PQresultStatus(res.get());
+    JLOG(journal_.debug()) << "writeToTxDB - BEGIN result = " << result;
+    assert(result == PGRES_COMMAND_OK);
+
+    writeToLedgersDB(info, pg, conn, journal_);
+
+    writeToAccountTransactionsDB(metas, pg, conn, journal_);
+
+    // this works
+    auto execRes = PQexec(conn->getConn(), "COMMIT;");
+    assert(execRes);
+    result = PQresultStatus(execRes);
+
+    // this doesn't work
+    // res = pg->querySync("COMMIT;", conn);
+    // assert(res);
+    // result = PQresultStatus(res.get());
+
+    JLOG(journal_.debug()) << "writeToTxDB - COMMIT result = " << result;
+    assert(result == PGRES_COMMAND_OK);
     PQsetnonblocking(conn->getConn(), 1);
 }
 
