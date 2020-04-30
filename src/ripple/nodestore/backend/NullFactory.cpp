@@ -77,6 +77,8 @@ public:
     {
     }
 
+    void sync() override {}
+
     void
     for_each(std::function<void(std::shared_ptr<NodeObject>)> f) override
     {

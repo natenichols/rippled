@@ -347,6 +347,8 @@ public:
             Throw<std::runtime_error>("storeBatch failed: " + ret.ToString());
     }
 
+    void sync() override {}
+
     void
     for_each(std::function<void(std::shared_ptr<NodeObject>)> f) override
     {

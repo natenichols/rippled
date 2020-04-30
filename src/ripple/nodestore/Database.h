@@ -114,6 +114,8 @@ public:
         uint256 const& hash,
         std::uint32_t seq) = 0;
 
+    virtual void sync() = 0;
+
     /** Fetch an object.
         If the object is known to be not in the database, isn't found in the
         database during the fetch, or failed to load correctly during the fetch,

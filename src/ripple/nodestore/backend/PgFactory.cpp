@@ -108,8 +108,8 @@ public:
         }
 
         auto res = pgQuery_->querySync("CREATE TABLE IF NOT EXISTS objects ("
-                                    "   key bytea PRIMARY KEY,"
-                                    " value bytea NOT NULL)");
+                                       "    key   bytea PRIMARY KEY,"
+                                       "    value bytea NOT NULL)");
         open_ = true;
 
     }
@@ -187,6 +187,12 @@ public:
     storeBatch (Batch const& batch) override
     {
         pgQuery_->store(batch, keyBytes_);
+    }
+
+    void
+    sync() override
+    {
+        pgQuery_->sync(keyBytes_);
     }
 
     // Iterate through entire table and execute f(). Used for import only,

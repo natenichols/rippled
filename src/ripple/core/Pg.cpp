@@ -259,20 +259,18 @@ Pg::query(yield_context yield, boost::asio::io_context::strand& strand,
             if (!res)
                 break;
 
-            JLOG(j_.debug()) << "Pg::query looping - "
-                << "res = " << PQresultStatus(res.get())
-                << " error_msg = " << PQerrorMessage(conn_.get());
-
-            /*
             if (ret)
             {
                 Throw<std::runtime_error>("multiple results returned");
             }
-            */
             ret.reset(res.release());
-            //Seems that ret is never null in this case, so need to break
-            if(PQresultStatus(ret.get()) == PGRES_COPY_IN)
+            // ret is never null in these cases, so need to break.
+            ExecStatusType const& status = PQresultStatus(ret.get());
+            if(status == PGRES_COPY_IN || status == PGRES_COPY_OUT
+                || status == PGRES_COPY_BOTH)
+            {
                 break;
+            }
         }
 
         socket_->release();
@@ -682,13 +680,33 @@ PgPool::checkin(std::shared_ptr<Pg>& pg)
     if (stop_ || ! *pg)
     {
         --connections_;
-        pg.reset();
     }
     else
     {
-        // place in connected pool
-        idle_.emplace(clock_type::now(), pg);
+        PGresult* res;
+        while ((res = PQgetResult(pg->getConn())) != nullptr)
+        {
+            ExecStatusType const status = PQresultStatus(res);
+            if (status == PGRES_COPY_IN)
+            {
+                if (PQsetnonblocking(pg->getConn(), 0) == -1
+                    || PQputCopyEnd(pg->getConn(), nullptr) == -1)
+                {
+                    pg.reset();
+                }
+            }
+            else if (status == PGRES_COPY_OUT || status == PGRES_COPY_BOTH)
+            {
+                pg.reset();
+            }
+        }
+
+        if (PQsetnonblocking(pg->getConn(), 1) == -1)
+            pg.reset();
+        if (pg)
+            idle_.emplace(clock_type::now(), pg);
     }
+    pg.reset();
 }
 
 //-----------------------------------------------------------------------------
@@ -706,41 +724,35 @@ PgQuery::querySync(pg_params const& dbParams, std::shared_ptr<Pg>& conn)
         [this, self, &conn, &strand, &dbParams, &mtx, &cv, &finished, &result]
         (boost::asio::yield_context yield)
         {
-            while (true)
-            {
-                try
-                {
-                    // TODO make something with a condition var instead of spinning.
-                    while (!conn)
-                        conn = pool_->checkout();
-                    result = conn->query(yield, strand, dbParams);
-                    pool_->checkin(conn);
-                    break;
-                }
-                catch (std::exception const &e)
-                {
-                    try { pool_->checkin(conn); } catch (...) {}
-                    JLOG(pool_->j_.error()) << "lambda query exception: "
-                                                  << e.what();
-                }
-                catch (...)
-                {
-                    JLOG(pool_->j_.debug()) << "unknown lambda query "
-                                               "exception.";
+             try
+             {
+                 // TODO make something with a condition var instead of spinning.
+                 while (!conn)
+                     conn = pool_->checkout();
+                 result = conn->query(yield, strand, dbParams);
+             }
+             catch (std::exception const &e)
+             {
+                 JLOG(pool_->j_.error()) << "lambda query exception: "
+                                         << e.what() << ","
+                                         << dbParams.first;
+             }
+             catch (...)
+             {
+                 JLOG(pool_->j_.debug()) << "unknown lambda query "
+                                            "exception.";
+             }
 
-                }
-            }
-
-            try
-            {
-                std::unique_lock<std::mutex> lambdaLock(mtx);
-                finished = true;
-                cv.notify_one();
-            }
-            catch (std::exception const& e)
-            {
-                assert(false);
-            }
+             try
+             {
+                 std::unique_lock<std::mutex> lambdaLock(mtx);
+                 finished = true;
+                 cv.notify_one();
+             }
+             catch (std::exception const& e)
+             {
+                 assert(false);
+             }
         }
     );
 
@@ -751,14 +763,17 @@ PgQuery::querySync(pg_params const& dbParams, std::shared_ptr<Pg>& conn)
 }
 
 void
-PgQuery::store(std::size_t const keyBytes)
+PgQuery::store(std::size_t const keyBytes, bool const sync)
 {
+    std::unique_lock<std::mutex> lock(submitMutex_);
+    if (submitting_)
     {
-        std::lock_guard<std::mutex> submitLock(submitMutex_);
-        if (submitting_)
+        if (! sync)
             return;
-        submitting_ = true;
+        submitCv_.wait(lock, [this]() { return ! submitting_; });
     }
+    submitting_ = true;
+    lock.unlock();
 
     static std::atomic<std::size_t> counter = 0;
     std::shared_ptr<PgQuery> self(shared_from_this());
@@ -832,9 +847,17 @@ PgQuery::store(std::size_t const keyBytes)
             {
                 std::lock_guard<std::mutex> submitLock(submitMutex_);
                 submitting_ = false;
+                submitCv_.notify_one();
             }
         }
     );
+
+    if (sync)
+    {
+        lock.lock();
+        if (submitting_)
+            submitCv_.wait(lock, [this]() { return !submitting_; });
+    }
 }
 
 void
@@ -844,7 +867,7 @@ PgQuery::store(std::shared_ptr<NodeObject> const& no, size_t const keyBytes)
         std::lock_guard<std::mutex> lock_(batchMutex_);
         batch_.push_back(no);
     }
-    store(keyBytes);
+    store(keyBytes, false);
 }
 
 void
@@ -855,7 +878,7 @@ PgQuery::store(std::vector<std::shared_ptr<NodeObject>> const& nos,
         std::lock_guard<std::mutex> lock(batchMutex_);
         batch_.insert(batch_.end(), nos.begin(), nos.end());
     }
-    store(keyBytes);
+    store(keyBytes, false);
 }
 
 std::pair<std::shared_ptr<Pg>, std::optional<LedgerIndex>>

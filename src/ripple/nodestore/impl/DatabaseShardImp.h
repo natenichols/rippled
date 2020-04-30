@@ -148,6 +148,9 @@ public:
         uint256 const& hash,
         std::uint32_t seq) override;
 
+    void
+    sync() override {};
+
     std::shared_ptr<NodeObject>
     fetch(uint256 const& hash, std::uint32_t seq) override;
 

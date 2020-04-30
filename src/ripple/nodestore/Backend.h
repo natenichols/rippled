@@ -99,6 +99,8 @@ public:
     virtual void
     storeBatch(Batch const& batch) = 0;
 
+    virtual void sync() = 0;
+
     /** Visit every object in the database
         This is usually called during import.
         @note This routine will not be called concurrently with itself

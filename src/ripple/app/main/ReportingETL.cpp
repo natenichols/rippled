@@ -462,6 +462,9 @@ ReportingETL::flushLedger()
     JLOG(journal_.debug()) << "Flushed " << numTxFlushed
         << " nodes to nodestore from txMap";
 
+    app_.getNodeStore().sync();
+    JLOG(journal_.debug()) << "synced nodestore";
+
     assert(numFlushed != 0 or roundMetrics.objectCount == 0);
     assert(numTxFlushed!= 0 or roundMetrics.txnCount == 0);
     
@@ -671,7 +674,7 @@ writeToLedgersDB(
     auto cmd = boost::format(
             R"(INSERT INTO ledgers 
                 VALUES(%u,'\x%s', '\x%s',%u,%u,%u,%u,%u,'\x%s','\x%s')
-                ;)");
+                )");
 
     auto ledgerInsert = boost::str(cmd 
             % info.seq 
@@ -779,8 +782,13 @@ writeToAccountTransactionsDB(
 
     // Tell Postgres we are done with the COPY operation
     resCode = PQputCopyEnd(conn->getConn(), nullptr);
-    pqResult = PQgetResult(conn->getConn());
-    pqResultStatus = PQresultStatus(pqResult);
+    while (true)
+    {
+        pqResult = PQgetResult(conn->getConn());
+        if (!pqResult)
+            break;
+        pqResultStatus = PQresultStatus(pqResult);
+    }
 
     JLOG(journal.debug()) << "putCopyEnd - resultCode = " << resCode
                           << " result = " << pqResultStatus
@@ -800,7 +808,7 @@ ReportingETL::writeToPostgres(LedgerInfo& info, std::vector<TxMeta>& metas)
     std::shared_ptr<Pg> conn;
     JLOG(journal_.debug()) << "createdPqQuery";
 
-    auto res = pg->querySync("BEGIN;");
+    auto res = pg->querySync("BEGIN", conn);
     assert(res);
     auto result = PQresultStatus(res.get());
     JLOG(journal_.debug()) << "writeToTxDB - BEGIN result = " << result;
@@ -810,19 +818,14 @@ ReportingETL::writeToPostgres(LedgerInfo& info, std::vector<TxMeta>& metas)
 
     writeToAccountTransactionsDB(metas, pg, conn, journal_);
 
-    // this works
-    auto execRes = PQexec(conn->getConn(), "COMMIT;");
-    assert(execRes);
-    result = PQresultStatus(execRes);
-
-    // this doesn't work
-    // res = pg->querySync("COMMIT;", conn);
-    // assert(res);
-    // result = PQresultStatus(res.get());
+    res = pg->querySync("COMMIT", conn);
+    assert(res);
+    result = PQresultStatus(res.get());
 
     JLOG(journal_.debug()) << "writeToTxDB - COMMIT result = " << result;
     assert(result == PGRES_COMMAND_OK);
     PQsetnonblocking(conn->getConn(), 1);
+    app_.pgPool()->checkin(conn);
 }
 
 void

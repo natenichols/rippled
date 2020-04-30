@@ -299,8 +299,9 @@ private:
     std::mutex batchMutex_;
     bool submitting_ {false};
     std::mutex submitMutex_;
+    std::condition_variable submitCv_;
 
-    void store(std::size_t const keyBytes);
+    void store(std::size_t const keyBytes, bool const sync);
 
 public:
     PgQuery(std::shared_ptr<PgPool>& pool)
@@ -323,7 +324,9 @@ public:
     querySync(pg_params const& dbParams)
     {
         std::shared_ptr<Pg> conn;
-        return querySync(dbParams, conn);
+        auto ret = querySync(dbParams, conn);
+        pool_->checkin(conn);
+        return ret;
     }
 
     pg_result_type
@@ -336,12 +339,20 @@ public:
     querySync(char const* command)
     {
         std::shared_ptr<Pg> conn;
-        return querySync(command, conn);
+        auto ret = querySync(command, conn);
+        pool_->checkin(conn);
+        return ret;
     }
 
     void store(std::shared_ptr<NodeObject> const& no, size_t const keyBytes);
     void store(std::vector<std::shared_ptr<NodeObject>> const& nos,
         size_t const keyBytes);
+
+    void
+    sync(std::size_t const keyBytes)
+    {
+        store(keyBytes, true);
+    }
     std::pair<std::shared_ptr<Pg>, std::optional<LedgerIndex>>
     lockLedger(std::optional<LedgerIndex> seq = {});
 
