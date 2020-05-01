@@ -196,7 +196,9 @@ private:
         bool getObjects = true);
 
     void
-    updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in);
+    updateLedger(
+        org::xrpl::rpc::v1::GetLedgerResponse& in,
+        std::vector<TxMeta>& out);
 
     void
     flushLedger();
@@ -205,7 +207,7 @@ private:
     storeLedger();
 
     void
-    writeToPostgres(LedgerInfo& info, std::vector<TxMeta>& meta);
+    writeToPostgres(LedgerInfo const& info, std::vector<TxMeta>& meta);
 
     void
     truncateDBs();

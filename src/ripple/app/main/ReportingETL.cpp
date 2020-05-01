@@ -352,7 +352,8 @@ ReportingETL::loadInitialLedger()
     org::xrpl::rpc::v1::GetLedgerResponse response;
     if (not fetchLedger(response, false))
         return;
-    updateLedger(response);
+    std::vector<TxMeta> metas;
+    updateLedger(response, metas);
 
     grpc::CompletionQueue cq;
 
@@ -424,6 +425,8 @@ ReportingETL::loadInitialLedger()
     {
         flushLedger();
         storeLedger();
+        if (app_.config().usePostgresTx())
+            writeToPostgres(ledger_->info(), metas);
     }
     auto end = std::chrono::system_clock::now();
     JLOG(journal_.debug()) << "Time to download and store ledger = "
@@ -552,7 +555,9 @@ ReportingETL::fetchLedger(
 }
 
 void
-ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
+ReportingETL::updateLedger(
+    org::xrpl::rpc::v1::GetLedgerResponse& in,
+    std::vector<TxMeta>& out)
 {
     auto start = std::chrono::system_clock::now();
 
@@ -579,7 +584,6 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
 
     ledger_->stateMap().clearSynching();
     ledger_->txMap().clearSynching();
-    std::vector<TxMeta> metas;
 
     for (auto& txn : in.transactions_list().transactions())
     {
@@ -604,7 +608,7 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
             sttx.getTransactionID(), txSerializer, metaSerializer);
 
         //TODO use emplace to avoid this copy
-        metas.push_back(txMeta);
+        out.push_back(txMeta);
     }
 
     JLOG(journal_.trace()) << "Inserted all transactions. "
@@ -649,8 +653,6 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
 
     if (in.ledger_objects().size())
         ledger_->updateSkipList();
-    if (app_.config().usePostgresTx())
-        writeToPostgres(lgrInfo, metas);
 
     // update metrics
     auto end = std::chrono::system_clock::now();
@@ -665,7 +667,7 @@ ReportingETL::updateLedger(org::xrpl::rpc::v1::GetLedgerResponse& in)
 
 void
 writeToLedgersDB(
-    LedgerInfo& info,
+    LedgerInfo const& info,
     std::shared_ptr<PgQuery>& pgQuery,
     std::shared_ptr<Pg>& conn,
     beast::Journal& journal)
@@ -799,7 +801,9 @@ writeToAccountTransactionsDB(
 }
 
 void
-ReportingETL::writeToPostgres(LedgerInfo& info, std::vector<TxMeta>& metas)
+ReportingETL::writeToPostgres(
+    LedgerInfo const& info,
+    std::vector<TxMeta>& metas)
 {
     // TODO: clean this up a bit. use less auto, better error handling, etc
     JLOG(journal_.debug()) << "writeToTxDB";
@@ -836,11 +840,15 @@ ReportingETL::doETL()
     if (not fetchLedger(fetchResponse))
         return;
 
-    updateLedger(fetchResponse);
+    std::vector<TxMeta> metas;
+    updateLedger(fetchResponse, metas);
 
     flushLedger();
 
     storeLedger();
+
+    if (app_.config().usePostgresTx())
+        writeToPostgres(ledger_->info(), metas);
 
     outputMetrics();
 }
