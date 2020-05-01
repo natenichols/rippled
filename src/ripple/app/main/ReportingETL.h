@@ -208,6 +208,9 @@ private:
     writeToPostgres(LedgerInfo& info, std::vector<TxMeta>& meta);
 
     void
+    truncateDBs();
+
+    void
     outputMetrics();
 
     void
@@ -365,6 +368,12 @@ public:
             {
                 JLOG(journal_.warn()) << "Failed to load ledger. Will download";
             }
+        }
+        else if (app_.config().usePostgresTx())
+        {
+            // if we don't load the ledger from disk, the dbs need to be cleared
+            // out, since the db will not allow any gaps
+            truncateDBs();
         }
 
         // if we loaded the ledger from disk, don't use start_index

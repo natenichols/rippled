@@ -693,15 +693,32 @@ writeToLedgersDB(
     assert(result == PGRES_COMMAND_OK);
 }
 
-/*
 void
 ReportingETL::truncateDBs()
 {
     assert(app_.pgPool());
-    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
+    std::shared_ptr<PgQuery> pgQuery = std::make_shared<PgQuery>(app_.pgPool());
 
+    auto res = pgQuery->querySync("truncate ledgers cascade;");
+    auto result = PQresultStatus(res.get());
+    JLOG(journal_.debug()) << "truncateDBs - result : " << result;
+    assert(result == PGRES_COMMAND_OK);
+
+    res = pgQuery->querySync("truncate account_transactions;");
+    result = PQresultStatus(res.get());
+    JLOG(journal_.debug()) << "truncateDBs - result : " << result;
+    assert(result == PGRES_COMMAND_OK);
+
+    res = pgQuery->querySync("truncate min_seq;");
+    result = PQresultStatus(res.get());
+    JLOG(journal_.debug()) << "truncateDBs - result : " << result;
+    assert(result == PGRES_COMMAND_OK);
+
+    res = pgQuery->querySync("truncate ancestry_verified;");
+    result = PQresultStatus(res.get());
+    JLOG(journal_.debug()) << "truncateDBs - result : " << result;
+    assert(result == PGRES_COMMAND_OK);
 }
-*/
 
 void
 writeToAccountTransactionsDB(
