@@ -22,6 +22,7 @@
 #include <ripple/app/misc/SHAMapStoreImp.h>
 #include <ripple/beast/core/CurrentThreadName.h>
 #include <ripple/core/ConfigSections.h>
+#include <ripple/core/Pg.h>
 #include <ripple/nodestore/impl/DatabaseRotatingImp.h>
 
 #include <boost/algorithm/string/predicate.hpp>
@@ -684,29 +685,45 @@ SHAMapStoreImp::clearPrior(LedgerIndex lastRotated)
     if (health())
         return;
 
-    clearSql(
-        *ledgerDb_,
-        lastRotated,
-        "SELECT MIN(LedgerSeq) FROM Ledgers;",
-        "DELETE FROM Ledgers WHERE LedgerSeq < %u;");
-    if (health())
-        return;
+    if (app_.config().usePostgresTx())
+    {
+        assert(app_.pgPool());
+        std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
 
-    clearSql(
-        *transactionDb_,
-        lastRotated,
-        "SELECT MIN(LedgerSeq) FROM Transactions;",
-        "DELETE FROM Transactions WHERE LedgerSeq < %u;");
-    if (health())
-        return;
+        std::string sql =
+            "Select truncate_ledgers(" + std::to_string(lastRotated) + ");";
 
-    clearSql(
-        *transactionDb_,
-        lastRotated,
-        "SELECT MIN(LedgerSeq) FROM AccountTransactions;",
-        "DELETE FROM AccountTransactions WHERE LedgerSeq < %u;");
-    if (health())
-        return;
+        auto res = pg->querySync(sql.data());
+        auto result = PQresultStatus(res.get());
+        journal_.debug() << "clearPrior - postgres result = " << result;
+        assert(result == PGRES_TUPLES_OK);
+    }
+    else
+    {
+        clearSql(
+            *ledgerDb_,
+            lastRotated,
+            "SELECT MIN(LedgerSeq) FROM Ledgers;",
+            "DELETE FROM Ledgers WHERE LedgerSeq < %u;");
+        if (health())
+            return;
+
+        clearSql(
+            *transactionDb_,
+            lastRotated,
+            "SELECT MIN(LedgerSeq) FROM Transactions;",
+            "DELETE FROM Transactions WHERE LedgerSeq < %u;");
+        if (health())
+            return;
+
+        clearSql(
+            *transactionDb_,
+            lastRotated,
+            "SELECT MIN(LedgerSeq) FROM AccountTransactions;",
+            "DELETE FROM AccountTransactions WHERE LedgerSeq < %u;");
+        if (health())
+            return;
+    }
 }
 
 SHAMapStoreImp::Health
