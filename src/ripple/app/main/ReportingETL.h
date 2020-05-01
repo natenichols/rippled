@@ -292,13 +292,7 @@ public:
             if (!wsPortPair.second)
                 return;
 
-            std::pair<std::string, bool> startIndexPair =
-                section.find("start_index");
 
-            if (startIndexPair.second)
-            {
-                indexQueue_.push(std::stoi(startIndexPair.first));
-            }
 
             std::pair<std::string, bool> flushInterval =
                 section.find("flush_interval");
@@ -354,6 +348,38 @@ public:
             return;
         }
         stopping_ = false;
+
+        if (app_.config().START_UP == Config::StartUpType::LOAD)
+        {
+            // This ledger will not actually be mutated, but every ledger
+            // after it will therefore ledger_ is not const
+            ledger_ = std::const_pointer_cast<Ledger>(
+                app_.getLedgerMaster().getValidatedLedger());
+            if (ledger_)
+            {
+                JLOG(journal_.info()) << "Loaded ledger successfully. "
+                                      << "seq = " << ledger_->info().seq;
+                indexQueue_.push(ledger_->info().seq + 1);
+            }
+            else
+            {
+                JLOG(journal_.warn()) << "Failed to load ledger. Will download";
+            }
+        }
+
+        // if we loaded the ledger from disk, don't use start_index
+        if (!ledger_)
+        {
+            assert(app_.config().exists("reporting"));
+            Section section = app_.config().section("reporting");
+            std::pair<std::string, bool> startIndexPair =
+                section.find("start_index");
+
+            if (startIndexPair.second)
+            {
+                indexQueue_.push(std::stoi(startIndexPair.first));
+            }
+        }
         doSubscribe();
         doWork();
     }

@@ -37,6 +37,7 @@
 #include <ripple/core/Config.h>
 #include <ripple/core/DatabaseCon.h>
 #include <ripple/core/JobQueue.h>
+#include <ripple/core/Pg.h>
 #include <ripple/core/SociDB.h>
 #include <ripple/json/to_string.h>
 #include <ripple/nodestore/Database.h>
@@ -1124,6 +1125,109 @@ Ledger::invariants() const
     txMap_->invariants();
 }
 
+std::tuple<std::shared_ptr<Ledger>, std::uint32_t, uint256>
+loadLedgerHelperPostgres(
+    std::variant<uint256, uint32_t, bool> const& whichLedger,
+    Application& app,
+    bool acquire)
+{
+    std::string sql =
+        "SELECT "
+        "ledger_hash, prev_hash, account_set_hash, trans_set_hash, "
+        "total_coins,"
+        "closing_time, prev_closing_time, close_time_res, close_flags,"
+        "ledger_seq from ledgers ";
+
+    if (auto ledgerSeq = std::get_if<uint32_t>(&whichLedger))
+    {
+        sql += "WHERE ledger_seq = " + std::to_string(*ledgerSeq);
+    }
+    else if (auto ledgerHash = std::get_if<uint256>(&whichLedger))
+    {
+        sql += ("WHERE ledger_hash = \'\\x" + strHex(*ledgerHash) + "\'");
+    }
+    else
+    {
+        sql += ("ORDER BY ledger_seq desc LIMIT 1");
+    }
+    sql += ";";
+
+    JLOG(app.journal("Ledger").debug())
+        << "loadLedgerHelperPostgres - sql : " << sql;
+
+    assert(app.pgPool());
+    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app.pgPool());
+
+    auto res = pg->querySync(sql.data());
+    assert(res);
+    auto result = PQresultStatus(res.get());
+
+    JLOG(app.journal("Ledger").debug())
+        << "loadLedgerHelperPostgres - result: " << result;
+    assert(result == PGRES_TUPLES_OK);
+
+    assert(PQntuples(res.get()) == 1);
+    assert(PQnfields(res.get()) == 10);
+
+    if (PQntuples(res.get()) == 0)
+    {
+        auto stream = app.journal("Ledger").debug();
+        JLOG(stream) << "Ledger not found: " << sql;
+
+        uint256 zeroHash;
+        uint32_t zeroSeq;
+
+        return std::make_tuple(std::shared_ptr<Ledger>(), zeroSeq, zeroHash);
+    }
+
+    char const* hash = PQgetvalue(res.get(), 0, 0);
+    char const* prevHash = PQgetvalue(res.get(), 0, 1);
+
+    char const* accountHash = PQgetvalue(res.get(), 0, 2);
+    char const* txHash = PQgetvalue(res.get(), 0, 3);
+    char const* totalCoins = PQgetvalue(res.get(), 0, 4);
+    char const* closeTime = PQgetvalue(res.get(), 0, 5);
+    char const* parentCloseTime = PQgetvalue(res.get(), 0, 6);
+    char const* closeTimeRes = PQgetvalue(res.get(), 0, 7);
+    char const* closeFlags = PQgetvalue(res.get(), 0, 8);
+    char const* ledgerSeq = PQgetvalue(res.get(), 0, 9);
+
+    JLOG(app.journal("Ledger").debug())
+        << "loadLedgerHelperPostgres - data = " << hash << " , " << prevHash
+        << " , " << accountHash << " , " << txHash << " , " << totalCoins
+        << ", " << closeTime << ", " << parentCloseTime << ", " << closeTimeRes
+        << ", " << closeFlags << ", " << ledgerSeq;
+
+    using time_point = NetClock::time_point;
+    using duration = NetClock::duration;
+
+    LedgerInfo info;
+    info.parentHash.SetHexExact(prevHash + 2);
+    info.txHash.SetHexExact(txHash + 2);
+    info.accountHash.SetHexExact(accountHash + 2);
+    info.drops = std::stoll(totalCoins);
+    info.closeTime = time_point{duration{std::stoll(closeTime)}};
+    info.parentCloseTime = time_point{duration{std::stoll(parentCloseTime)}};
+    info.closeFlags = std::stoi(closeFlags);
+    info.closeTimeResolution = duration{std::stoll(closeTimeRes)};
+    info.seq = std::stoi(ledgerSeq);
+    info.hash.SetHexExact(hash + 2);
+
+    bool loaded;
+    auto ledger = std::make_shared<Ledger>(
+        info,
+        loaded,
+        acquire,
+        app.config(),
+        app.getNodeFamily(),
+        app.journal("Ledger"));
+
+    if (!loaded)
+        ledger.reset();
+
+    return std::make_tuple(ledger, info.seq, info.hash);
+}
+
 //------------------------------------------------------------------------------
 
 /*
@@ -1227,8 +1331,33 @@ finishLoadByIndexOrHash(
 }
 
 std::shared_ptr<Ledger>
-loadByIndex(std::uint32_t ledgerIndex, Application& app, bool acquire)
+loadByIndexPostgres(std::uint32_t ledgerIndex, Application& app, bool acquire)
 {
+    auto [ledger, seq, hash] =
+        loadLedgerHelperPostgres(uint32_t{ledgerIndex}, app, acquire);
+    finishLoadByIndexOrHash(ledger, app.config(), app.journal("Ledger"));
+    return ledger;
+}
+
+std::shared_ptr<Ledger>
+loadByHashPostgres(uint256 const& ledgerHash, Application& app, bool acquire)
+{
+    auto [ledger, seq, hash] =
+        loadLedgerHelperPostgres(uint256{ledgerHash}, app, acquire);
+
+    finishLoadByIndexOrHash(ledger, app.config(), app.journal("Ledger"));
+
+    assert(!ledger || ledger->info().hash == ledgerHash);
+
+    return ledger;
+}
+
+std::shared_ptr<Ledger>
+loadByIndex (std::uint32_t ledgerIndex,
+    Application& app, bool acquire)
+{
+    if (app.config().usePostgresTx())
+        return loadByIndexPostgres(ledgerIndex, app, acquire);
     std::shared_ptr<Ledger> ledger;
     {
         std::ostringstream s;
@@ -1244,6 +1373,8 @@ loadByIndex(std::uint32_t ledgerIndex, Application& app, bool acquire)
 std::shared_ptr<Ledger>
 loadByHash(uint256 const& ledgerHash, Application& app, bool acquire)
 {
+    if (app.config().usePostgresTx())
+        return loadByHashPostgres(ledgerHash, app, acquire);
     std::shared_ptr<Ledger> ledger;
     {
         std::ostringstream s;

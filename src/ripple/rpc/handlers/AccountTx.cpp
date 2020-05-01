@@ -75,6 +75,7 @@ struct AccountTxResult
     LedgerRange ledgerRange;
     uint32_t limit;
     std::optional<AccountTxMarker> marker;
+    bool usedPostgres = false;
 };
 
 // parses args into a ledger specifier, or returns a grpc status object on error
@@ -417,6 +418,7 @@ doAccountTxHelpPostgres(RPC::Context& context, AccountTxArgs const& args)
         transactions.push_back(std::make_pair(txnRet, txMeta));
     }
     result.transactions = std::move(transactions);
+    result.usedPostgres = true;
     return {result, rpcSUCCESS};
 }
 
@@ -658,6 +660,8 @@ populateJsonResponse(
             response[jss::marker][jss::ledger] = result.marker->ledgerSeq;
             response[jss::marker][jss::seq] = result.marker->txnSeq;
         }
+        if (result.usedPostgres)
+            response["used_postgres"] = true;
     }
     return response;
 }

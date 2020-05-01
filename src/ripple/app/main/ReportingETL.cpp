@@ -342,6 +342,13 @@ ReportingETL::startWriter()
 void
 ReportingETL::loadInitialLedger()
 {
+    if (ledger_)
+    {
+        // The ledger was already loaded. This happens if --load is passed
+        // on the command line
+        return;
+    }
+
     org::xrpl::rpc::v1::GetLedgerResponse response;
     if (not fetchLedger(response, false))
         return;

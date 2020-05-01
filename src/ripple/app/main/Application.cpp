@@ -1782,8 +1782,9 @@ ApplicationImp::getLastFullLedger()
 
     try
     {
-        auto const [ledger, seq, hash] =
-            loadLedgerHelper("order by LedgerSeq desc limit 1", *this);
+        auto const [ledger, seq, hash] = config_->usePostgresTx()
+            ? loadLedgerHelperPostgres(bool{false}, *this)
+            : loadLedgerHelper("order by LedgerSeq desc limit 1", *this);
 
         if (!ledger)
             return ledger;
