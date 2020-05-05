@@ -276,44 +276,215 @@ getLedgerRange(
     return LedgerRange{uLedgerMin, uLedgerMax};
 }
 
-std::vector<std::pair<uint256, uint32_t>>
-getHashesAndLedgerSequences(
-    AccountID const& account,
-    Application& app,
-    uint32_t limit = 200,
-    bool forward = false)
+std::pair<AccountTxResult, RPC::Status>
+processAccountTxStoredProcedureResult(
+    AccountTxArgs const& args,
+    Json::Value& result,
+    RPC::Context& context)
 {
-    if (limit == 0)
-        limit = 200;
-    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app.pgPool());
+    AccountTxResult ret;
+    ret.usedPostgres = true;
+    ret.limit = args.limit;
 
-    // TODO why cant we get the transaction index as well? Only ledger seq is
-    // coming through
-    auto baseCmd = boost::format(
-        R"(SELECT account_tx('%s',%s,%u);)");
+    // TODO don't create both vectors
+    std::vector<std::pair<std::shared_ptr<Transaction>, std::shared_ptr<TxMeta>>>
+        transactions;
+    std::vector<std::tuple<Blob, Blob, uint32_t>> blobs;
 
-    std::string accountHex = "\\x" + strHex(account);
-    std::string sql =
-        boost::str(baseCmd % accountHex % (forward ? "true" : "false") % limit);
-    JLOG(app.journal("AccountTx").debug()) << "sql = " << sql;
+    try
+    {
+        if (result.isMember("transactions"))
+        {
+            for (auto& t : result["transactions"])
+            {
+                if (t.isMember("trans_id") && t.isMember("ledger_seq"))
+                {
+                    std::string idHex = t["trans_id"].asString();
+                    idHex.erase(0, 2);
+                    uint32_t ledgerSequence = t["ledger_seq"].asUInt();
+                    if (RPC::isHexTxID(idHex))
+                    {
+                        // TODO handle binary
+                        auto txID = from_hex_text<uint256>(idHex);
+                        auto ledger =
+                            context.ledgerMaster.getLedgerBySeq(ledgerSequence);
+                        if (args.binary)
+                        {
+                            auto const item = ledger->txMap().peekItem(txID);
+                            JLOG(context.j.debug()) << "doTxStoredProcedure - "
+                                                    << "id = " << strHex(txID);
+                            if (item)
+                            {
+                                SerialIter it(item->slice());
+                                Blob txnBlob = it.getVL();
+                                Blob metaBlob = it.getVL();
+                                blobs.push_back(std::make_tuple(
+                                    txnBlob, metaBlob, ledgerSequence));
+                            }
+                            else
+                            {
+                                JLOG(context.j.debug())
+                                    << "doTxStoredProcedure - "
+                                    << "item is null: hash = " << strHex(txID);
+                            }
+                        }
+                        else
+                        {
+                            auto [txn, meta] = ledger->txRead(txID);
 
-    auto res = pg->querySync(sql.data());
+                            std::string reason;
+                            auto txnRet = std::make_shared<Transaction>(
+                                txn, reason, context.app);
+                            auto txMeta = std::make_shared<TxMeta>(
+                                txID, ledgerSequence, *meta);
+                            transactions.push_back(
+                                std::make_pair(txnRet, txMeta));
+                        }
+                    }
+                    else
+                    {
+                        JLOG(context.j.debug()) << "doTxStoredProcedure"
+                                                << "bad tx hash : " << idHex;
+                    }
+                }
+                else
+                {
+                    JLOG(context.j.debug()) << "doTxStoredProcedure"
+                                            << "Missing trans_id or ledger_seq";
+                }
+            }
 
+            if (result.isMember("marker"))
+            {
+                auto& marker = result["marker"];
+                assert(marker.isMember("ledger"));
+                assert(marker.isMember("seq"));
+                ret.marker = {marker["ledger"].asUInt(),
+                              marker["seq"].asUInt()};
+            }
+            assert(result.isMember("ledger_index_min"));
+            assert(result.isMember("ledger_index_max"));
+            ret.ledgerRange = {result["ledger_index_min"].asUInt(),
+                               result["ledger_index_max"].asUInt()};
+            if (args.binary)
+            {
+                ret.transactions = std::move(blobs);
+            }
+            else
+            {
+                ret.transactions = std::move(transactions);
+            }
+            return {ret, rpcSUCCESS};
+        }
+        else if (result.isMember("error"))
+        {
+            JLOG(context.j.debug()) << "doTxStoredProcedure"
+                                    << "Error";
+            return {ret,
+                    RPC::Status{rpcINVALID_PARAMS, result["error"].asString()}};
+        }
+        else
+        {
+            return {ret, rpcINTERNAL};
+            ;
+        }
+    }
+    catch (std::exception& e)
+    {
+        JLOG(context.j.debug()) << "doTxStoredProcedure"
+                                << "Caught exception : " << e.what();
+        return {ret, rpcINTERNAL};
+    }
+}
+
+std::pair<AccountTxResult, RPC::Status>
+doAccountTxStoredProcedure(AccountTxArgs const& args, RPC::Context& context)
+{
+    std::shared_ptr<PgQuery> pg =
+        std::make_shared<PgQuery>(context.app.pgPool());
+    JLOG(context.j.debug()) << "doTxStoredProcedure - starting";
+
+    pg_params dbParams;
+
+    char const*& command = dbParams.first;
+    std::vector<std::optional<std::string>>& values = dbParams.second;
+    command =
+        "SELECT account_tx($1::bytea, $2::bool, "
+        "$3::bigint, $4::bigint, $5::bigint, $6::bytea, "
+        "$7::bigint, $8::bool, $9::bigint, $10::bigint)";
+    values.resize(10);
+    values[0] = "\\x" + strHex(args.account);
+    values[1] = args.forward ? "true" : "false";
+
+    static std::uint32_t const page_length(200);
+    if (args.limit == 0 || args.limit > page_length)
+        values[2] = std::to_string(page_length);
+    else
+        values[2] = std::to_string(args.limit);
+
+    if (args.ledger)
+    {
+        if (auto range = std::get_if<LedgerRange>(&args.ledger.value()))
+        {
+            values[3] = std::to_string(range->min);
+            values[4] = std::to_string(range->max);
+        }
+        else if (auto hash = std::get_if<LedgerHash>(&args.ledger.value()))
+        {
+            values[5] = ("//x" + strHex(*hash));
+        }
+        else if (
+            auto sequence = std::get_if<LedgerSequence>(&args.ledger.value()))
+        {
+            values[6] = std::to_string(*sequence);
+        }
+        else if (
+            auto shortcut = std::get_if<LedgerShortcut>(&args.ledger.value()))
+        {
+            // current, closed and validated are all treated as validated
+            values[7] = "true";
+        }
+        else
+        {
+            JLOG(context.j.error()) << "doTxStoredProcedure - "
+                                    << "Error parsing ledger args";
+            return {};
+        }
+    }
+
+    if (args.marker)
+    {
+        values[8] = std::to_string(args.marker->ledgerSeq);
+        values[9] = std::to_string(args.marker->txnSeq);
+    }
+    for (size_t i = 0; i < values.size(); ++i)
+    {
+        JLOG(context.j.debug()) << "value " << std::to_string(i) << " = "
+                                << (values[i] ? values[i].value() : "null");
+    }
+
+    auto res = pg->querySync(dbParams);
     assert(PQntuples(res.get()) == 1);
-    // TODO this should be two
     assert(PQnfields(res.get()) == 1);
 
     assert(
         PQresultStatus(res.get()) == PGRES_TUPLES_OK ||
         PQresultStatus(res.get()) == PGRES_SINGLE_TUPLE);
+    JLOG(context.j.debug()) << "doTxStoredProcedure - "
+                            << "result status = " << PQresultStatus(res.get());
     if (PQgetisnull(res.get(), 0, 0))
+    {
+        JLOG(context.j.debug()) << "doTxStoredProcedure - "
+                                << "result is null";
         return {};
+    }
 
     char const* resultStr = PQgetvalue(res.get(), 0, 0);
 
-    JLOG(app.journal("Transaction").debug())
-        << "postgres result = " << resultStr;
+    JLOG(context.j.debug()) << "doTxStoredProcedure - "
+                            << "postgres result = " << resultStr;
 
+    // TODO this is probably not the most efficient way to do this
     std::string str{resultStr};
 
     Json::Value v;
@@ -321,115 +492,21 @@ getHashesAndLedgerSequences(
     bool success = reader.parse(str, v);
     if (success)
     {
-        JLOG(app.journal("AccountTx").debug())
-            << "json = " << v.toStyledString();
-        std::vector<std::pair<uint256, uint32_t>> results;
-        try
-        {
-            if (v.isMember("transactions"))
-            {
-                for (auto& t : v["transactions"])
-                {
-                    if (t.isMember("trans_id") and t.isMember("ledger_seq"))
-                    {
-                        std::string idHex = t["trans_id"].asString();
-                        idHex.erase(0, 2);
-                        uint32_t lgrSeq = t["ledger_seq"].asUInt();
-                        if (RPC::isHexTxID(idHex))
-                        {
-                            std::pair<uint256, uint32_t> p = std::make_pair(
-                                from_hex_text<uint256>(idHex), lgrSeq);
-                            results.push_back(p);
-                        }
-                        else
-                        {
-                            JLOG(app.journal("AccountTx").debug())
-                                << "bad tx hash : " << idHex;
-                        }
-                    }
-                    else
-                    {
-                        JLOG(app.journal("AccountTx").debug())
-                            << "Missing trans_id or ledger_seq";
-                    }
-                }
-
-                if (v.isMember("marker"))
-                {
-                    Json::Value marker = v["marker"];
-                    if (marker.isMember("seq") and marker.isMember("ledger"))
-                    {
-                        // do marker stuff
-                    }
-                }
-                return results;
-            }
-            else
-            {
-                JLOG(app.journal("AccountTx").debug()) << "No transactions";
-                return {};
-            }
-        }
-        catch (std::exception& e)
-        {
-            JLOG(app.journal("AccountTx").debug())
-                << "Caught exception : " << e.what();
-            return {};
-        }
-    }
-    else
-    {
-        JLOG(app.journal("AccountTx").debug()) << "Failed to parse json";
-        return {};
-    }
-}
-
-std::pair<AccountTxResult, RPC::Status>
-doAccountTxHelpPostgres(RPC::Context& context, AccountTxArgs const& args)
-{
-    AccountTxResult result;
-    context.loadType = Resource::feeMediumBurdenRPC;
-
-    auto lgrRange = getLedgerRange(context, args.ledger);
-
-    if (auto stat = std::get_if<RPC::Status>(&lgrRange))
-    {
-        // An error occurred getting the requested ledger range
-        return {result, *stat};
+        return processAccountTxStoredProcedureResult(args, v, context);
     }
 
-    result.ledgerRange = std::get<LedgerRange>(lgrRange);
-    result.limit = args.limit;
-
-    auto hashesAndSequences = getHashesAndLedgerSequences(
-        args.account, context.app, args.limit, args.forward);
-
-    std::vector<std::pair<std::shared_ptr<Transaction>, std::shared_ptr<TxMeta>>>
-        transactions;
-
-    for (auto& [hash, ledgerSequence] : hashesAndSequences)
-    {
-        auto ledger = context.ledgerMaster.getLedgerBySeq(ledgerSequence);
-        auto [txn, meta] = ledger->txRead(hash);
-
-        std::string reason;
-        auto txnRet = std::make_shared<Transaction>(txn, reason, context.app);
-        auto txMeta = std::make_shared<TxMeta>(hash, ledgerSequence, *meta);
-        transactions.push_back(std::make_pair(txnRet, txMeta));
-    }
-    result.transactions = std::move(transactions);
-    result.usedPostgres = true;
-    return {result, rpcSUCCESS};
+    // on error, return empty value
+    return {};
 }
 
 std::pair<AccountTxResult, RPC::Status>
 doAccountTxHelp(RPC::Context& context, AccountTxArgs const& args)
 {
+    context.loadType = Resource::feeMediumBurdenRPC;
     if (context.app.config().usePostgresTx())
-        return doAccountTxHelpPostgres(context, args);
+        return doAccountTxStoredProcedure(args, context);
 
     AccountTxResult result;
-    context.loadType = Resource::feeMediumBurdenRPC;
 
     auto lgrRange = getLedgerRange(context, args.ledger);
     if (auto stat = std::get_if<RPC::Status>(&lgrRange))

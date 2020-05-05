@@ -117,7 +117,6 @@ doTxReporting(RPC::Context& context, TxArgs const& args)
         auto const item = ledger->txMap().peekItem(args.hash);
         SerialIter it(item->slice());
         Blob txnBlob = it.getVL();
-        it.skip(it.getVLDataLength());
         Blob metaBlob = it.getVL();
         auto p = std::make_pair(txnBlob, metaBlob);
         return p;

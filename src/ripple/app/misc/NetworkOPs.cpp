@@ -2852,8 +2852,9 @@ NetworkOPsImp::pubProposedTransaction(
     pubAccountTransaction(lpCurrent, alt, false);
 }
 
-void
-NetworkOPsImp::pubLedger(std::shared_ptr<ReadView const> const& lpAccepted)
+// TODO call this from ReportingETL
+void NetworkOPsImp::pubLedger (
+    std::shared_ptr<ReadView const> const& lpAccepted)
 {
     // Ledgers are published only when they acquire sufficient validations
     // Holes are filled across connection loss or other catastrophe

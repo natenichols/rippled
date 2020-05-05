@@ -130,8 +130,6 @@ Transaction::getLedgerSeq(uint256 const& id, Application& app)
 {
     std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app.pgPool());
 
-    // TODO why cant we get the transaction index as well? Only ledger seq is
-    // coming through
     auto baseCmd = boost::format(
         R"(SELECT tx('%s');)");
 
