@@ -333,9 +333,11 @@ ReportingETL::startWriter()
             }
             ++num;
         }
+        /*
         if (not stopping_)
             ledger_->stateMap().flushDirty(
                 hotACCOUNT_NODE, ledger_->info().seq);
+                */
     }};
 }
 
@@ -487,6 +489,136 @@ ReportingETL::flushLedger()
 }
 
 void
+ReportingETL::initNumLedgers()
+{
+    assert(app_.pgPool());
+    std::shared_ptr<PgQuery> pgQuery = std::make_shared<PgQuery>(app_.pgPool());
+    std::string sql = "select count(*) from ledgers;";
+
+    auto res = pgQuery->querySync(sql.data());
+    auto result = PQresultStatus(res.get());
+    JLOG(journal_.debug()) << "initNumLedgers result : " << result;
+
+    assert(result == PGRES_TUPLES_OK || result == PGRES_SINGLE_TUPLE);
+    assert(PQntuples(res.get()) == 1);
+    char const* count = PQgetvalue(res.get(), 0, 0);
+    numLedgers_ = std::stoll(count);
+    JLOG(journal_.debug()) << "initNumLedgers - count = " << count;
+}
+
+bool
+ReportingETL::consistencyCheck()
+{
+    assert(checkConsistency_);
+    bool isConsistent = true;
+    assert(app_.pgPool());
+    std::shared_ptr<PgQuery> pgQuery = std::make_shared<PgQuery>(app_.pgPool());
+
+    // check that every ledger hash is present in nodestore
+    std::string sql =
+        "select ledger_seq, ledger_hash from ledgers left join objects on "
+        "ledgers.ledger_hash = objects.key where objects.key is null;";
+
+    auto res = pgQuery->querySync(sql.data());
+    auto result = PQresultStatus(res.get());
+    JLOG(journal_.debug()) << "consistency check - ledger hash result : "
+                           << result;
+
+    assert(result == PGRES_TUPLES_OK);
+
+    if (PQntuples(res.get()) > 0)
+    {
+        isConsistent = false;
+        for (size_t i = 0; i < PQntuples(res.get()); ++i)
+        {
+            char const* ledgerSeq = PQgetvalue(res.get(), i, 0);
+            char const* ledgerHash = PQgetvalue(res.get(), i, 1);
+            JLOG(journal_.error())
+                << "consistencyCheck - "
+                << "ledger hash not present in nodestore. sequence = "
+                << ledgerSeq << " ledger hash = " << ledgerHash;
+        }
+    }
+
+    // check that every state map root is present in nodestore
+    sql =
+        "select ledger_seq, account_set_hash from ledgers left join objects on "
+        "ledgers.account_set_hash = objects.key where objects.key is null;";
+
+    res = pgQuery->querySync(sql.data());
+    result = PQresultStatus(res.get());
+    JLOG(journal_.debug()) << "consistency check - state map result : "
+                           << result;
+
+    assert(result == PGRES_TUPLES_OK);
+
+    if (PQntuples(res.get()) > 0)
+    {
+        isConsistent = false;
+        for (size_t i = 0; i < PQntuples(res.get()); ++i)
+        {
+            char const* ledgerSeq = PQgetvalue(res.get(), i, 0);
+            char const* stateRoot = PQgetvalue(res.get(), i, 1);
+            JLOG(journal_.error())
+                << "consistencyCheck - "
+                << "state map root not present in nodestore. sequence = "
+                << ledgerSeq << " state map root = " << stateRoot;
+        }
+    }
+
+    // check that every tx map root is present in nodestore
+    sql =
+        "select ledger_seq, trans_set_hash from ledgers left join objects on "
+        "ledgers.trans_set_hash = objects.key where objects.key is null;";
+
+    res = pgQuery->querySync(sql.data());
+    result = PQresultStatus(res.get());
+    JLOG(journal_.debug()) << "consistency check - tx map result : " << result;
+
+    assert(result == PGRES_TUPLES_OK);
+
+    if (PQntuples(res.get()) > 0)
+    {
+        isConsistent = false;
+        for (size_t i = 0; i < PQntuples(res.get()); ++i)
+        {
+            char const* ledgerSeq = PQgetvalue(res.get(), i, 0);
+            char const* txRoot = PQgetvalue(res.get(), i, 1);
+            JLOG(journal_.error())
+                << "consistencyCheck - "
+                << "tx map root not present in nodestore. sequence = "
+                << ledgerSeq << " tx map root = " << txRoot;
+        }
+    }
+
+    if (checkRange_)
+    {
+        sql = "select count(*) from ledgers;";
+
+        res = pgQuery->querySync(sql.data());
+        result = PQresultStatus(res.get());
+        JLOG(journal_.debug())
+            << "consistency check - tx map result : " << result;
+
+        assert(result == PGRES_TUPLES_OK);
+        assert(PQntuples(res.get()) == 1);
+        char const* count = PQgetvalue(res.get(), 0, 0);
+        if (std::stoll(count) != numLedgers_)
+        {
+            JLOG(journal_.error())
+                << "consistencyCheck - ledger range mismatch : "
+                << "numLedgers_ = " << numLedgers_ << "count = " << count;
+            isConsistent = false;
+        }
+    }
+
+    JLOG(journal_.info()) << "consistencyCheck - isConsistent = "
+                          << isConsistent;
+
+    return isConsistent;
+}
+
+void
 ReportingETL::storeLedger()
 {
     auto start = std::chrono::system_clock::now();
@@ -498,6 +630,8 @@ ReportingETL::storeLedger()
     auto end = std::chrono::system_clock::now();
 
     roundMetrics.storeTime = ((end - start).count()) / 1000000000.0;
+
+    numLedgers_++;
 
     JLOG(journal_.debug()) << "Store time for ledger " << ledger_->info().seq
                            << " = " << roundMetrics.storeTime;
@@ -723,6 +857,8 @@ ReportingETL::truncateDBs()
     result = PQresultStatus(res.get());
     JLOG(journal_.debug()) << "truncateDBs - result : " << result;
     assert(result == PGRES_COMMAND_OK);
+
+    numLedgers_ = 0;
 }
 
 void
@@ -851,6 +987,9 @@ ReportingETL::doETL()
         writeToPostgres(ledger_->info(), metas);
 
     outputMetrics();
+
+    if (checkConsistency_)
+        assert(consistencyCheck());
 }
 
 void

@@ -184,6 +184,12 @@ private:
 
     size_t numMarkers_ = 2;
 
+    bool checkConsistency_ = false;
+
+    bool checkRange_ = false;
+
+    uint32_t numLedgers_ = 0;
+
     void
     loadInitialLedger();
 
@@ -220,6 +226,12 @@ private:
 
     void
     joinWriter();
+
+    bool
+    consistencyCheck();
+
+    void
+    initNumLedgers();
 
     struct Metrics
     {
@@ -314,6 +326,39 @@ public:
             std::pair<std::string, bool> pgTx = section.find("postgres_tx");
             if (pgTx.second)
                 app_.config().setUsePostgresTx(pgTx.first == "true");
+
+            std::pair<std::string, bool> checkConsistency =
+                section.find("check_consistency");
+            if (checkConsistency.second)
+            {
+                checkConsistency_ = (checkConsistency.first == "true");
+            }
+
+            if (checkConsistency_)
+            {
+                initNumLedgers();
+
+                Section nodeDb = app_.config().section("node_db");
+                std::pair<std::string, bool> onlineDelete =
+                    nodeDb.find("online_delete");
+                if (onlineDelete.second)
+                    checkRange_ = false;
+                else
+                    checkRange_ = true;
+
+                std::pair<std::string, bool> postgresNodestore =
+                    nodeDb.find("type");
+                // if the node_db is not using Postgres, we don't check for
+                // consistency
+                if (!postgresNodestore.second ||
+                    postgresNodestore.first != "Postgres")
+                    checkConsistency_ = false;
+
+                // if we are not using postgres in place of SQLite, we don't
+                // check for consistency
+                if (!app_.config().usePostgresTx())
+                    checkConsistency_ = false;
+            }
 
             try
             {
