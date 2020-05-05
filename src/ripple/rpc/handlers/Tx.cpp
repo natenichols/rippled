@@ -98,107 +98,65 @@ struct TxArgs
     std::optional<std::pair<uint32_t, uint32_t>> ledgerRange;
 };
 
-std::variant<
-    RPC::Status,
-    std::pair<Blob, Blob>,
-    std::pair<std::shared_ptr<const STTx>, std::shared_ptr<TxMeta>>>
+std::pair<TxResult, RPC::Status>
 doTxReporting(RPC::Context& context, TxArgs const& args)
 {
-    //TODO range stuff
-    //
-    
-    auto ledgerSeq = Transaction::getLedgerSeq(args.hash, context.app);
-    if(ledgerSeq == 0)
-        return {rpcTXN_NOT_FOUND};
-    auto ledger = context.ledgerMaster.getLedgerBySeq(ledgerSeq);
-
-    if(args.binary)
+    TxResult res;
+    res.searchedAll = SearchedAll::unknown;
+    auto where = Transaction::getLedgerSeq(args.hash, context.app);
+    uint32_t ledgerSequence = 0;
+    if (auto seq = std::get_if<uint32_t>(&where))
     {
-        auto const item = ledger->txMap().peekItem(args.hash);
-        SerialIter it(item->slice());
-        Blob txnBlob = it.getVL();
-        Blob metaBlob = it.getVL();
-        auto p = std::make_pair(txnBlob, metaBlob);
-        return p;
+        if (seq == 0)
+            return {res, rpcINTERNAL};
+        ledgerSequence = *seq;
     }
     else
     {
-        auto [txn,meta] = ledger->txRead(args.hash);
-
-        
-        auto txMeta = std::make_shared<TxMeta>(args.hash, ledgerSeq, *meta);
-        auto p = std::make_pair(txn, txMeta);
-        return p;
-    }
-}
-
-Json::Value
-doTxReportingJson(RPC::JsonContext& context)
-{
-    
-    if (!context.params.isMember(jss::transaction))
-        return rpcError(rpcINVALID_PARAMS);
-
-    std::string txHash = context.params[jss::transaction].asString();
-    if (!RPC::isHexTxID(txHash))
-        return rpcError(rpcNOT_IMPL);
-
-    TxArgs args;
-    args.hash = from_hex_text<uint256>(txHash);
-
-    args.binary = context.params.isMember(jss::binary) &&
-        context.params[jss::binary].asBool();
-
-    if (context.params.isMember(jss::min_ledger) &&
-        context.params.isMember(jss::max_ledger))
-    {
-        try
+        auto& range = std::get<std::pair<uint32_t, uint32_t>>(where);
+        if (args.ledgerRange)
         {
-            args.ledgerRange = std::make_pair(
-                context.params[jss::min_ledger].asUInt(),
-                context.params[jss::max_ledger].asUInt());
+            auto min = args.ledgerRange->first;
+            auto max = args.ledgerRange->second;
+            if (min >= range.first && max <= range.second)
+            {
+                res.searchedAll = SearchedAll::yes;
+            }
+            else
+            {
+                res.searchedAll = SearchedAll::no;
+            }
         }
-        catch (...)
-        {
-            // One of the calls to `asUInt ()` failed.
-            return rpcError(rpcINVALID_LGR_RANGE);
-        }
+        return {res, rpcTXN_NOT_FOUND};
     }
-    auto result = doTxReporting(context, args);
+    auto ledger = context.ledgerMaster.getLedgerBySeq(ledgerSequence);
 
-    Json::Value response;
-    response[jss::hash] = txHash;
-    if(auto blobs = std::get_if<std::pair<Blob, Blob>>(&result))
-    {
-        response[jss::tx] = strHex(blobs->first);
-        response[jss::meta] = strHex(blobs->second);
-    }
-    else if (
-        auto pair = std::get_if<
-            std::pair<std::shared_ptr<const STTx>, std::shared_ptr<TxMeta>>>(&result))
-    {
-        response[jss::tx] = pair->first->getJson(JsonOptions::include_date);
-        response[jss::meta] = pair->second->getJson(JsonOptions::none);
+    auto const item = ledger->txMap().peekItem(args.hash);
+    if (!item)
+        return {res, rpcTXN_NOT_FOUND};
 
-        insertDeliveredAmount(
-                response[jss::meta], context, pair->first, *pair->second);
-    }
-    else if(auto err = std::get_if<RPC::Status>(&result))
+    auto [sttx, meta] = ledger->txRead(args.hash);
+    std::string reason;
+    res.txn = std::make_shared<Transaction>(sttx, reason, context.app);
+    if (args.binary)
     {
-       err->inject(response); 
+        // TODO this is not the most efficient
+        Serializer s = meta->getSerializer();
+        res.meta = s.peekData();
     }
     else
     {
-        assert(false);
+        res.meta = std::make_shared<TxMeta>(args.hash, ledgerSequence, *meta);
     }
-    response[jss::validated] = true;
-    response["used_postgres"] = true;
-    return response;
+    res.validated = true;
+    return {res, rpcSUCCESS};
 }
 
 std::pair<TxResult, RPC::Status>
 doTxHelp(RPC::Context& context, TxArgs const& args)
 {
+    if (context.app.config().usePostgresTx())
+        return doTxReporting(context, args);
     TxResult result;
 
     ClosedInterval<uint32_t> range;
@@ -448,10 +406,6 @@ populateJsonResponse(
 Json::Value
 doTxJson(RPC::JsonContext& context)
 {
-    if (context.app.config().usePostgresTx())
-    {
-        return doTxReportingJson(context);
-    }
     // Deserialize and validate JSON arguments
 
     if (!context.params.isMember(jss::transaction))
