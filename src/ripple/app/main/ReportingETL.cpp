@@ -33,7 +33,143 @@
 
 namespace ripple {
 
+// TODO move forwarding functions to another file
+Json::Value
+forwardToTx(RPC::JsonContext& context)
+{
+    namespace beast = boost::beast;          // from <boost/beast.hpp>
+    namespace http = beast::http;            // from <boost/beast/http.hpp>
+    namespace websocket = beast::websocket;  // from <boost/beast/websocket.hpp>
+    namespace net = boost::asio;             // from <boost/asio.hpp>
+    using tcp = boost::asio::ip::tcp;        // from <boost/asio/ip/tcp.hpp>
+    Json::Value& request = context.params;
+    auto journal = context.app.journal("Forward");
+    try
+    {
+        assert(context.app.config().exists("reporting"));
+        Section section = context.app.config().section("reporting");
 
+        std::pair<std::string, bool> ipPair = section.find("source_ip");
+        if (!ipPair.second)
+            return {};
+
+        std::pair<std::string, bool> wsPortPair =
+            section.find("source_ws_port");
+        if (!wsPortPair.second)
+            return {};
+
+        auto const host = ipPair.first;
+        auto const port = wsPortPair.first;
+
+        // The io_context is required for all I/O
+        net::io_context ioc;
+
+        // These objects perform our I/O
+        tcp::resolver resolver{ioc};
+
+        JLOG(journal.debug()) << "Creating forwarding websocket";
+        auto ws = std::make_unique<websocket::stream<tcp::socket>>(ioc);
+
+        // Look up the domain name
+        auto const results = resolver.resolve(host, port);
+
+        JLOG(journal.debug()) << "Connecting forwarding websocket";
+        // Make the connection on the IP address we get from a lookup
+        net::connect(ws->next_layer(), results.begin(), results.end());
+
+        // Set a decorator to change the User-Agent of the handshake
+        ws->set_option(
+            websocket::stream_base::decorator([](websocket::request_type& req) {
+                req.set(
+                    http::field::user_agent,
+                    std::string(BOOST_BEAST_VERSION_STRING) +
+                        " websocket-client-coro");
+            }));
+
+        JLOG(journal.debug()) << "Performing forwarding websocket handshake";
+        // Perform the websocket handshake
+        ws->handshake(host, "/");
+
+        Json::FastWriter fastWriter;
+
+        JLOG(journal.debug()) << "Sending forward request";
+        // Send the message
+        ws->write(net::buffer(fastWriter.write(request)));
+
+        beast::flat_buffer buffer;
+        ws->read(buffer);
+
+        Json::Value response;
+        Json::Reader reader;
+        if (!reader.parse(
+                static_cast<char const*>(buffer.data().data()), response))
+        {
+            JLOG(journal.error()) << "Error parsing response";
+            return {};
+        }
+        response["forwarded"] = true;
+        return response;
+    }
+    catch (std::exception const& e)
+    {
+        return {};
+    }
+}
+
+std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>
+getForwardingStub(RPC::Context& context)
+{
+    Section section = context.app.config().section("reporting");
+
+    std::pair<std::string, bool> ipPair = section.find("source_ip");
+    if (!ipPair.second)
+        return {};
+
+    std::pair<std::string, bool> portPair = section.find("source_grpc_port");
+    if (!portPair.second)
+        return {};
+
+    return org::xrpl::rpc::v1::XRPLedgerAPIService::NewStub(grpc::CreateChannel(
+        beast::IP::Endpoint(
+            boost::asio::ip::make_address(ipPair.first),
+            std::stoi(portPair.first))
+            .to_string(),
+        grpc::InsecureChannelCredentials()));
+}
+
+// We only forward requests where ledger_index is "current" or "closed"
+// otherwise, attempt to handle here
+bool
+shouldForwardToTx(RPC::JsonContext& context)
+{
+    Json::Value& params = context.params;
+    std::string strCommand = params.isMember(jss::command)
+        ? params[jss::command].asString()
+        : params[jss::method].asString();
+
+    JLOG(context.j.trace()) << "COMMAND:" << strCommand;
+    JLOG(context.j.trace()) << "REQUEST:" << params;
+    auto handler = RPC::getHandler(context.apiVersion, strCommand);
+
+    if (handler->condition_ == RPC::NEEDS_CURRENT_LEDGER ||
+        handler->condition_ == RPC::NEEDS_CLOSED_LEDGER)
+    {
+        return true;
+    }
+    auto indexValue = params[jss::ledger_index];
+    auto hashValue = params[jss::ledger_hash];
+    // TODO consider forwarding sequence values greater than the
+    // latest sequence we have
+    if (indexValue)
+    {
+        if (!indexValue.isNumeric())
+        {
+            auto index = indexValue.asString();
+            return index == "current" || index == "closed";
+        }
+    }
+    return false;
+}
 
 std::vector<uint256> getMarkers(size_t numMarkers)
 {

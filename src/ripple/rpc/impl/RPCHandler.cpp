@@ -19,6 +19,7 @@
 
 #include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/main/Application.h>
+#include <ripple/app/main/ReportingETL.h>
 #include <ripple/app/misc/NetworkOPs.h>
 #include <ripple/basics/Log.h>
 #include <ripple/basics/PerfLog.h>
@@ -212,8 +213,14 @@ callMethod(
 Status
 doCommand(RPC::JsonContext& context, Json::Value& result)
 {
-    Handler const* handler = nullptr;
-    if (auto error = fillHandler(context, handler))
+    if (shouldForwardToTx(context))
+    {
+        result = forwardToTx(context);
+        // this return value is ignored
+        return rpcSUCCESS;
+    }
+    Handler const * handler = nullptr;
+    if (auto error = fillHandler (context, handler))
     {
         inject_error(error, result);
         return error;

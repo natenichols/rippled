@@ -476,6 +476,9 @@ getHashesByIndex(
 extern std::map<std::uint32_t, std::pair<uint256, uint256>>
 getHashesByIndex(std::uint32_t minSeq, std::uint32_t maxSeq, Application& app);
 
+extern LedgerInfo
+getLatestLedger(Application& app);
+
 /** Deserialize a SHAMapItem containing a single STTx
 
     Throw:

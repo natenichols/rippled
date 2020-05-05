@@ -1347,6 +1347,16 @@ loadLedgerInfosPostgres(
     return infos;
 }
 
+LedgerInfo
+getLatestLedger(Application& app)
+{
+    auto infos = loadLedgerInfosPostgres(false, app);
+    if (infos.size())
+        return infos[0];
+    else
+        return LedgerInfo{};
+}
+
 std::tuple<std::shared_ptr<Ledger>, std::uint32_t, uint256>
 loadLedgerHelperPostgres(
     std::variant<uint256, uint32_t, bool> const& whichLedger,

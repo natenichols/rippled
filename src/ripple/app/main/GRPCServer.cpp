@@ -18,6 +18,7 @@
 //==============================================================================
 
 #include <ripple/app/main/GRPCServer.h>
+#include <ripple/app/main/ReportingETL.h>
 #include <ripple/resource/Fees.h>
 
 namespace ripple {
@@ -46,6 +47,7 @@ GRPCServerImpl::CallData<Request, Response>::CallData(
     Application& app,
     BindListener<Request, Response> bindListener,
     Handler<Request, Response> handler,
+    Forward<Request, Response> forward,
     RPC::Condition requiredCondition,
     Resource::Charge loadType)
     : service_(service)
@@ -55,6 +57,7 @@ GRPCServerImpl::CallData<Request, Response>::CallData(
     , responder_(&ctx_)
     , bindListener_(std::move(bindListener))
     , handler_(std::move(handler))
+    , forward_(std::move(forward))
     , requiredCondition_(std::move(requiredCondition))
     , loadType_(std::move(loadType))
 {
@@ -73,6 +76,7 @@ GRPCServerImpl::CallData<Request, Response>::clone()
         app_,
         bindListener_,
         handler_,
+        forward_,
         requiredCondition_,
         loadType_);
 }
@@ -133,18 +137,27 @@ GRPCServerImpl::CallData<Request, Response>::process(
             usage.charge(loadType);
             auto role = getRole();
 
-            RPC::GRPCContext<Request> context{
-                {app_.journal("gRPCServer"),
-                 app_,
-                 loadType,
-                 app_.getOPs(),
-                 app_.getLedgerMaster(),
-                 usage,
-                 role,
-                 coro,
-                 InfoSub::pointer(),
-                 apiVersion},
-                request_};
+            RPC::GRPCContext<Request> context{{app_.journal("gRPCServer"),
+                                               app_,
+                                               loadType,
+                                               app_.getOPs(),
+                                               app_.getLedgerMaster(),
+                                               usage,
+                                               role,
+                                               coro,
+                                               InfoSub::pointer(),
+                                               apiVersion},
+                                              request_};
+            if (shouldForwardToTx(context, requiredCondition_))
+            {
+                auto stub = getForwardingStub(context);
+                grpc::ClientContext clientContext;
+                Response response;
+                auto status =
+                    forward_(stub.get(), &clientContext, request_, &response);
+                responder_.Finish(response, status, this);
+                return;
+            }
 
             // Make sure we can currently handle the rpc
             error_code_i conditionMetRes =
@@ -346,6 +359,7 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
                 RequestGetFee,
             doFeeGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetFee,
             RPC::NEEDS_CURRENT_LEDGER,
             Resource::feeReferenceRPC));
     }
@@ -361,6 +375,7 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
                 RequestGetAccountInfo,
             doAccountInfoGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetAccountInfo,
             RPC::NO_CONDITION,
             Resource::feeReferenceRPC));
     }
@@ -376,6 +391,7 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
                 RequestGetTransaction,
             doTxGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetTransaction,
             RPC::NEEDS_CURRENT_LEDGER,
             Resource::feeReferenceRPC));
     }
@@ -391,6 +407,7 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
                 RequestSubmitTransaction,
             doSubmitGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::SubmitTransaction,
             RPC::NEEDS_CURRENT_LEDGER,
             Resource::feeMediumBurdenRPC));
     }
@@ -407,6 +424,8 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
                 RequestGetAccountTransactionHistory,
             doAccountTxGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::
+                GetAccountTransactionHistory,
             RPC::NO_CONDITION,
             Resource::feeMediumBurdenRPC));
     }
@@ -423,6 +442,7 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
                 RequestGetLedger,
             doLedgerGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetLedger,
             RPC::NO_CONDITION,
             Resource::feeMediumBurdenRPC));
     }
@@ -438,36 +458,7 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
                 RequestGetLedgerData,
             doLedgerDataGrpc,
-            RPC::NO_CONDITION,
-            Resource::feeReferenceRPC));
-    }
-    {
-        using cd = CallData<
-            org::xrpl::rpc::v1::GetLedgerEntryRequest,
-            org::xrpl::rpc::v1::GetLedgerEntryResponse>;
-
-        addToRequests(std::make_shared<cd>(
-            service_,
-            *cq_,
-            app_,
-            &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
-                RequestGetLedgerEntry,
-            doLedgerEntryGrpc,
-            RPC::NO_CONDITION,
-            Resource::feeReferenceRPC));
-    }
-    {
-        using cd = CallData<
-            org::xrpl::rpc::v1::GetLedgerDiffRequest,
-            org::xrpl::rpc::v1::GetLedgerDiffResponse>;
-
-        addToRequests(std::make_shared<cd>(
-            service_,
-            *cq_,
-            app_,
-            &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
-                RequestGetLedgerDiff,
-            doLedgerDiffGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetLedgerData,
             RPC::NO_CONDITION,
             Resource::feeReferenceRPC));
     }

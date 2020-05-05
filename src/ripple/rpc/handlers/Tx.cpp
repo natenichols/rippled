@@ -19,6 +19,7 @@
 
 #include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/ledger/TransactionMaster.h>
+#include <ripple/app/main/ReportingETL.h>
 #include <ripple/app/misc/NetworkOPs.h>
 #include <ripple/app/misc/Transaction.h>
 #include <ripple/basics/ToString.h>
