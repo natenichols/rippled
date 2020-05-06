@@ -41,6 +41,7 @@
 #include <ripple/basics/contract.h>
 #include <ripple/basics/safe_cast.h>
 #include <ripple/core/DatabaseCon.h>
+#include <ripple/core/Pg.h>
 #include <ripple/core/TimeKeeper.h>
 #include <ripple/nodestore/DatabaseShard.h>
 #include <ripple/overlay/Overlay.h>
@@ -1259,8 +1260,8 @@ LedgerMaster::getLedgerHashForHistory(
 {
     // Try to get the hash of a ledger we need to fetch for history
     boost::optional<LedgerHash> ret;
-    auto const& l{
-        reason == InboundLedger::Reason::SHARD ? mShardLedger : mHistLedger};
+    auto const& l{reason == InboundLedger::Reason::SHARD ? mShardLedger
+                                                         : mHistLedger};
 
     if (l && l->info().seq >= index)
     {
@@ -1558,8 +1559,18 @@ LedgerMaster::getPublishedLedger()
 std::string
 LedgerMaster::getCompleteLedgers()
 {
-    std::lock_guard sl(mCompleteLock);
-    return to_string(mCompleteLedgers);
+    if (app_.config().usePostgresTx())
+    {
+        auto range = doQuery(app_.pgPool(), "SELECT complete_ledgers()");
+        if (!range)
+            return "error";
+        return (PQgetvalue(range.get(), 0, 0));
+    }
+    else
+    {
+        std::lock_guard sl(mCompleteLock);
+        return to_string(mCompleteLedgers);
+    }
 }
 
 boost::optional<NetClock::time_point>

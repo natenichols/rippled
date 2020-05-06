@@ -264,13 +264,21 @@ Pg::query(yield_context yield, boost::asio::io_context::strand& strand,
                 Throw<std::runtime_error>("multiple results returned");
             }
             ret.reset(res.release());
+
             // ret is never null in these cases, so need to break.
-            ExecStatusType const& status = PQresultStatus(ret.get());
-            if(status == PGRES_COPY_IN || status == PGRES_COPY_OUT
-                || status == PGRES_COPY_BOTH)
+            bool copyStatus = false;
+            switch (PQresultStatus(ret.get()))
             {
-                break;
+                case PGRES_COPY_IN:
+                case PGRES_COPY_OUT:
+                case PGRES_COPY_BOTH:
+                    copyStatus = true;
+                    break;
+                default:
+                    ;
             }
+            if (copyStatus)
+                break;
         }
 
         socket_->release();
@@ -289,18 +297,25 @@ Pg::query(yield_context yield, boost::asio::io_context::strand& strand,
         Throw<std::runtime_error>("no result structure returned");
 
     // Ensure proper query execution.
-    if (! (PQresultStatus(ret.get()) == PGRES_TUPLES_OK
-        || PQresultStatus(ret.get()) == PGRES_COMMAND_OK
-        || PQresultStatus(ret.get()) == PGRES_COPY_IN))
+    switch (PQresultStatus(ret.get()))
     {
-        std::stringstream ss;
-        ss << "bad query result: "
-           << PQresStatus(PQresultStatus(ret.get()))
-           << ", number of tuples: "
-           << PQntuples(ret.get())
-           << ", number of fields: "
-           << PQnfields(ret.get());
-        Throw<std::runtime_error>(ss.str().c_str());
+        case PGRES_TUPLES_OK:
+        case PGRES_COMMAND_OK:
+        case PGRES_COPY_IN:
+        case PGRES_COPY_OUT:
+        case PGRES_COPY_BOTH:
+            break;
+        default:
+        {
+            std::stringstream ss;
+            ss << "bad query result: "
+               << PQresStatus(PQresultStatus(ret.get()))
+               << ", number of tuples: "
+               << PQntuples(ret.get())
+               << ", number of fields: "
+               << PQnfields(ret.get());
+            Throw<std::runtime_error>(ss.str().c_str());
+        }
     }
 
     return ret;
