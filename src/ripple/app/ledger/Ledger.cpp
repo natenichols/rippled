@@ -1249,6 +1249,7 @@ loadLedgerInfosPostgres(
         whichLedger,
     Application& app)
 {
+    assert(app.config().usePostgresTx());
     std::string sql =
         "SELECT "
         "ledger_hash, prev_hash, account_set_hash, trans_set_hash, "
@@ -1308,17 +1309,17 @@ loadLedgerInfosPostgres(
     std::vector<LedgerInfo> infos;
     for (size_t i = 0; i < PQntuples(res.get()); ++i)
     {
-        char const* hash = PQgetvalue(res.get(), 0, 0);
-        char const* prevHash = PQgetvalue(res.get(), 0, 1);
+        char const* hash = PQgetvalue(res.get(), i, 0);
+        char const* prevHash = PQgetvalue(res.get(), i, 1);
 
-        char const* accountHash = PQgetvalue(res.get(), 0, 2);
-        char const* txHash = PQgetvalue(res.get(), 0, 3);
-        char const* totalCoins = PQgetvalue(res.get(), 0, 4);
-        char const* closeTime = PQgetvalue(res.get(), 0, 5);
-        char const* parentCloseTime = PQgetvalue(res.get(), 0, 6);
-        char const* closeTimeRes = PQgetvalue(res.get(), 0, 7);
-        char const* closeFlags = PQgetvalue(res.get(), 0, 8);
-        char const* ledgerSeq = PQgetvalue(res.get(), 0, 9);
+        char const* accountHash = PQgetvalue(res.get(), i, 2);
+        char const* txHash = PQgetvalue(res.get(), i, 3);
+        char const* totalCoins = PQgetvalue(res.get(), i, 4);
+        char const* closeTime = PQgetvalue(res.get(), i, 5);
+        char const* parentCloseTime = PQgetvalue(res.get(), i, 6);
+        char const* closeTimeRes = PQgetvalue(res.get(), i, 7);
+        char const* closeFlags = PQgetvalue(res.get(), i, 8);
+        char const* ledgerSeq = PQgetvalue(res.get(), i, 9);
 
         JLOG(app.journal("Ledger").debug())
             << "loadLedgerHelperPostgres - data = " << hash << " , " << prevHash

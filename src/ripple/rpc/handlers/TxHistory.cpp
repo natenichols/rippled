@@ -17,9 +17,11 @@
 */
 //==============================================================================
 
+#include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/main/Application.h>
 #include <ripple/app/misc/Transaction.h>
 #include <ripple/core/DatabaseCon.h>
+#include <ripple/core/Pg.h>
 #include <ripple/core/SociDB.h>
 #include <ripple/net/RPCErr.h>
 #include <ripple/protocol/ErrorCodes.h>
@@ -31,12 +33,87 @@
 
 namespace ripple {
 
+Json::Value
+doTxHistoryReporting(RPC::JsonContext& context)
+{
+    assert(context.app.config().usePostgresTx());
+    context.loadType = Resource::feeMediumBurdenRPC;
+
+    if (!context.params.isMember(jss::start))
+        return rpcError(rpcINVALID_PARAMS);
+
+    unsigned int startIndex = context.params[jss::start].asUInt();
+
+    if ((startIndex > 10000) && (!isUnlimited(context.role)))
+        return rpcError(rpcNO_PERMISSION);
+
+    std::string sql = boost::str(
+        boost::format("SELECT "
+                      "ledger_seq, trans_id from account_transactions ORDER BY "
+                      "ledger_seq DESC LIMIT "
+                      "20 OFFSET %u;") %
+        startIndex);
+
+    assert(context.app.pgPool());
+    std::shared_ptr<PgQuery> pg =
+        std::make_shared<PgQuery>(context.app.pgPool());
+
+    auto res = pg->querySync(sql.data());
+    assert(res);
+    auto result = PQresultStatus(res.get());
+
+    JLOG(context.j.debug()) << "txHistory - result: " << result;
+    assert(result == PGRES_TUPLES_OK);
+
+    Json::Value txs;
+
+    for (size_t i = 0; i < PQntuples(res.get()); ++i)
+    {
+        uint32_t ledgerSequence = std::stoi(PQgetvalue(res.get(), i, 0));
+
+        uint256 txID;
+        txID.SetHexExact(PQgetvalue(res.get(), i, 1) + 2);
+        auto ledger = context.ledgerMaster.getLedgerBySeq(ledgerSequence);
+        if (ledger)
+        {
+            auto [sttx, txnMeta] = ledger->txRead(txID);
+            if (!sttx)
+            {
+                Json::Value err;
+                err[jss::error] = "Transaction not found in ledger. ledger = " +
+                    std::to_string(ledgerSequence) +
+                    " . txnID = " + strHex(txID);
+                txs.append(err);
+                continue;
+            }
+
+            txs.append(sttx->getJson(JsonOptions::none));
+        }
+        else
+        {
+            Json::Value err;
+            err[jss::error] =
+                "Ledger not found : " + std::to_string(ledgerSequence);
+            txs.append(err);
+        }
+    }
+
+    Json::Value obj;
+    obj[jss::index] = startIndex;
+    obj[jss::txs] = txs;
+    obj["used_postgres"] = true;
+
+    return obj;
+}
+
 // {
 //   start: <index>
 // }
 Json::Value
 doTxHistory(RPC::JsonContext& context)
 {
+    if (context.app.config().usePostgresTx())
+        return doTxHistoryReporting(context);
     context.loadType = Resource::feeMediumBurdenRPC;
 
     if (!context.params.isMember(jss::start))

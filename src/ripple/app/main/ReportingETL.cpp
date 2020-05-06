@@ -619,9 +619,11 @@ ReportingETL::consistencyCheck()
 void
 ReportingETL::storeLedger()
 {
+    JLOG(journal_.debug()) << "Storing ledger = " << ledger_->info().seq;
     auto start = std::chrono::system_clock::now();
 
     app_.getLedgerMaster().storeLedger(ledger_);
+    JLOG(journal_.debug()) << "switch lcl ledger = " << ledger_->info().seq;
 
     app_.getLedgerMaster().switchLCL(ledger_);
 

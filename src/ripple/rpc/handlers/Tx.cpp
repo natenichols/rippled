@@ -101,6 +101,7 @@ struct TxArgs
 std::pair<TxResult, RPC::Status>
 doTxReporting(RPC::Context& context, TxArgs const& args)
 {
+    assert(context.app.config().usePostgresTx());
     TxResult res;
     res.searchedAll = SearchedAll::unknown;
     auto where = Transaction::getLedgerSeq(args.hash, context.app);
@@ -130,12 +131,19 @@ doTxReporting(RPC::Context& context, TxArgs const& args)
         return {res, rpcTXN_NOT_FOUND};
     }
     auto ledger = context.ledgerMaster.getLedgerBySeq(ledgerSequence);
-
-    auto const item = ledger->txMap().peekItem(args.hash);
-    if (!item)
-        return {res, rpcTXN_NOT_FOUND};
+    if (!ledger)
+        return {res,
+                {rpcLGR_NOT_FOUND,
+                 "The ledger containing the transaction was not found"}};
 
     auto [sttx, meta] = ledger->txRead(args.hash);
+    if (!sttx || !meta)
+    {
+        return {res,
+                {rpcTXN_NOT_FOUND,
+                 "Transaction was present in account_transactions, but "
+                 "was not found in the ledger"}};
+    }
     std::string reason;
     res.txn = std::make_shared<Transaction>(sttx, reason, context.app);
     if (args.binary)
