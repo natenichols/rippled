@@ -310,8 +310,6 @@ public:
             if (!wsPortPair.second)
                 return;
 
-
-
             std::pair<std::string, bool> flushInterval =
                 section.find("flush_interval");
             if (flushInterval.second)
@@ -327,6 +325,10 @@ public:
             std::pair<std::string, bool> pgTx = section.find("postgres_tx");
             if (pgTx.second)
                 app_.config().setUsePostgresTx(pgTx.first == "true");
+
+            std::pair<std::string, bool> ro = section.find("read_only");
+            if (ro.second)
+                app_.config().setReportingReadOnly(ro.first == "true");
 
             std::pair<std::string, bool> checkConsistency =
                 section.find("check_consistency");

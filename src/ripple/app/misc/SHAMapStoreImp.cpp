@@ -156,7 +156,8 @@ SHAMapStoreImp::SHAMapStoreImp(
     , scheduler_(scheduler)
     , journal_(journal)
     , working_(true)
-    , canDelete_(std::numeric_limits<LedgerIndex>::max())
+    , canDelete_ (std::numeric_limits <LedgerIndex>::max())
+    , reportingReadOnly_ (app.config().reportingReadOnly())
 {
     Config& config {app.config()};
 
@@ -209,20 +210,7 @@ SHAMapStoreImp::SHAMapStoreImp(
 
     if (deleteInterval_)
     {
-        // Configuration that affects the behavior of online delete
-        get_if_exists(section, "delete_batch", deleteBatch_);
-        std::uint32_t temp;
-        if (get_if_exists(section, "back_off_milliseconds", temp) ||
-            // Included for backward compaibility with an undocumented setting
-            get_if_exists(section, "backOff", temp))
-        {
-            backOff_ = std::chrono::milliseconds{temp};
-        }
-        if (get_if_exists(section, "age_threshold_seconds", temp))
-            ageThreshold_ = std::chrono::seconds{temp};
-        if (get_if_exists(section, "recovery_wait_seconds", temp))
-            recoveryWaitTime_.emplace(std::chrono::seconds{temp});
-
+        assert(!reportingReadOnly_);
         get_if_exists(section, "advisory_delete", advisoryDelete_);
 
         auto const minInterval = config.standalone()
@@ -690,6 +678,7 @@ SHAMapStoreImp::clearPrior(LedgerIndex lastRotated)
     if (app_.config().usePostgresTx())
     {
         assert(app_.pgPool());
+        assert(!reportingReadOnly_);
 
         std::string sql =
             "SELECT prepare_delete(" + std::to_string(lastRotated) + ");";
