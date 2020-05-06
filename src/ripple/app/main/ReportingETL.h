@@ -34,6 +34,7 @@
 #include <ripple/rpc/impl/RPCHelpers.h>
 #include <ripple/rpc/impl/Tuning.h>
 
+#include <boost/beast/core/string.hpp>
 #include <boost/beast/websocket.hpp>
 
 #include "org/xrpl/rpc/v1/xrp_ledger.grpc.pb.h"
@@ -351,9 +352,8 @@ public:
                 // if the node_db is not using Postgres, we don't check for
                 // consistency
                 if (!postgresNodestore.second ||
-                    postgresNodestore.first != "Postgres")
+                    !boost::beast::iequals(postgresNodestore.first, "Postgres"))
                     checkConsistency_ = false;
-
                 // if we are not using postgres in place of SQLite, we don't
                 // check for consistency
                 if (!app_.config().usePostgresTx())
