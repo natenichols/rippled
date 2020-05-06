@@ -47,71 +47,12 @@
 #include <chrono>
 namespace ripple {
 
-// TODO move forwarding functions to another file
-Json::Value
-forwardToTx(RPC::JsonContext& context);
 
-bool
-shouldForwardToTx(RPC::JsonContext& context);
 
-template <class T>
-struct SpecifiesLedger
-{
-    // List out all request types that specify a ledger
-    // Note, GetAccountInfo specifies a ledger, but GetAccountInfo only ever
-    // returns validated data, so GetAccountInfo will never be forwarded
-    static bool const value =
-        std::is_same<T, org::xrpl::rpc::v1::GetAccountInfoRequest>::value ||
-        std::is_same<T, org::xrpl::rpc::v1::GetLedgerRequest>::value ||
-        std::is_same<T, org::xrpl::rpc::v1::GetLedgerDataRequest>::value;
-};
 
-template <
-    class Request,
-    typename std::enable_if<!SpecifiesLedger<Request>::value, Request>::type* =
-        nullptr>
-bool
-needCurrentOrClosed(RPC::GRPCContext<Request>& context)
-{
-    return false;
-}
-
-template <
-    class Request,
-    typename std::enable_if<SpecifiesLedger<Request>::value, Request>::type* =
-        nullptr>
-bool
-needCurrentOrClosed(RPC::GRPCContext<Request>& context)
-{
-    // TODO consider forwarding sequence values greater than the latest sequence
-    // we have
-    if (context.params.ledger().ledger_case() ==
-        org::xrpl::rpc::v1::LedgerSpecifier::LedgerCase::kShortcut)
-    {
-        if (context.params.ledger().shortcut() !=
-            org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED)
-            return true;
-    }
-    return false;
-}
-
-template <class Request>
-bool
-shouldForwardToTx(RPC::GRPCContext<Request>& context, RPC::Condition condition)
-{
-    if (condition == RPC::NEEDS_CURRENT_LEDGER ||
-        condition == RPC::NEEDS_CLOSED_LEDGER)
-        return true;
-
-    return needCurrentOrClosed(context);
-}
-
-std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>
-getForwardingStub(RPC::Context& context);
 
 class ReportingETL : Stoppable
 {
-    //TODO some logging in the queue
     class LedgerIndexQueue
     {
         std::queue<uint32_t> queue_;
@@ -183,33 +124,35 @@ class ReportingETL : Stoppable
             cv_.notify_all();
         }
     };
-    public:
-template <class T>
-struct ThreadSafeQueue
-{
 
-    std::queue<T> queue_;
-
-    std::mutex m_;
-    std::condition_variable cv_;
-
-    void push(T const& elt)
+public:
+    template <class T>
+    struct ThreadSafeQueue
     {
-        std::unique_lock<std::mutex> lck(m_);
-        queue_.push(elt);
-        cv_.notify_all();
-    }
+        std::queue<T> queue_;
 
-    T pop()
-    {
-        std::unique_lock<std::mutex> lck(m_);
-        //TODO: is this able to be aborted?
-        cv_.wait(lck,[this](){ return !queue_.empty();});
-        auto ret = queue_.front();
-        queue_.pop();
-        return ret;
-    }
-};
+        std::mutex m_;
+        std::condition_variable cv_;
+
+        void
+        push(T const& elt)
+        {
+            std::unique_lock<std::mutex> lck(m_);
+            queue_.push(elt);
+            cv_.notify_all();
+        }
+
+        T
+        pop()
+        {
+            std::unique_lock<std::mutex> lck(m_);
+            // TODO: is this able to be aborted?
+            cv_.wait(lck, [this]() { return !queue_.empty(); });
+            auto ret = queue_.front();
+            queue_.pop();
+            return ret;
+        }
+    };
 
 private:
     Application& app_;

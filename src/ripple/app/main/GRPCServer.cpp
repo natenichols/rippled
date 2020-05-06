@@ -18,7 +18,7 @@
 //==============================================================================
 
 #include <ripple/app/main/GRPCServer.h>
-#include <ripple/app/main/ReportingETL.h>
+#include <ripple/app/main/TxProxy.h>
 #include <ripple/resource/Fees.h>
 
 namespace ripple {
@@ -148,14 +148,29 @@ GRPCServerImpl::CallData<Request, Response>::process(
                                                InfoSub::pointer(),
                                                apiVersion},
                                               request_};
-            if (shouldForwardToTx(context, requiredCondition_))
+            if (app_.getTxProxy().shouldForwardToTx(
+                    context, requiredCondition_))
             {
-                auto stub = getForwardingStub(context);
-                grpc::ClientContext clientContext;
-                Response response;
-                auto status =
-                    forward_(stub.get(), &clientContext, request_, &response);
-                responder_.Finish(response, status, this);
+                auto stub = app_.getTxProxy().getForwardingStub(context);
+                if (stub)
+                {
+                    grpc::ClientContext clientContext;
+                    Response response;
+                    auto status = forward_(
+                        stub.get(), &clientContext, request_, &response);
+                    responder_.Finish(response, status, this);
+                    JLOG(app_.journal("gRPCServer").debug())
+                        << "Forwarded request to tx";
+                }
+                else
+                {
+                    JLOG(app_.journal("gRPCServer").error())
+                        << "Failed to forward request to tx";
+                    grpc::Status status{grpc::StatusCode::INTERNAL,
+                                        "Attempted to act as proxy but failed "
+                                        "to create forwarding stub"};
+                    responder_.FinishWithError(status, this);
+                }
                 return;
             }
 

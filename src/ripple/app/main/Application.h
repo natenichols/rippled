@@ -89,7 +89,9 @@ class Cluster;
 class DatabaseCon;
 class SHAMapStore;
 
-using NodeCache = TaggedCache<SHAMapHash, Blob>;
+class TxProxy;
+
+using NodeCache     = TaggedCache <SHAMapHash, Blob>;
 
 template <class Adaptor>
 class Validations;
@@ -240,6 +242,9 @@ public:
     setOpenLedger(std::shared_ptr<Ledger>&) = 0;
     virtual std::chrono::milliseconds
     getIOLatency() = 0;
+
+    virtual TxProxy&
+    getTxProxy() = 0;
 
     virtual bool
     serverOkay(std::string& reason) = 0;

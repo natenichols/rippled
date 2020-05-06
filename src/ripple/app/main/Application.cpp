@@ -17,10 +17,6 @@
 */
 //==============================================================================
 
-#include <ripple/app/main/Application.h>
-#include <ripple/core/DatabaseCon.h>
-#include <ripple/core/Pg.h>
-#include <ripple/core/Stoppable.h>
 #include <ripple/app/consensus/RCLValidations.h>
 #include <ripple/app/ledger/InboundLedgers.h>
 #include <ripple/app/ledger/InboundTransactions.h>
@@ -39,6 +35,7 @@
 #include <ripple/app/main/NodeStoreScheduler.h>
 #include <ripple/app/main/ReportingETL.h>
 #include <ripple/app/main/Tuning.h>
+#include <ripple/app/main/TxProxy.h>
 #include <ripple/app/misc/AmendmentTable.h>
 #include <ripple/app/misc/HashRouter.h>
 #include <ripple/app/misc/LoadFeeTrack.h>
@@ -56,6 +53,7 @@
 #include <ripple/beast/asio/io_latency_probe.h>
 #include <ripple/beast/core/LexicalCast.h>
 #include <ripple/core/DatabaseCon.h>
+#include <ripple/core/Pg.h>
 #include <ripple/core/Stoppable.h>
 #include <ripple/json/json_reader.h>
 #include <ripple/nodestore/DatabaseShard.h>
@@ -233,6 +231,7 @@ public:
 
     std::unique_ptr<GRPCServer> grpcServer_;
     std::unique_ptr<ReportingETL> reportingETL_;
+    std::unique_ptr<TxProxy> txProxy_;
 
     //--------------------------------------------------------------------------
 
@@ -277,10 +276,11 @@ public:
               [this]() { signalStop(); }))
 
         , m_txMaster(*this)
-        , pgPool_ (make_PgPool(config_->section(ConfigSection::networkDb()),
-            logs_->journal("PgPool")))
+        , pgPool_(make_PgPool(
+              config_->section(ConfigSection::networkDb()),
+              logs_->journal("PgPool")))
 
-        , m_nodeStoreScheduler (*this)
+        , m_nodeStoreScheduler(*this)
         , m_shaMapStore(make_SHAMapStore(
               *this,
               *this,
@@ -450,6 +450,7 @@ public:
               get_io_service())
         , grpcServer_(std::make_unique<GRPCServer>(*this))
         , reportingETL_(std::make_unique<ReportingETL>(*this, *m_ledgerMaster))
+        , txProxy_(std::make_unique<TxProxy>(*this))
     {
         add(m_resourceManager.get());
 
@@ -862,8 +863,14 @@ public:
         return *mWalletDB;
     }
 
-    bool
-    serverOkay(std::string& reason) override;
+    TxProxy&
+    getTxProxy() override
+    {
+        assert(txProxy_.get() != nullptr);
+        return *txProxy_;
+    }
+
+    bool serverOkay (std::string& reason) override;
 
     beast::Journal
     journal(std::string const& name) override;

@@ -19,7 +19,7 @@
 
 #include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/main/Application.h>
-#include <ripple/app/main/ReportingETL.h>
+#include <ripple/app/main/TxProxy.h>
 #include <ripple/app/misc/NetworkOPs.h>
 #include <ripple/basics/Log.h>
 #include <ripple/basics/PerfLog.h>
@@ -213,9 +213,9 @@ callMethod(
 Status
 doCommand(RPC::JsonContext& context, Json::Value& result)
 {
-    if (shouldForwardToTx(context))
+    if (context.app.getTxProxy().shouldForwardToTx(context))
     {
-        result = forwardToTx(context);
+        result = context.app.getTxProxy().forwardToTx(context);
         // this return value is ignored
         return rpcSUCCESS;
     }
