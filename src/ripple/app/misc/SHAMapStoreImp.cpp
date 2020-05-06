@@ -690,19 +690,18 @@ SHAMapStoreImp::clearPrior(LedgerIndex lastRotated)
     if (app_.config().usePostgresTx())
     {
         assert(app_.pgPool());
-        std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
 
         std::string sql =
             "SELECT prepare_delete(" + std::to_string(lastRotated) + ");";
 
-        auto res = pg->querySync(sql.data());
+        auto res = doQuery(app_.pgPool(), sql.data());
         auto result = PQresultStatus(res.get());
         journal_.debug() << "clearPrior - postgres result = " << result;
         assert(result == PGRES_TUPLES_OK);
 
         sql = "SELECT online_delete(" + std::to_string(lastRotated) + ");";
 
-        res = pg->querySync(sql.data());
+        res = doQuery(app_.pgPool(), sql.data());
         result = PQresultStatus(res.get());
         journal_.debug() << "clearPrior - postgres result = " << result;
         assert(result == PGRES_TUPLES_OK);

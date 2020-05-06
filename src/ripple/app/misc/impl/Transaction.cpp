@@ -128,15 +128,13 @@ Transaction::load(
 uint32_t
 Transaction::getLedgerSeq(uint256 const& id, Application& app)
 {
-    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app.pgPool());
-
     auto baseCmd = boost::format(
         R"(SELECT tx('%s');)");
 
     std::string txHash = "\\x" + strHex(id);
     std::string sql = boost::str(baseCmd % txHash);
 
-    auto res = pg->querySync(sql.data());
+    auto res = doQuery(app.pgPool(), sql.data());
 
     assert(PQntuples(res.get()) == 1);
     // TODO this should be two

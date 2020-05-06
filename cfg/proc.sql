@@ -139,9 +139,8 @@ $$ LANGUAGE plpgsql;
 -- that protect the bottom of the range from deletion. Return NULL if empty.
 CREATE OR REPLACE FUNCTION min_ledger () RETURNS bigint AS $$
 DECLARE
-    _min_seq bigint;
+    _min_seq bigint := (SELECT ledger_seq from min_seq);
 BEGIN
-    _min_seq := (SELECT ledger_seq from min_seq);
     IF _min_seq IS NULL THEN
         RETURN (SELECT ledger_seq FROM ledgers ORDER BY ledger_seq ASC LIMIT 1);
     ELSE
@@ -178,6 +177,37 @@ BEGIN
     RETURN _ret;
 END;
 $$ LANGUAGE plpgsql;
+
+/*
+ * account_tx helper. From the rippled reporting process, only the
+ * parameters without defaults are required. For the parameters with
+ * defaults, validation should be done by rippled, such as:
+ * _in_account_id should be a valid xrp base58 address.
+ * _in_forward either true or false according to the published api
+ * _in_limit should be validated and not simply passed through from
+ *     client.
+ *
+ * For _in_ledger_index_min and _in_ledger_index_max, if passed in the
+ * request, verify that their type is int and pass through as is.
+ * For _ledger_hash, verify and convert from hex length 32 bytes and
+ * prepend with \x ("\\x" C++).
+ *
+ * For _in_ledger_index, if the input type is integer, then pass through
+ * as is. If the type is string and contents = validated, then do not
+ * set _in_ledger_index. Instead set _in_invalidated to TRUE.
+ *
+ * There is no need for rippled to do any type of lookup on max/min
+ * ledger range, lookup of hash, or the like. This functions does those
+ * things, including error responses if bad input. Only the above must
+ * be done to set the correct search range.
+ *
+ * If a marker is present in the request, verify the members "ledger"
+ * and "seq" are integers and they correspond to _in_marker_seq
+ * _in_marker_index.
+ * To reiterate:
+ * JSON input field "ledger" corresponds to _in_marker_seq
+ * JSON input field "seq" corresponds to _in_marker_index
+ */
 
 CREATE OR REPLACE FUNCTION account_tx (
     _in_account_id bytea,
@@ -223,7 +253,7 @@ BEGIN
     ELSIF _in_ledger_hash IS NOT NULL OR _in_ledger_index IS NOT NULL
             OR _in_validated IS TRUE THEN
         IF _in_ledger_hash IS NOT NULL THEN
-            IF length(_in_ledger_hash) != 20 THEN
+            IF length(_in_ledger_hash) != 32 THEN
                 RETURN jsonb_build_object('error', '_in_ledger_hash size: '
                     || to_char(length(_in_ledger_hash), '999'));
             END IF;
@@ -593,17 +623,17 @@ CREATE TRIGGER min_seq_trigger BEFORE INSERT ON min_seq
     FOR EACH ROW EXECUTE PROCEDURE delete_min_seq();
 
 -- Set the minimum sequence for use in ranged queries with protection
--- against deletion to 1 greater than the input parameter. This
+-- against deletion greater than or equal to the input parameter. This
 -- should be called prior to online_delete() with the same parameter
 -- value so that online_delete() is not blocked by range queries
 -- that are protected against concurrent deletion of the ledger at
 -- the bottom of the range. This function needs to be called from a 
 -- separate transaction from that which executes online_delete().
 CREATE OR REPLACE FUNCTION prepare_delete (
-    _in_can_delete bigint
+    _in_last_rotated bigint
 ) RETURNS void AS $$
 BEGIN
-    INSERT INTO min_seq VALUES (_in_can_delete + 1);
+    INSERT INTO min_seq VALUES (_in_last_rotated + 1);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -732,6 +762,15 @@ BEGIN
                         FROM ledgers
                        ORDER BY ledger_seq DESC
                        LIMIT 1)))::bigint;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION complete_ledgers () RETURNS text AS $$
+DECLARE
+    _min bigint = min_ledger();
+BEGIN
+    IF _min IS NULL THEN RETURN 'empty'; END IF;
+    RETURN _min || '-' || max_ledger();
 END;
 $$ LANGUAGE plpgsql;
 

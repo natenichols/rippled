@@ -363,6 +363,16 @@ public:
 std::shared_ptr<PgPool> make_PgPool(Section const& network_db_config,
     beast::Journal const j);
 
+// PgQuery should be a shared_ptr to enable shared_from_this() for async
+// calls. This function simplifies one-off calls to PgQuery->querySync().
+template <class T>
+pg_result_type
+doQuery(std::shared_ptr<PgPool>& pgPool, T const& cmd)
+{
+    std::shared_ptr<PgQuery> pgQuery = std::make_shared<PgQuery>(pgPool);
+    return pgQuery->querySync(cmd);
+}
+
 std::optional<std::pair<std::string, std::string>>
 no2pg(std::shared_ptr<NodeObject> const& no);
 

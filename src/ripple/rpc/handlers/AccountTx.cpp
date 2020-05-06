@@ -400,8 +400,6 @@ processAccountTxStoredProcedureResult(
 std::pair<AccountTxResult, RPC::Status>
 doAccountTxStoredProcedure(AccountTxArgs const& args, RPC::Context& context)
 {
-    std::shared_ptr<PgQuery> pg =
-        std::make_shared<PgQuery>(context.app.pgPool());
     JLOG(context.j.debug()) << "doTxStoredProcedure - starting";
 
     pg_params dbParams;
@@ -463,7 +461,7 @@ doAccountTxStoredProcedure(AccountTxArgs const& args, RPC::Context& context)
                                 << (values[i] ? values[i].value() : "null");
     }
 
-    auto res = pg->querySync(dbParams);
+    auto res = doQuery(context.app.pgPool(), dbParams);
     assert(PQntuples(res.get()) == 1);
     assert(PQnfields(res.get()) == 1);
 
