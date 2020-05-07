@@ -755,7 +755,7 @@ $$ LANGUAGE plpgsql;
 -- Note that ledgers.closing_time is number of seconds since the XRP
 -- epoch, which is 01/01/2000 00:00:00. This in turn is 946684800 seconds
 -- after the UNIX epoch.
-CREATE OR REPLACE FUNCTION lag () RETURNS bigint AS $$
+CREATE OR REPLACE FUNCTION age () RETURNS bigint AS $$
 BEGIN
     RETURN (EXTRACT(EPOCH FROM (now())) -
         (946684800 + (SELECT closing_time
@@ -767,10 +767,12 @@ $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION complete_ledgers () RETURNS text AS $$
 DECLARE
-    _min bigint = min_ledger();
+    _min bigint := min_ledger();
+    _max bigint := max_ledger();
 BEGIN
     IF _min IS NULL THEN RETURN 'empty'; END IF;
-    RETURN _min || '-' || max_ledger();
+    IF _min = _max THEN RETURN _min; END IF;
+    RETURN _min || '-' || _max;
 END;
 $$ LANGUAGE plpgsql;
 

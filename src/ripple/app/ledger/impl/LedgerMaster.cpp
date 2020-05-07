@@ -53,6 +53,7 @@
 #include <algorithm>
 #include <cassert>
 #include <limits>
+#include <chrono>
 #include <memory>
 #include <vector>
 
@@ -269,19 +270,34 @@ std::chrono::seconds
 LedgerMaster::getValidatedLedgerAge()
 {
     using namespace std::chrono_literals;
-    std::chrono::seconds valClose{mValidLedgerSign.load()};
-    if (valClose == 0s)
+
+    if (app_.config().usePostgresTx())
     {
-        JLOG(m_journal.debug()) << "No validated ledger";
-        return NO_VALIDATED_LEDGER_AGE;
+        auto age = doQuery(app_.pgPool(), "SELECT age()");
+        if (!age || PQgetisnull(age.get(), 0, 0))
+        {
+            JLOG(m_journal.debug()) << "No ledgers in database";
+            return weeks{2};
+        }
+        return std::chrono::seconds{std::atoi(PQgetvalue(age.get(), 0, 0))};
     }
+    else
+    {
+        std::chrono::seconds valClose{mValidLedgerSign.load()};
+        if (valClose == 0s)
+        {
+            JLOG(m_journal.debug()) << "No validated ledger";
+            return weeks{2};
+        }
 
-    std::chrono::seconds ret = app_.timeKeeper().closeTime().time_since_epoch();
-    ret -= valClose;
-    ret = (ret > 0s) ? ret : 0s;
+        std::chrono::seconds ret =
+            app_.timeKeeper().closeTime().time_since_epoch();
+        ret -= valClose;
+        ret = (ret > 0s) ? ret : 0s;
 
-    JLOG(m_journal.trace()) << "Validated ledger age is " << ret.count();
-    return ret;
+        JLOG(m_journal.trace()) << "Validated ledger age is " << ret.count();
+        return ret;
+    }
 }
 
 bool
@@ -1533,6 +1549,21 @@ LedgerMaster::getCurrentLedger()
 {
     return app_.openLedger().current();
 }
+
+std::shared_ptr<Ledger const>
+LedgerMaster::getValidatedLedger ()
+{
+    if (app_.config().usePostgresTx())
+    {
+        auto seq = doQuery(app_.pgPool(), "SELECT max_ledger()");
+        if (!seq || PQgetisnull(seq.get(), 0, 0))
+            return {};
+        return getLedgerBySeq(std::atoi(PQgetvalue(seq.get(), 0, 0)));
+    }
+    return mValidLedger.get();
+}
+
+
 
 Rules
 LedgerMaster::getValidatedRules()
