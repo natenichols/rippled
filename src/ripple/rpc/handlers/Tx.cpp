@@ -146,6 +146,7 @@ doTxReporting(RPC::Context& context, TxArgs const& args)
     }
     std::string reason;
     res.txn = std::make_shared<Transaction>(sttx, reason, context.app);
+    res.txn->setLedger(ledgerSequence);
     if (args.binary)
     {
         // TODO this is not the most efficient

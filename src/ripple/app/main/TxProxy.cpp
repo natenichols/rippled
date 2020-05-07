@@ -155,7 +155,7 @@ TxProxy::shouldForwardToTx(RPC::JsonContext& context)
     }
     // TODO consider forwarding sequence values greater than the
     // latest sequence we have
-    if (params.isMember(jss::index))
+    if (params.isMember(jss::ledger_index))
     {
         auto indexValue = params[jss::ledger_index];
         if (!indexValue.isNumeric())
