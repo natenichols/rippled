@@ -393,6 +393,7 @@ public:
         std::cout << "starting reporting etl" << std::endl;
         assert(app_.config().reporting());
         assert(app_.config().standalone());
+        assert(!app_.config().reportingReadOnly());
         if (!stub_)
         {
             std::cout << "stub not created. aborting reporting etl"

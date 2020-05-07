@@ -836,6 +836,7 @@ void
 ReportingETL::truncateDBs()
 {
     assert(app_.pgPool());
+    assert(!app_.config().reportingReadOnly());
     std::shared_ptr<PgQuery> pgQuery = std::make_shared<PgQuery>(app_.pgPool());
 
     auto res = pgQuery->querySync("truncate ledgers cascade;");

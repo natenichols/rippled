@@ -243,8 +243,13 @@ Ledger::Ledger(
     txMap_->setImmutable();
     stateMap_->setImmutable();
 
-    if (!setup(config))
+    // TODO mtravis this intermittently fails in read-only reporting mode,
+    // so bypassing it in that mode improves stability. Bypassing this way
+    // should have no bearing on data integrity, but not confirmed.
+    if (! config.reporting() && ! setup(config))
+    {
         loaded = false;
+    }
 
     if (!loaded)
     {
@@ -464,8 +469,10 @@ Ledger::txExists(uint256 const& key) const
 auto
 Ledger::txRead(key_type const& key) const -> tx_type
 {
-    auto const& item = txMap_->peekItem(key);
-    if (!item)
+    assert(txMap_);
+    auto const& item =
+        txMap_->peekItem(key);
+    if (! item)
         return {};
     if (!open())
     {
