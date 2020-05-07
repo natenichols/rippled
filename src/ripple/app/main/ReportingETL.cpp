@@ -982,15 +982,20 @@ ReportingETL::doETL()
 
     flushLedger();
 
-    storeLedger();
-
     if (app_.config().usePostgresTx())
         writeToPostgres(ledger_->info(), metas);
+
+    storeLedger();
 
     outputMetrics();
 
     if (checkConsistency_)
+    {
+        // need to sync here, so ledger header is written to nodestore
+        // before consistency check
+        app_.getNodeStore().sync();
         assert(consistencyCheck());
+    }
 }
 
 void

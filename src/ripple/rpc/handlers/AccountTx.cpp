@@ -311,7 +311,7 @@ processAccountTxStoredProcedureResult(
                         if (!ledger)
                         {
                             JLOG(context.j.error())
-                                << "doTxStoredProcedure - "
+                                << "doAccountTxStoredProcedure - "
                                 << "could not find ledger with sequence = "
                                 << ledgerSequence;
                             continue;
@@ -319,8 +319,9 @@ processAccountTxStoredProcedureResult(
                         if (args.binary)
                         {
                             auto const item = ledger->txMap().peekItem(txID);
-                            JLOG(context.j.debug()) << "doTxStoredProcedure - "
-                                                    << "id = " << strHex(txID);
+                            JLOG(context.j.debug())
+                                << "doAccountTxStoredProcedure - "
+                                << "id = " << strHex(txID);
                             if (item)
                             {
                                 SerialIter it(item->slice());
@@ -332,7 +333,7 @@ processAccountTxStoredProcedureResult(
                             else
                             {
                                 JLOG(context.j.debug())
-                                    << "doTxStoredProcedure - "
+                                    << "doAccountTxStoredProcedure - "
                                     << "item is null: hash = " << strHex(txID);
                             }
                         }
@@ -342,7 +343,7 @@ processAccountTxStoredProcedureResult(
                             if (!txn || !meta)
                             {
                                 JLOG(context.j.error())
-                                    << "doTxStoredProcedure - "
+                                    << "doAccountTxStoredProcedure - "
                                     << "could not find txn in ledger. id = "
                                     << strHex(txID) << " . ledger sequence = "
                                     << ledgerSequence;
@@ -360,13 +361,13 @@ processAccountTxStoredProcedureResult(
                     }
                     else
                     {
-                        JLOG(context.j.debug()) << "doTxStoredProcedure"
+                        JLOG(context.j.debug()) << "doAccountTxStoredProcedure"
                                                 << "bad tx hash : " << idHex;
                     }
                 }
                 else
                 {
-                    JLOG(context.j.debug()) << "doTxStoredProcedure"
+                    JLOG(context.j.debug()) << "doAccountTxStoredProcedure"
                                             << "Missing trans_id or ledger_seq";
                 }
             }
@@ -395,7 +396,7 @@ processAccountTxStoredProcedureResult(
         }
         else if (result.isMember("error"))
         {
-            JLOG(context.j.debug()) << "doTxStoredProcedure"
+            JLOG(context.j.debug()) << "doAccountTxStoredProcedure"
                                     << "Error";
             return {ret,
                     RPC::Status{rpcINVALID_PARAMS, result["error"].asString()}};
@@ -408,7 +409,7 @@ processAccountTxStoredProcedureResult(
     }
     catch (std::exception& e)
     {
-        JLOG(context.j.debug()) << "doTxStoredProcedure"
+        JLOG(context.j.debug()) << "doAccountTxStoredProcedure"
                                 << "Caught exception : " << e.what();
         return {ret, rpcINTERNAL};
     }
@@ -417,7 +418,8 @@ processAccountTxStoredProcedureResult(
 std::pair<AccountTxResult, RPC::Status>
 doAccountTxStoredProcedure(AccountTxArgs const& args, RPC::Context& context)
 {
-    JLOG(context.j.debug()) << "doTxStoredProcedure - starting";
+
+    JLOG(context.j.debug()) << "doAccountTxStoredProcedure - starting";
 
     pg_params dbParams;
 
@@ -461,7 +463,7 @@ doAccountTxStoredProcedure(AccountTxArgs const& args, RPC::Context& context)
         }
         else
         {
-            JLOG(context.j.error()) << "doTxStoredProcedure - "
+            JLOG(context.j.error()) << "doAccountTxStoredProcedure - "
                                     << "Error parsing ledger args";
             return {};
         }
@@ -485,18 +487,18 @@ doAccountTxStoredProcedure(AccountTxArgs const& args, RPC::Context& context)
     assert(
         PQresultStatus(res.get()) == PGRES_TUPLES_OK ||
         PQresultStatus(res.get()) == PGRES_SINGLE_TUPLE);
-    JLOG(context.j.debug()) << "doTxStoredProcedure - "
+    JLOG(context.j.debug()) << "doAccountTxStoredProcedure - "
                             << "result status = " << PQresultStatus(res.get());
     if (PQgetisnull(res.get(), 0, 0))
     {
-        JLOG(context.j.debug()) << "doTxStoredProcedure - "
+        JLOG(context.j.debug()) << "doAccountTxStoredProcedure - "
                                 << "result is null";
         return {};
     }
 
     char const* resultStr = PQgetvalue(res.get(), 0, 0);
 
-    JLOG(context.j.debug()) << "doTxStoredProcedure - "
+    JLOG(context.j.debug()) << "doAccountTxStoredProcedure - "
                             << "postgres result = " << resultStr;
 
     // TODO this is probably not the most efficient way to do this
