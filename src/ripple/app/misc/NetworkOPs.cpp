@@ -2852,7 +2852,6 @@ NetworkOPsImp::pubProposedTransaction(
     pubAccountTransaction(lpCurrent, alt, false);
 }
 
-// TODO call this from ReportingETL
 void NetworkOPsImp::pubLedger (
     std::shared_ptr<ReadView const> const& lpAccepted)
 {
@@ -2870,7 +2869,9 @@ void NetworkOPsImp::pubLedger (
     }
 
     {
-        std::lock_guard sl(mSubLock);
+        JLOG(m_journal.debug())
+            << "Publishing ledger = " << lpAccepted->info().seq;
+        std::lock_guard sl (mSubLock);
 
         if (!mStreamMaps[sLedger].empty())
         {
@@ -2903,7 +2904,11 @@ void NetworkOPsImp::pubLedger (
                 InfoSub::pointer p = it->second.lock();
                 if (p)
                 {
-                    p->send(jvObj, true);
+                    JLOG(m_journal.debug())
+                        << "Publishing ledger = " << lpAccepted->info().seq
+                        << " : consumer = " << p->getConsumer()
+                        << " : obj = " << jvObj;
+                    p->send (jvObj, true);
                     ++it;
                 }
                 else
@@ -2920,6 +2925,7 @@ void NetworkOPsImp::pubLedger (
         pubValidatedTransaction(lpAccepted, *accTx);
     }
 }
+
 
 void
 NetworkOPsImp::reportFeeChange()

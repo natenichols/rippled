@@ -1,4 +1,3 @@
-
 //------------------------------------------------------------------------------
 /*
     This file is part of rippled: https://github.com/ripple/rippled
@@ -20,9 +19,9 @@
 
 #include <ripple/app/main/ReportingETL.h>
 
+#include <ripple/core/Pg.h>
 #include <ripple/json/json_reader.h>
 #include <ripple/json/json_writer.h>
-#include <ripple/core/Pg.h>
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/core.hpp>
@@ -33,280 +32,10 @@
 
 namespace ripple {
 
-std::vector<uint256> getMarkers(size_t numMarkers)
-{
-    assert(numMarkers <=  256);
-
-    unsigned char incr = 256 / numMarkers;
-
-    std::vector<uint256> markers;
-    uint256 base{0};
-    for(size_t i = 0; i < numMarkers; ++i)
-    {
-        markers.push_back(base);
-        base.data()[0] += incr;
-    }
-    return markers;
-}
-
-void
-ReportingETL::doSubscribe()
-{
-    namespace beast = boost::beast;          // from <boost/beast.hpp>
-    namespace http = beast::http;            // from <boost/beast/http.hpp>
-    namespace websocket = beast::websocket;  // from <boost/beast/websocket.hpp>
-    namespace net = boost::asio;             // from <boost/asio.hpp>
-    using tcp = boost::asio::ip::tcp;        // from <boost/asio/ip/tcp.hpp>
-
-    subscriber_ = std::thread([this]() {
-        // Sends a WebSocket message and prints the response
-        // TODO only use async websocket API in this function. Will facilitate
-        // cleaner shutdown. Currently, only the read is async, which allows
-        // onStop() to terminate the async_read. However, the other websocket
-        // calls in this function are synchronous, which doesn't play nice with
-        // async_close (called in onStop()). Using the async API may simplify
-        // the threading model as well (but maybe not).
-        try
-        {
-            auto const host = ip_;
-            auto const port = wsPort_;
-
-            // The io_context is required for all I/O
-            net::io_context ioc;
-
-            // These objects perform our I/O
-            tcp::resolver resolver{ioc};
-
-            JLOG(journal_.debug()) << "Creating subscriber websocket";
-            ws_ = std::make_unique<websocket::stream<tcp::socket>>(ioc);
-
-            // Look up the domain name
-            auto const results = resolver.resolve(host, port);
-
-            JLOG(journal_.debug()) << "Connecting subscriber websocket";
-            // Make the connection on the IP address we get from a lookup
-            net::connect(ws_->next_layer(), results.begin(), results.end());
-
-            // Set a decorator to change the User-Agent of the handshake
-            ws_->set_option(websocket::stream_base::decorator(
-                [](websocket::request_type& req) {
-                    req.set(
-                        http::field::user_agent,
-                        std::string(BOOST_BEAST_VERSION_STRING) +
-                            " websocket-client-coro");
-                }));
-
-            JLOG(journal_.debug())
-                << "Performing subscriber websocket handshake";
-            // Perform the websocket handshake
-            ws_->handshake(host, "/");
-
-            Json::Value jv;
-            jv["command"] = "subscribe";
-
-            jv["streams"] = Json::arrayValue;
-            Json::Value stream("ledger");
-            jv["streams"].append(stream);
-            Json::FastWriter fastWriter;
-
-            JLOG(journal_.debug()) << "Sending subscribe stream message";
-            // Send the message
-            ws_->write(net::buffer(fastWriter.write(jv)));
-
-            JLOG(journal_.info()) << "Starting subscription stream loop";
-            while (not stopping_)
-            {
-                // This buffer will hold the incoming message
-                beast::flat_buffer buffer;
-
-                JLOG(journal_.debug())
-                    << "Calling async read on subscription websocket";
-
-                // Read a message into our buffer
-                ws_->async_read(buffer, [this](auto const& ec, auto size) {
-                    JLOG(journal_.debug()) << "Subscription callback executed."
-                                           << " ec : " << ec;
-                });
-
-                JLOG(journal_.debug())
-                    << "Running io_context in subscription loop";
-                ioc.restart();
-                // Note, this returns when there is no more work to do. Usually,
-                // the only outstanding work is the above async read. So when
-                // ioc.run() returns, the async read has finished (Or the
-                // websocket was closed)
-                ioc.run();
-
-                JLOG(journal_.debug()) << "ioc.run() returned. Reading message";
-                Json::Value response;
-                Json::Reader reader;
-                if (!reader.parse(
-                        static_cast<char const*>(buffer.data().data()),
-                        response))
-                {
-                    JLOG(journal_.error()) << "Error parsing stream message."
-                                           << "Exiting subscribe loop";
-                    return;
-                }
-                JLOG(journal_.info()) << "Received a message on ledger "
-                                      << " subscription stream. Message : "
-                                      << response.toStyledString();
-
-                uint32_t ledgerIndex = 0;
-                // TODO is this index always validated?
-                if (response.isMember("result"))
-                {
-                    if (response["result"].isMember(jss::ledger_index))
-                    {
-                        ledgerIndex =
-                            response["result"][jss::ledger_index].asUInt();
-                    }
-                }
-                else if(response.isMember(jss::ledger_index))
-                {
-                    ledgerIndex = response[jss::ledger_index].asUInt();
-                }
-                if(ledgerIndex != 0)
-                    indexQueue_.push(ledgerIndex);
-            }
-            JLOG(journal_.info()) << "Exited suscribe loop. Stopping queue";
-
-            // TODO should this be where the index queue is stopped from?
-            // indexQueue_.stop();
-
-            // Close the WebSocket connection
-            ws_->close(websocket::close_code::normal);
-
-            // If we get here then the connection is closed gracefully
-        }
-        catch (std::exception const& e)
-        {
-            JLOG(journal_.error())
-                << "Error in subscribe loop. Error : " << e.what();
-            return;
-        }
-    });
-}
-
-struct AsyncCallData
-{
-    std::unique_ptr<org::xrpl::rpc::v1::GetLedgerDataResponse> cur;
-    std::unique_ptr<org::xrpl::rpc::v1::GetLedgerDataResponse> next;
-
-    org::xrpl::rpc::v1::GetLedgerDataRequest request;
-    std::unique_ptr<grpc::ClientContext> context;
-
-    grpc::Status status;
-
-    unsigned char nextPrefix;
-
-    beast::Journal journal_;
-
-    AsyncCallData(
-        uint256& marker,
-        std::optional<uint256> nextMarker,
-        uint32_t seq,
-        beast::Journal& j)
-        : journal_(j)
-    {
-
-        request.mutable_ledger()->set_sequence(seq);
-        if(marker.isNonZero())
-        {
-            request.set_marker(marker.data(), marker.size());
-        }
-        nextPrefix = 0x00;
-        if(nextMarker)
-            nextPrefix = nextMarker->data()[0];
-
-        unsigned char prefix = marker.data()[0];
 
 
-        JLOG(journal_.debug()) << "Setting up AsyncCallData. marker = "
-            << strHex(marker) << " . prefix = "
-            << strHex(prefix) << " . nextPrefix = "
-            << strHex(nextPrefix);
-
-        assert(nextPrefix > prefix || nextPrefix == 0x00); 
-
-        cur = std::make_unique<org::xrpl::rpc::v1::GetLedgerDataResponse>();
-
-        next = std::make_unique<org::xrpl::rpc::v1::GetLedgerDataResponse>();
-
-        context = std::make_unique<grpc::ClientContext>();
-    }
-
-    // TODO change bool to enum. Three possible results. Success + more to do.
-    // Success + finished. Error.
-    bool
-    process(
-        std::shared_ptr<Ledger>& ledger,
-        std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>& stub,
-        grpc::CompletionQueue& cq,
-        ReportingETL::ThreadSafeQueue<std::shared_ptr<SLE>> & queue)
-    {
-        JLOG(journal_.debug()) << "Processing calldata";
-        if (!status.ok())
-        {
-            JLOG(journal_.debug()) << "AsyncCallData status not ok: "
-                                   << " code = " << status.error_code()
-                                   << " message = " << status.error_message();
-            return false;
-        }
-
-        std::swap(cur, next);
-
-        bool more = true;
-
-        //if no marker returned, we are done
-        if (cur->marker().size() == 0)
-            more = false;
-
-        //if returned marker is greater than our end, we are done
-        unsigned char prefix = cur->marker()[0];
-        if (nextPrefix != 0x00 and prefix >= nextPrefix)
-            more = false;
-
-        //if we are not done, make the next async call
-        if(more)
-        {
-            request.set_marker(std::move(cur->marker()));
-            call(stub, cq);
-        }
 
 
-        for (auto& state : cur->state_objects())
-        {
-            auto& index = state.index();
-            auto& data = state.data();
-
-            auto key = uint256::fromVoid(index.data());
-
-            SerialIter it{data.data(), data.size()};
-            std::shared_ptr<SLE> sle = std::make_shared<SLE>(it, key);
-
-            queue.push(sle);
-        }
-
-        return more;
-    }
-
-    void
-    call(
-        std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>& stub,
-        grpc::CompletionQueue& cq)
-    {
-        context = std::make_unique<grpc::ClientContext>();
-
-        std::unique_ptr<grpc::ClientAsyncResponseReader<
-            org::xrpl::rpc::v1::GetLedgerDataResponse>>
-            rpc(stub->PrepareAsyncGetLedgerData(context.get(), request, &cq));
-        
-        rpc->StartCall();
-
-        rpc->Finish(next.get(), &status, this);
-    }
-};
 
 void
 ReportingETL::startWriter()
@@ -314,20 +43,20 @@ ReportingETL::startWriter()
     writer_ = std::thread{[this]() {
         std::shared_ptr<SLE> sle;
         size_t num = 0;
-        //TODO: if this call blocks, flushDirty in the meantime
+        // TODO: if this call blocks, flushDirty in the meantime
         while (not stopping_ and (sle = writeQueue_.pop()))
         {
             assert(sle);
             // TODO get rid of this conditional
-            if(!ledger_->exists(sle->key()))
+            if (!ledger_->exists(sle->key()))
                 ledger_->rawInsert(sle);
 
-            if(flushInterval_ != 0 and (num % flushInterval_) == 0)
+            if (flushInterval_ != 0 and (num % flushInterval_) == 0)
             {
-                JLOG(journal_.debug()) << "Flushing! key = "
-                    << strHex(sle->key());
+                JLOG(journal_.debug())
+                    << "Flushing! key = " << strHex(sle->key());
                 ledger_->stateMap().flushDirty(
-                        hotACCOUNT_NODE, ledger_->info().seq);
+                    hotACCOUNT_NODE, ledger_->info().seq);
             }
             ++num;
         }
@@ -339,11 +68,14 @@ ReportingETL::startWriter()
     }};
 }
 
+
 void
 ReportingETL::loadInitialLedger()
 {
     if (ledger_)
     {
+        JLOG(journal_.info())
+            << "Ledger was loaded from database. Skipping download";
         // The ledger was already loaded. This happens if --load is passed
         // on the command line
         return;
@@ -355,69 +87,11 @@ ReportingETL::loadInitialLedger()
     std::vector<TxMeta> metas;
     updateLedger(response, metas);
 
-    grpc::CompletionQueue cq;
-
-    void* tag;
-
-    bool ok = false;
+    auto start = std::chrono::system_clock::now();
 
     startWriter();
 
-    std::vector<AsyncCallData> calls;
-    std::vector<uint256> markers{getMarkers(numMarkers_)};
-
-    // TODO handle queue finishing
-    auto idx = ledger_->info().seq;
-
-    for(size_t i = 0; i < markers.size(); ++i)
-    {
-        std::optional<uint256> nextMarker;
-        if(i+1 < markers.size())
-            nextMarker = markers[i+1];
-        calls.emplace_back(markers[i], nextMarker, idx, journal_);
-    }
-
-    JLOG(journal_.debug()) << "Starting data download for ledger " << idx;
-
-    auto start = std::chrono::system_clock::now();
-    for(auto& c : calls)
-        c.call(stub_, cq);
-
-    size_t numFinished = 0;
-    while(numFinished < calls.size() and not stopping_ and cq.Next(&tag, &ok))
-    {
-        assert(tag);
-
-        auto ptr = static_cast<AsyncCallData*>(tag);
-
-        if(!ok)
-        {
-            //handle cancelled
-        }
-        else
-        {
-            if(ptr->next->marker().size() != 0)
-            {
-                std::string prefix{ptr->next->marker().data()[0]};
-                JLOG(journal_.debug()) << "Marker prefix = " << strHex(prefix);
-            }
-            else
-            {
-                JLOG(journal_.debug()) << "Empty marker";
-            }
-            if (!ptr->process(ledger_, stub_, cq, writeQueue_))
-            {
-                numFinished++;
-                JLOG(journal_.debug())
-                    << "Finished a marker. "
-                    << "Current number of finished = " << numFinished;
-            }
-        }
-    }
-    auto interim = std::chrono::system_clock::now();
-    JLOG(journal_.debug()) << "Time to download ledger = "
-                           << ((interim - start).count()) / 1000000000.0
-                           << " seconds";
+    loadBalancer_.loadInitialLedger(ledger_, writeQueue_);
     joinWriter();
     // TODO handle case when there is a network error (other side dies)
     // Shouldn't try to flush in that scenario
@@ -454,23 +128,23 @@ ReportingETL::flushLedger()
 
     ledger_->setImmutable(app_.config(), false);
 
-    auto numFlushed = ledger_->stateMap().flushDirty(
-        hotACCOUNT_NODE, ledger_->info().seq);
+    auto numFlushed =
+        ledger_->stateMap().flushDirty(hotACCOUNT_NODE, ledger_->info().seq);
 
-    auto numTxFlushed = ledger_->txMap().flushDirty(
-        hotTRANSACTION_NODE, ledger_->info().seq);
+    auto numTxFlushed =
+        ledger_->txMap().flushDirty(hotTRANSACTION_NODE, ledger_->info().seq);
 
     JLOG(journal_.debug()) << "Flushed " << numFlushed
-        << " nodes to nodestore from stateMap";
+                           << " nodes to nodestore from stateMap";
     JLOG(journal_.debug()) << "Flushed " << numTxFlushed
-        << " nodes to nodestore from txMap";
+                           << " nodes to nodestore from txMap";
 
     app_.getNodeStore().sync();
     JLOG(journal_.debug()) << "synced nodestore";
 
     assert(numFlushed != 0 or roundMetrics.objectCount == 0);
-    assert(numTxFlushed!= 0 or roundMetrics.txnCount == 0);
-    
+    assert(numTxFlushed != 0 or roundMetrics.txnCount == 0);
+
     auto end = std::chrono::system_clock::now();
 
     roundMetrics.flushTime = ((end - start).count()) / 1000000000.0;
@@ -622,10 +296,14 @@ ReportingETL::storeLedger()
     JLOG(journal_.debug()) << "Storing ledger = " << ledger_->info().seq;
     auto start = std::chrono::system_clock::now();
 
-    app_.getLedgerMaster().storeLedger(ledger_);
-    JLOG(journal_.debug()) << "switch lcl ledger = " << ledger_->info().seq;
+    {
+        Serializer s (128);
+        s.add32 (HashPrefix::ledgerMaster);
+        addRaw(ledger_->info(), s);
+        app_.getNodeStore().store(hotLEDGER,
+            std::move(s.modData()), ledger_->info().hash, ledger_->info().seq);
+    }
 
-    app_.getLedgerMaster().switchLCL(ledger_);
 
     auto end = std::chrono::system_clock::now();
 
@@ -637,13 +315,43 @@ ReportingETL::storeLedger()
                            << " = " << roundMetrics.storeTime;
 }
 
+void
+ReportingETL::publishLedger()
+{
+    app_.getOPs().pubLedger(ledger_);
+}
+
+void
+ReportingETL::publishLedger(uint32_t ledgerSequence)
+{
+    size_t numAttempts = 0;
+    while (!stopping_)
+    {
+        auto ledger = app_.getLedgerMaster().getLedgerBySeq(ledgerSequence);
+
+        if (!ledger)
+        {
+            JLOG(journal_.error())
+                << "Trying to publish. Could not find ledger = "
+                << ledgerSequence;
+            // try once per second for 20 seconds
+            // then back off to try once per 4 seconds
+            auto seconds = numAttempts < 20 ? 1 : 4;
+            std::this_thread::sleep_for(std::chrono::seconds(seconds));
+            ++numAttempts;
+            continue;
+        }
+        app_.getOPs().pubLedger(ledger);
+        JLOG(journal_.info()) << "Published ledger - " << ledgerSequence;
+        return;
+    }
+}
+
 bool
 ReportingETL::fetchLedger(
     org::xrpl::rpc::v1::GetLedgerResponse& out,
     bool getObjects)
 {
-    // ledger header with txns and metadata
-    org::xrpl::rpc::v1::GetLedgerRequest request;
 
     auto idx = indexQueue_.pop();
     // 0 represents the queue is shutting down
@@ -654,38 +362,14 @@ ReportingETL::fetchLedger(
     }
 
     if (ledger_)
-        assert(idx = ledger_->info().seq + 1);
+        assert(idx == ledger_->info().seq + 1);
 
-    request.mutable_ledger()->set_sequence(idx);
-    request.set_transactions(true);
-    request.set_expand(true);
-    request.set_get_objects(getObjects);
+    JLOG(journal_.info()) << "Attempting to fetch ledger = " << idx;
 
-    // TODO make sure this stopping logic is correct. Maybe return a bool?
-    while (not stopping_)
-    {
-        grpc::ClientContext context;
-        auto start = std::chrono::system_clock::now();
-        grpc::Status status = stub_->GetLedger(&context, request, &out);
-        auto end = std::chrono::system_clock::now();
-        if (status.ok() and out.validated())
-        {
-            JLOG(journal_.debug()) << "Fetch time for ledger " << idx << " = "
-                                   << (end - start).count();
-            break;
-        }
-        else
-        {
-            JLOG(journal_.warn()) << "Error getting ledger = " << idx
-                                  << " Reply : " << out.DebugString()
-                                  << " error_code : " << status.error_code()
-                                  << " error_msg : " << status.error_message()
-                                  << " sleeping for two seconds...";
-            std::this_thread::sleep_for(std::chrono::seconds(2));
-        }
-    }
+    auto res = loadBalancer_.fetchLedger(out, idx, getObjects);
+
     JLOG(journal_.trace()) << "GetLedger reply : " << out.DebugString();
-    return not stopping_;
+    return res;
 }
 
 void
@@ -711,8 +395,7 @@ ReportingETL::updateLedger(
     }
     else
     {
-        ledger_ =
-            std::make_shared<Ledger>(*ledger_, NetClock::time_point{});
+        ledger_ = std::make_shared<Ledger>(*ledger_, NetClock::time_point{});
         ledger_->setLedgerInfo(lgrInfo);
     }
 
@@ -729,9 +412,8 @@ ReportingETL::updateLedger(
 
         auto txSerializer = std::make_shared<Serializer>(sttx.getSerializer());
 
-        TxMeta txMeta{sttx.getTransactionID(),
-                      ledger_->info().seq,
-                      txn.metadata_blob()};
+        TxMeta txMeta{
+            sttx.getTransactionID(), ledger_->info().seq, txn.metadata_blob()};
 
         auto metaSerializer =
             std::make_shared<Serializer>(txMeta.getAsObject().getSerializer());
@@ -741,7 +423,7 @@ ReportingETL::updateLedger(
         ledger_->rawTxInsert(
             sttx.getTransactionID(), txSerializer, metaSerializer);
 
-        //TODO use emplace to avoid this copy
+        // TODO use emplace to avoid this copy
         out.push_back(txMeta);
     }
 
@@ -806,25 +488,18 @@ writeToLedgersDB(
     std::shared_ptr<Pg>& conn,
     beast::Journal& journal)
 {
-
     auto cmd = boost::format(
-            R"(INSERT INTO ledgers 
+        R"(INSERT INTO ledgers 
                 VALUES(%u,'\x%s', '\x%s',%u,%u,%u,%u,%u,'\x%s','\x%s')
                 )");
 
-    auto ledgerInsert = boost::str(cmd 
-            % info.seq 
-            % strHex(info.hash) 
-            % strHex(info.parentHash)
-            % info.drops.drops() 
-            % info.closeTime.time_since_epoch().count() 
-            % info.parentCloseTime.time_since_epoch().count()
-            % info.closeTimeResolution.count() 
-            % info.closeFlags 
-            % strHex(info.accountHash)
-            % strHex(info.txHash)
-            );
-    JLOG(journal.debug()) << "writeToTxDB - ledgerInsert = " << ledgerInsert;
+    auto ledgerInsert = boost::str(
+        cmd % info.seq % strHex(info.hash) % strHex(info.parentHash) %
+        info.drops.drops() % info.closeTime.time_since_epoch().count() %
+        info.parentCloseTime.time_since_epoch().count() %
+        info.closeTimeResolution.count() % info.closeFlags %
+        strHex(info.accountHash) % strHex(info.txHash));
+    JLOG(journal.trace()) << "writeToTxDB - ledgerInsert = " << ledgerInsert;
     auto res = pgQuery->querySync(ledgerInsert.data());
 
     assert(res);
@@ -841,22 +516,22 @@ ReportingETL::truncateDBs()
 
     auto res = pgQuery->querySync("truncate ledgers cascade;");
     auto result = PQresultStatus(res.get());
-    JLOG(journal_.debug()) << "truncateDBs - result : " << result;
+    JLOG(journal_.trace()) << "truncateDBs - result : " << result;
     assert(result == PGRES_COMMAND_OK);
 
     res = pgQuery->querySync("truncate account_transactions;");
     result = PQresultStatus(res.get());
-    JLOG(journal_.debug()) << "truncateDBs - result : " << result;
+    JLOG(journal_.trace()) << "truncateDBs - result : " << result;
     assert(result == PGRES_COMMAND_OK);
 
     res = pgQuery->querySync("truncate min_seq;");
     result = PQresultStatus(res.get());
-    JLOG(journal_.debug()) << "truncateDBs - result : " << result;
+    JLOG(journal_.trace()) << "truncateDBs - result : " << result;
     assert(result == PGRES_COMMAND_OK);
 
     res = pgQuery->querySync("truncate ancestry_verified;");
     result = PQresultStatus(res.get());
-    JLOG(journal_.debug()) << "truncateDBs - result : " << result;
+    JLOG(journal_.trace()) << "truncateDBs - result : " << result;
     assert(result == PGRES_COMMAND_OK);
 
     numLedgers_ = 0;
@@ -875,11 +550,11 @@ writeToAccountTransactionsDB(
     auto result = PQresultStatus(res.get());
     assert(result == PGRES_COPY_IN);
 
-    JLOG(journal.debug()) << "writeToTxDB - COPY result = " << result;
+    JLOG(journal.trace()) << "writeToTxDB - COPY result = " << result;
 
     // Write data to stream
     std::stringstream copyBuffer;
-    for(auto& m : metas)
+    for (auto& m : metas)
     {
         std::string txHash = strHex(m.getTxID());
         auto idx = m.getIndex();
@@ -891,9 +566,9 @@ writeToAccountTransactionsDB(
             copyBuffer << "\\\\x" << acct << '\t' << std::to_string(ledgerSeq)
                        << '\t' << std::to_string(idx) << '\t' << "\\\\x"
                        << txHash << '\n';
-            JLOG(journal.debug()) << acct;
+            JLOG(journal.trace()) << acct;
             /*
-            JLOG(journal.debug())
+            JLOG(journal.trace())
                 << "writing to account_transactions - "
                 << " account = " << acct << " ledgerSeq = " << ledgerSeq
                 << " idx = " << idx;
@@ -901,11 +576,10 @@ writeToAccountTransactionsDB(
         }
     }
 
-
     PQsetnonblocking(conn->getConn(), 0);
 
     std::string bufString = copyBuffer.str();
-    JLOG(journal.debug()) << "copy buffer = " << bufString;
+    JLOG(journal.trace()) << "copy buffer = " << bufString;
 
     // write the data to Postgres
     auto resCode =
@@ -913,7 +587,7 @@ writeToAccountTransactionsDB(
 
     auto pqResult = PQgetResult(conn->getConn());
     auto pqResultStatus = PQresultStatus(pqResult);
-    JLOG(journal.debug()) << "putCopyData - resultCode = " << resCode
+    JLOG(journal.trace()) << "putCopyData - resultCode = " << resCode
                           << " result = " << pqResultStatus;
     assert(resCode != -1);
     assert(resCode != 0);
@@ -929,7 +603,7 @@ writeToAccountTransactionsDB(
         pqResultStatus = PQresultStatus(pqResult);
     }
 
-    JLOG(journal.debug()) << "putCopyEnd - resultCode = " << resCode
+    JLOG(journal.trace()) << "putCopyEnd - resultCode = " << resCode
                           << " result = " << pqResultStatus
                           << " error_msg = " << PQerrorMessage(conn->getConn());
     assert(resCode != -1);
@@ -943,16 +617,16 @@ ReportingETL::writeToPostgres(
     std::vector<TxMeta>& metas)
 {
     // TODO: clean this up a bit. use less auto, better error handling, etc
-    JLOG(journal_.debug()) << "writeToTxDB";
+    JLOG(journal_.debug()) << "writeToPostgres";
     assert(app_.pgPool());
     std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
     std::shared_ptr<Pg> conn;
-    JLOG(journal_.debug()) << "createdPqQuery";
+    JLOG(journal_.trace()) << "createdPqQuery";
 
     auto res = pg->querySync("BEGIN", conn);
     assert(res);
     auto result = PQresultStatus(res.get());
-    JLOG(journal_.debug()) << "writeToTxDB - BEGIN result = " << result;
+    JLOG(journal_.trace()) << "writeToTxDB - BEGIN result = " << result;
     assert(result == PGRES_COMMAND_OK);
 
     writeToLedgersDB(info, pg, conn, journal_);
@@ -963,7 +637,7 @@ ReportingETL::writeToPostgres(
     assert(res);
     result = PQresultStatus(res.get());
 
-    JLOG(journal_.debug()) << "writeToTxDB - COMMIT result = " << result;
+    JLOG(journal_.trace()) << "writeToTxDB - COMMIT result = " << result;
     assert(result == PGRES_COMMAND_OK);
     PQsetnonblocking(conn->getConn(), 1);
     app_.pgPool()->checkin(conn);
@@ -986,6 +660,8 @@ ReportingETL::doETL()
         writeToPostgres(ledger_->info(), metas);
 
     storeLedger();
+
+    publishLedger();
 
     outputMetrics();
 
@@ -1013,29 +689,146 @@ ReportingETL::outputMetrics()
 void
 ReportingETL::doWork()
 {
-    worker_ = std::thread([this]() {
+    if (app_.config().reportingReadOnly())
+    {
+        // In readOnly mode, the only work that needs to be done is to publish
+        // ledgers to subscription streams when validated
+        worker_ = std::thread([this]() {
+            auto idx = 0;
+            while ((idx = indexQueue_.pop()) != 0)
+            {
+                publishLedger(idx);
+            }
+        });
+    }
+    else
+    {
+        worker_ = std::thread([this]() {
+            JLOG(journal_.info()) << "Downloading initial ledger";
 
-        JLOG(journal_.info()) << "Starting worker";
+            loadInitialLedger();
 
-        JLOG(journal_.info()) << "Downloading initial ledger";
+            JLOG(journal_.info()) << "Done downloading initial ledger";
 
-        loadInitialLedger();
+            // reset after first iteration
+            totalMetrics = {};
+            roundMetrics = {};
 
-        JLOG(journal_.info()) << "Done downloading initial ledger";
+            size_t numLoops = 0;
 
-        // reset after first iteration
-        totalMetrics = {};
-        roundMetrics = {};
-
-        size_t numLoops = 0;
-
-        while (not stopping_)
-        {
-            doETL();
-            numLoops++;
-            if(numLoops == 10)
-                totalMetrics = {};
-        }
-    });
+            while (not stopping_)
+            {
+                doETL();
+                numLoops++;
+                if (numLoops == 10)
+                    totalMetrics = {};
+            }
+        });
+    }
 }
+
+ReportingETL::ReportingETL(Application& app, Stoppable& parent)
+    : Stoppable("ReportingETL", parent)
+    , app_(app)
+    , journal_(app.journal("ReportingETL"))
+    , loadBalancer_(*this)
+    , indexQueue_(journal_)
+{
+    // if present, get endpoint from config
+    if (app_.config().exists("reporting"))
+    {
+        Section section = app_.config().section("reporting");
+
+        JLOG(journal_.debug()) << "Parsing config info";
+
+        std::pair<std::string, bool> ro = section.find("read_only");
+        if (ro.second)
+            app_.config().setReportingReadOnly(ro.first == "true");
+
+        auto& vals = section.values();
+        for (auto& v : vals)
+        {
+            JLOG(journal_.debug()) << "val is " << v;
+            Section source = app_.config().section(v);
+
+            std::pair<std::string, bool> ipPair = source.find("source_ip");
+            if (!ipPair.second)
+                continue;
+
+            std::pair<std::string, bool> wsPortPair =
+                source.find("source_ws_port");
+            if (!wsPortPair.second)
+                continue;
+
+            std::pair<std::string, bool> grpcPortPair =
+                source.find("source_grpc_port");
+            if (!grpcPortPair.second)
+            {
+                // add source without grpc port
+                // used in read-only mode to detect when new ledgers have been
+                // validated. Used for publishing
+                if (app_.config().reportingReadOnly())
+                    loadBalancer_.add(ipPair.first, wsPortPair.first);
+                continue;
+            }
+
+            loadBalancer_.add(
+                ipPair.first, wsPortPair.first, grpcPortPair.first);
+        }
+
+        std::pair<std::string, bool> pgTx = section.find("postgres_tx");
+        if (pgTx.second)
+            app_.config().setUsePostgresTx(pgTx.first == "true");
+
+        // don't need to do any more work if we are in read only mode
+        if (app_.config().reportingReadOnly())
+            return;
+
+        std::pair<std::string, bool> flushInterval =
+            section.find("flush_interval");
+        if (flushInterval.second)
+        {
+            flushInterval_ = std::stoi(flushInterval.first);
+        }
+
+        std::pair<std::string, bool> numMarkers = section.find("num_markers");
+        if (numMarkers.second)
+            numMarkers_ = std::stoi(numMarkers.first);
+
+
+
+        std::pair<std::string, bool> checkConsistency =
+            section.find("check_consistency");
+        if (checkConsistency.second)
+        {
+            checkConsistency_ = (checkConsistency.first == "true");
+        }
+
+        if (checkConsistency_)
+        {
+            initNumLedgers();
+
+            Section nodeDb = app_.config().section("node_db");
+            std::pair<std::string, bool> onlineDelete =
+                nodeDb.find("online_delete");
+            if (onlineDelete.second)
+                checkRange_ = false;
+            else
+                checkRange_ = true;
+
+            std::pair<std::string, bool> postgresNodestore =
+                nodeDb.find("type");
+            // if the node_db is not using Postgres, we don't check for
+            // consistency
+            if (!postgresNodestore.second ||
+                !boost::beast::iequals(postgresNodestore.first, "Postgres"))
+                checkConsistency_ = false;
+            // if we are not using postgres in place of SQLite, we don't
+            // check for consistency
+            if (!app_.config().usePostgresTx())
+                checkConsistency_ = false;
+        }
+    }
+}
+
 }  // namespace ripple

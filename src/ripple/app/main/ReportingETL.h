@@ -1,4 +1,3 @@
-
 //------------------------------------------------------------------------------
 /*
     This file is part of rippled: https://github.com/ripple/rippled
@@ -22,6 +21,8 @@
 #define RIPPLE_CORE_REPORTINGETL_H_INCLUDED
 
 #include <ripple/app/main/Application.h>
+#include <ripple/app/main/ETLHelpers.h>
+#include <ripple/app/main/ETLSource.h>
 #include <ripple/core/JobQueue.h>
 #include <ripple/core/Stoppable.h>
 #include <ripple/net/InfoSub.h>
@@ -34,6 +35,8 @@
 #include <ripple/rpc/impl/RPCHelpers.h>
 #include <ripple/rpc/impl/Tuning.h>
 
+#include <boost/algorithm/string.hpp>
+#include <boost/beast/core.hpp>
 #include <boost/beast/core/string.hpp>
 #include <boost/beast/websocket.hpp>
 
@@ -47,112 +50,8 @@
 #include <chrono>
 namespace ripple {
 
-
-
-
-
 class ReportingETL : Stoppable
 {
-    class LedgerIndexQueue
-    {
-        std::queue<uint32_t> queue_;
-
-        std::mutex mtx_;
-
-        std::condition_variable cv_;
-
-        std::atomic_bool stopping_ = false;
-
-        std::optional<uint32_t> last;
-
-        beast::Journal j;
-
-    public:
-        LedgerIndexQueue(beast::Journal& journal) : j(journal)
-        {
-        }
-
-        void
-        push(uint32_t idx)
-        {
-            std::unique_lock<std::mutex> lck(mtx_);
-
-            if (last)
-            {
-                if (idx <= last)
-                {
-                    JLOG(j.warn())
-                        << "Attempted to push old ledger index. index : " << idx
-                        << ". Ignoring";
-                    return;
-                }
-                assert(idx > last);
-                if (idx > *last + 1)
-                {
-                    JLOG(j.warn())
-                        << "Encountered gap. Trying to push " << idx
-                        << ", but last = " << *last << ". Filling in gap";
-                    for (uint32_t i = *last + 1; i < idx; ++i)
-                    {
-                        queue_.push(i);
-                    }
-                }
-            }
-            queue_.push(idx);
-            last = idx;
-            cv_.notify_all();
-        }
-
-        uint32_t
-        pop()
-        {
-            std::unique_lock<std::mutex> lck(mtx_);
-            cv_.wait(
-                lck, [this]() { return this->queue_.size() > 0 || stopping_; });
-            if (stopping_)
-                return 0;  // TODO return empty optional instead of 0
-            uint32_t next = queue_.front();
-            queue_.pop();
-            return next;
-        }
-
-        void
-        stop()
-        {
-            std::unique_lock<std::mutex> lck(mtx_);
-            stopping_ = true;
-            cv_.notify_all();
-        }
-    };
-
-public:
-    template <class T>
-    struct ThreadSafeQueue
-    {
-        std::queue<T> queue_;
-
-        std::mutex m_;
-        std::condition_variable cv_;
-
-        void
-        push(T const& elt)
-        {
-            std::unique_lock<std::mutex> lck(m_);
-            queue_.push(elt);
-            cv_.notify_all();
-        }
-
-        T
-        pop()
-        {
-            std::unique_lock<std::mutex> lck(m_);
-            // TODO: is this able to be aborted?
-            cv_.wait(lck, [this]() { return !queue_.empty(); });
-            auto ret = queue_.front();
-            queue_.pop();
-            return ret;
-        }
-    };
 
 private:
     Application& app_;
@@ -160,6 +59,10 @@ private:
     beast::Journal journal_;
 
     std::thread worker_;
+
+    boost::asio::io_context ioc_;
+
+    ETLLoadBalancer loadBalancer_;
 
     std::thread subscriber_;
 
@@ -175,9 +78,9 @@ private:
         boost::beast::websocket::stream<boost::asio::ip::tcp::socket>>
         ws_;
 
-    //TODO stopping logic needs to be better
-    //There are a variety of loops and mutexs in play
-    //Sometimes, the software can't stop
+    // TODO stopping logic needs to be better
+    // There are a variety of loops and mutexs in play
+    // Sometimes, the software can't stop
     std::atomic_bool stopping_ = false;
 
     std::shared_ptr<Ledger> ledger_;
@@ -222,6 +125,13 @@ private:
     writeToPostgres(LedgerInfo const& info, std::vector<TxMeta>& meta);
 
     void
+    publishLedger(uint32_t ledgerSequence);
+
+    // Publishes the ledger held in ledger_ member variable
+    void
+    publishLedger();
+
+    void
     truncateDBs();
 
     void
@@ -239,172 +149,71 @@ private:
     void
     initNumLedgers();
 
-    struct Metrics
-    {
-        size_t txnCount = 0;
-
-        size_t objectCount = 0;
-
-        double flushTime = 0;
-
-        double updateTime = 0;
-
-        double storeTime = 0;
-
-        void
-        printMetrics(beast::Journal& j)
-        {
-            auto totalTime = updateTime + flushTime + storeTime;
-            auto kvTime = updateTime + flushTime;
-            JLOG(j.info()) << " Metrics: "
-                           << " txnCount = " << txnCount
-                           << " objectCount = " << objectCount
-                           << " updateTime = " << updateTime
-                           << " flushTime = " << flushTime
-                           << " storeTime = " << storeTime
-                           << " update tps = " << txnCount / updateTime
-                           << " flush tps = " << txnCount / flushTime
-                           << " store tps = " << txnCount / storeTime
-                           << " update ops = " << objectCount / updateTime
-                           << " flush ops = " << objectCount / flushTime
-                           << " store ops = " << objectCount / storeTime
-                           << " total tps = " << txnCount / totalTime
-                           << " total ops = " << objectCount / totalTime
-                           << " key-value tps = " << txnCount / kvTime
-                           << " key-value ops = " << objectCount / kvTime
-                           << " (All times in seconds)";
-        }
-
-        void
-        addMetrics(Metrics& round)
-        {
-            txnCount += round.txnCount;
-            objectCount += round.objectCount;
-            flushTime += round.flushTime;
-            updateTime += round.updateTime;
-            storeTime += round.storeTime;
-        }
-    };
-
     Metrics totalMetrics;
     Metrics roundMetrics;
 
 public:
-    ReportingETL(Application& app, Stoppable& parent)
-        : Stoppable("ReportingETL", parent)
-        , app_(app)
-        , journal_(app.journal("ReportingETL"))
-        , indexQueue_(journal_)
-    {
-        // if present, get endpoint from config
-        if (app_.config().exists("reporting"))
-        {
-            Section section = app_.config().section("reporting");
-
-            std::pair<std::string, bool> ipPair = section.find("source_ip");
-            if (!ipPair.second)
-                return;
-
-            std::pair<std::string, bool> portPair =
-                section.find("source_grpc_port");
-            if (!portPair.second)
-                return;
-
-            std::pair<std::string, bool> wsPortPair =
-                section.find("source_ws_port");
-            if (!wsPortPair.second)
-                return;
-
-            std::pair<std::string, bool> flushInterval =
-                section.find("flush_interval");
-            if (flushInterval.second)
-            {
-                flushInterval_ = std::stoi(flushInterval.first);
-            }
-
-            std::pair<std::string, bool> numMarkers =
-                section.find("num_markers");
-            if (numMarkers.second)
-                numMarkers_ = std::stoi(numMarkers.first);
-
-            std::pair<std::string, bool> pgTx = section.find("postgres_tx");
-            if (pgTx.second)
-                app_.config().setUsePostgresTx(pgTx.first == "true");
-
-            std::pair<std::string, bool> ro = section.find("read_only");
-            if (ro.second)
-                app_.config().setReportingReadOnly(ro.first == "true");
-
-            std::pair<std::string, bool> checkConsistency =
-                section.find("check_consistency");
-            if (checkConsistency.second)
-            {
-                checkConsistency_ = (checkConsistency.first == "true");
-            }
-
-            if (checkConsistency_)
-            {
-                initNumLedgers();
-
-                Section nodeDb = app_.config().section("node_db");
-                std::pair<std::string, bool> onlineDelete =
-                    nodeDb.find("online_delete");
-                if (onlineDelete.second)
-                    checkRange_ = false;
-                else
-                    checkRange_ = true;
-
-                std::pair<std::string, bool> postgresNodestore =
-                    nodeDb.find("type");
-                // if the node_db is not using Postgres, we don't check for
-                // consistency
-                if (!postgresNodestore.second ||
-                    !boost::beast::iequals(postgresNodestore.first, "Postgres"))
-                    checkConsistency_ = false;
-                // if we are not using postgres in place of SQLite, we don't
-                // check for consistency
-                if (!app_.config().usePostgresTx())
-                    checkConsistency_ = false;
-            }
-
-            try
-            {
-                stub_ = org::xrpl::rpc::v1::XRPLedgerAPIService::NewStub(
-                    grpc::CreateChannel(
-                        beast::IP::Endpoint(
-                            boost::asio::ip::make_address(ipPair.first),
-                            std::stoi(portPair.first))
-                            .to_string(),
-                        grpc::InsecureChannelCredentials()));
-                std::cout << "made stub" << std::endl;
-                ip_ = ipPair.first;
-                wsPort_ = wsPortPair.first;
-            }
-            catch (std::exception const& e)
-            {
-                std::cout << "Exception while creating stub = " << e.what()
-                          << std::endl;
-            }
-        }
-    }
+    ReportingETL(Application& app, Stoppable& parent);
 
     ~ReportingETL()
     {
     }
 
+    LedgerIndexQueue&
+    getLedgerIndexQueue()
+    {
+        return indexQueue_;
+    }
+
+    bool
+    isStopping()
+    {
+        return stopping_;
+    }
+
+
+    template <class Func>
+    bool
+    execute(Func f, uint32_t ledgerSequence);
+
+    std::shared_ptr<Ledger>&
+    getLedger()
+    {
+        return ledger_;
+    }
+
+    uint32_t
+    getNumMarkers()
+    {
+        return numMarkers_;
+    }
+
+    ThreadSafeQueue<std::shared_ptr<SLE>>&
+    getWriteQueue()
+    {
+        return writeQueue_;
+    }
+
+    Application&
+    getApplication()
+    {
+        return app_;
+    }
+
+    boost::asio::io_context&
+    getIOContext()
+    {
+        return ioc_;
+    }
+
     void
     run()
     {
-        std::cout << "starting reporting etl" << std::endl;
+        JLOG(journal_.info()) << "Starting reporting etl";
         assert(app_.config().reporting());
         assert(app_.config().standalone());
         assert(!app_.config().reportingReadOnly());
-        if (!stub_)
-        {
-            std::cout << "stub not created. aborting reporting etl"
-                      << std::endl;
-            return;
-        }
+
         stopping_ = false;
 
         if (app_.config().START_UP == Config::StartUpType::LOAD)
@@ -444,7 +253,15 @@ public:
                 indexQueue_.push(std::stoi(startIndexPair.first));
             }
         }
-        doSubscribe();
+        loadBalancer_.start();
+        doWork();
+    }
+
+    void
+    runReadOnly()
+    {
+        assert(app_.config().reportingReadOnly());
+        loadBalancer_.start();
         doWork();
     }
 
@@ -455,29 +272,9 @@ public:
         JLOG(journal_.debug()) << "Stopping Reporting ETL";
         stopping_ = true;
         indexQueue_.stop();
-        if (ws_)
-        {
-            JLOG(journal_.debug()) << "Closing websocket";
-            try
-            {
-                ws_->async_close(
-                    boost::beast::websocket::close_code::normal,
-                    [this](auto const& ec) {
-                        JLOG(journal_.debug())
-                            << "async_close callback. ec = " << ec;
-                    });
-            }
-            catch (std::exception const& e)
-            {
-                JLOG(journal_.error())
-                    << "Error closing websocket : " << e.what();
-            }
-            JLOG(journal_.debug()) << "Closed websocket";
-        }
-        if (subscriber_.joinable())
-            subscriber_.join();
+        loadBalancer_.stop();
 
-        JLOG(journal_.debug()) << "Joined subscriber thread";
+        JLOG(journal_.debug()) << "Stopped loadBalancer";
         if (worker_.joinable())
             worker_.join();
 
@@ -489,8 +286,6 @@ private:
     void
     doWork();
 
-    void
-    doSubscribe();
 };
 
 }  // namespace ripple
