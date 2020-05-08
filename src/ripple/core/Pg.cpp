@@ -801,7 +801,24 @@ PgQuery::store(std::size_t const keyBytes, bool const sync)
             while (batch_.size())
             {
                 std::vector<std::shared_ptr<NodeObject>> batch;
-                batch.swap(batch_);
+                constexpr std::size_t max_batch_size = 100000;
+                if (batch_.size() <= max_batch_size)
+                {
+                    batch.swap(batch_);
+                }
+                else
+                {
+                    batch.resize(max_batch_size);
+                    std::copy(batch_.begin(),
+                              batch_.begin() + max_batch_size,
+                              batch.begin());
+                    std::vector<std::shared_ptr<NodeObject>> replacement(
+                        batch_.size() - max_batch_size);
+                    std::copy(batch_.begin() + max_batch_size,
+                              batch_.end(),
+                              replacement.begin());
+                    batch_ = std::move(replacement);
+                }
                 lock.unlock();
                 JLOG(pool_->j_.debug()) << "store batch size " << batch.size();
 
