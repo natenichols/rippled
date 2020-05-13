@@ -18,7 +18,7 @@
 //==============================================================================
 
 #include <ripple/app/main/GRPCServer.h>
-#include <ripple/app/main/TxProxy.h>
+#include <ripple/app/reporting/TxProxy.h>
 #include <ripple/resource/Fees.h>
 
 namespace ripple {

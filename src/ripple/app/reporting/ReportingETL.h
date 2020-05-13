@@ -21,8 +21,8 @@
 #define RIPPLE_CORE_REPORTINGETL_H_INCLUDED
 
 #include <ripple/app/main/Application.h>
-#include <ripple/app/main/ETLHelpers.h>
-#include <ripple/app/main/ETLSource.h>
+#include <ripple/app/reporting/ETLHelpers.h>
+#include <ripple/app/reporting/ETLSource.h>
 #include <ripple/core/JobQueue.h>
 #include <ripple/core/Stoppable.h>
 #include <ripple/net/InfoSub.h>
@@ -52,7 +52,6 @@ namespace ripple {
 
 class ReportingETL : Stoppable
 {
-
 private:
     Application& app_;
 
@@ -171,7 +170,6 @@ public:
         return stopping_;
     }
 
-
     template <class Func>
     bool
     execute(Func f, uint32_t ledgerSequence);
@@ -285,7 +283,6 @@ public:
 private:
     void
     doWork();
-
 };
 
 }  // namespace ripple

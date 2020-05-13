@@ -17,7 +17,7 @@
 */
 //==============================================================================
 
-#include <ripple/app/main/TxProxy.h>
+#include <ripple/app/reporting/TxProxy.h>
 #include <ripple/json/json_reader.h>
 #include <ripple/json/json_writer.h>
 

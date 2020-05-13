@@ -387,9 +387,9 @@ target_sources (rippled PRIVATE
   src/ripple/app/main/Main.cpp
   src/ripple/app/main/NodeIdentity.cpp
   src/ripple/app/main/NodeStoreScheduler.cpp
-  src/ripple/app/main/ReportingETL.cpp
-  src/ripple/app/main/ETLSource.cpp
-  src/ripple/app/main/TxProxy.cpp
+  src/ripple/app/reporting/ReportingETL.cpp
+  src/ripple/app/reporting/ETLSource.cpp
+  src/ripple/app/reporting/TxProxy.cpp
   src/ripple/app/misc/CanonicalTXSet.cpp
   src/ripple/app/misc/FeeVoteImpl.cpp
   src/ripple/app/misc/HashRouter.cpp

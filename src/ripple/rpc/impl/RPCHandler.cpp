@@ -19,8 +19,8 @@
 
 #include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/main/Application.h>
-#include <ripple/app/main/TxProxy.h>
 #include <ripple/app/misc/NetworkOPs.h>
+#include <ripple/app/reporting/TxProxy.h>
 #include <ripple/basics/Log.h>
 #include <ripple/basics/PerfLog.h>
 #include <ripple/basics/contract.h>

@@ -20,7 +20,7 @@
 #ifndef RIPPLE_CORE_ETLSOURCE_H_INCLUDED
 #define RIPPLE_CORE_ETLSOURCE_H_INCLUDED
 #include <ripple/app/main/Application.h>
-#include <ripple/app/main/ETLHelpers.h>
+#include <ripple/app/reporting/ETLHelpers.h>
 #include <ripple/protocol/STLedgerEntry.h>
 
 #include <boost/algorithm/string.hpp>

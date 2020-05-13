@@ -17,7 +17,7 @@
 */
 //==============================================================================
 
-#include <ripple/app/main/ReportingETL.h>
+#include <ripple/app/reporting/ReportingETL.h>
 
 #include <ripple/core/Pg.h>
 #include <ripple/json/json_reader.h>
@@ -31,11 +31,6 @@
 #include <string>
 
 namespace ripple {
-
-
-
-
-
 
 void
 ReportingETL::startWriter()
@@ -67,7 +62,6 @@ ReportingETL::startWriter()
                 */
     }};
 }
-
 
 void
 ReportingETL::loadInitialLedger()
@@ -297,13 +291,15 @@ ReportingETL::storeLedger()
     auto start = std::chrono::system_clock::now();
 
     {
-        Serializer s (128);
-        s.add32 (HashPrefix::ledgerMaster);
+        Serializer s(128);
+        s.add32(HashPrefix::ledgerMaster);
         addRaw(ledger_->info(), s);
-        app_.getNodeStore().store(hotLEDGER,
-            std::move(s.modData()), ledger_->info().hash, ledger_->info().seq);
+        app_.getNodeStore().store(
+            hotLEDGER,
+            std::move(s.modData()),
+            ledger_->info().hash,
+            ledger_->info().seq);
     }
-
 
     auto end = std::chrono::system_clock::now();
 
@@ -352,7 +348,6 @@ ReportingETL::fetchLedger(
     org::xrpl::rpc::v1::GetLedgerResponse& out,
     bool getObjects)
 {
-
     auto idx = indexQueue_.pop();
     // 0 represents the queue is shutting down
     if (idx == 0)
@@ -794,8 +789,6 @@ ReportingETL::ReportingETL(Application& app, Stoppable& parent)
         std::pair<std::string, bool> numMarkers = section.find("num_markers");
         if (numMarkers.second)
             numMarkers_ = std::stoi(numMarkers.first);
-
-
 
         std::pair<std::string, bool> checkConsistency =
             section.find("check_consistency");
