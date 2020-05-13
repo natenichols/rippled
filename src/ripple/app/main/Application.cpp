@@ -1403,7 +1403,7 @@ ApplicationImp::setup()
     Pathfinder::initPathTable();
 
     auto const startUp = config_->START_UP;
-    if (startUp == Config::FRESH)
+    if (startUp == Config::FRESH || config_->reporting())
     {
         JLOG(m_journal.info()) << "Starting new Ledger";
 
