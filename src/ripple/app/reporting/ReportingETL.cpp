@@ -157,24 +157,6 @@ ReportingETL::flushLedger()
                            << " = " << roundMetrics.flushTime;
 }
 
-void
-ReportingETL::initNumLedgers()
-{
-    assert(app_.pgPool());
-    std::shared_ptr<PgQuery> pgQuery = std::make_shared<PgQuery>(app_.pgPool());
-    std::string sql = "select count(*) from ledgers;";
-
-    auto res = pgQuery->querySync(sql.data());
-    auto result = PQresultStatus(res.get());
-    JLOG(journal_.debug()) << "initNumLedgers result : " << result;
-
-    assert(result == PGRES_TUPLES_OK || result == PGRES_SINGLE_TUPLE);
-    assert(PQntuples(res.get()) == 1);
-    char const* count = PQgetvalue(res.get(), 0, 0);
-    numLedgers_ = std::stoll(count);
-    JLOG(journal_.debug()) << "initNumLedgers - count = " << count;
-}
-
 bool
 ReportingETL::consistencyCheck()
 {
@@ -260,27 +242,6 @@ ReportingETL::consistencyCheck()
         }
     }
 
-    if (checkRange_)
-    {
-        sql = "select count(*) from ledgers;";
-
-        res = pgQuery->querySync(sql.data());
-        result = PQresultStatus(res.get());
-        JLOG(journal_.debug())
-            << "consistency check - range result : " << result;
-
-        assert(result == PGRES_TUPLES_OK);
-        assert(PQntuples(res.get()) == 1);
-        char const* count = PQgetvalue(res.get(), 0, 0);
-        if (std::stoll(count) != numLedgers_)
-        {
-            JLOG(journal_.error())
-                << "consistencyCheck - ledger range mismatch : "
-                << "numLedgers_ = " << numLedgers_ << "count = " << count;
-            isConsistent = false;
-        }
-    }
-
     JLOG(journal_.info()) << "consistencyCheck - isConsistent = "
                           << isConsistent;
 
@@ -308,8 +269,6 @@ ReportingETL::storeLedger()
 
     roundMetrics.storeTime = ((end - start).count()) / 1000000000.0;
 
-    numLedgers_++;
-
     JLOG(journal_.debug()) << "Store time for ledger " << ledger_->info().seq
                            << " = " << roundMetrics.storeTime;
 }
@@ -320,8 +279,8 @@ ReportingETL::publishLedger()
     app_.getOPs().pubLedger(ledger_);
 }
 
-void
-ReportingETL::publishLedger(uint32_t ledgerSequence)
+bool
+ReportingETL::publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts)
 {
     size_t numAttempts = 0;
     while (!stopping_)
@@ -333,17 +292,41 @@ ReportingETL::publishLedger(uint32_t ledgerSequence)
             JLOG(journal_.error())
                 << "Trying to publish. Could not find ledger = "
                 << ledgerSequence;
-            // try once per second for 20 seconds
-            // then back off to try once per 4 seconds
-            auto seconds = numAttempts < 20 ? 1 : 4;
-            std::this_thread::sleep_for(std::chrono::seconds(seconds));
-            ++numAttempts;
+            // We try maxAttempts times to publish the ledger, waiting one
+            // second in between each attempt.
+            // If the ledger is not present in the database after maxAttempts,
+            // we attempt to take over as the writer. If the takeover fails,
+            // doContinuousETL will return, and this node will go back to
+            // publishing.
+            // If the node is in strict read only mode, we simply
+            // skip publishing this ledger and return false indicating the
+            // publish failed
+            if (numAttempts >= maxAttempts)
+            {
+                if (!readOnly_)
+                {
+                    ledger_ = std::const_pointer_cast<Ledger>(
+                        app_.getLedgerMaster().getLedgerBySeq(
+                            ledgerSequence - 1));
+                    doContinousETL();
+                }
+                else
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                ++numAttempts;
+            }
             continue;
         }
         app_.getOPs().pubLedger(ledger);
         JLOG(journal_.info()) << "Published ledger - " << ledgerSequence;
-        return;
+        return true;
     }
+    return false;
 }
 
 bool
@@ -479,7 +462,7 @@ ReportingETL::updateLedger(
                            << roundMetrics.updateTime;
 }
 
-void
+bool
 writeToLedgersDB(
     LedgerInfo const& info,
     std::shared_ptr<PgQuery>& pgQuery,
@@ -521,7 +504,7 @@ writeToLedgersDB(
                     "ERROR:  Ledger Ancestry error") != err.second.npos)))
         {
             JLOG(journal.error()) << "ETL must stop based on this.";
-            assert(false);
+            return false;
         }
         else
         {
@@ -537,7 +520,9 @@ writeToLedgersDB(
         JLOG(journal.error()) << "empty query or other type of error not "
                                  "caught above. This is retryable and "
                                  "should be logged.";
+        assert(false);
     }
+    return true;
 }
 
 void
@@ -566,8 +551,6 @@ ReportingETL::truncateDBs()
     result = PQresultStatus(res.get());
     JLOG(journal_.trace()) << "truncateDBs - result : " << result;
     assert(result == PGRES_COMMAND_OK);
-
-    numLedgers_ = 0;
 }
 
 void
@@ -600,12 +583,6 @@ writeToAccountTransactionsDB(
                        << '\t' << std::to_string(idx) << '\t' << "\\\\x"
                        << txHash << '\n';
             JLOG(journal.trace()) << acct;
-            /*
-            JLOG(journal.trace())
-                << "writing to account_transactions - "
-                << " account = " << acct << " ledgerSeq = " << ledgerSeq
-                << " idx = " << idx;
-                */
         }
     }
 
@@ -644,7 +621,7 @@ writeToAccountTransactionsDB(
     assert(pqResultStatus != 7);
 }
 
-void
+bool
 ReportingETL::writeToPostgres(
     LedgerInfo const& info,
     std::vector<TxMeta>& metas)
@@ -662,7 +639,8 @@ ReportingETL::writeToPostgres(
     JLOG(journal_.trace()) << "writeToTxDB - BEGIN result = " << result;
     assert(result == PGRES_COMMAND_OK);
 
-    writeToLedgersDB(info, pg, conn, journal_);
+    if (!writeToLedgersDB(info, pg, conn, journal_))
+        return false;
 
     writeToAccountTransactionsDB(metas, pg, conn, journal_);
 
@@ -674,23 +652,27 @@ ReportingETL::writeToPostgres(
     assert(result == PGRES_COMMAND_OK);
     PQsetnonblocking(conn->getConn(), 1);
     app_.pgPool()->checkin(conn);
+    return true;
 }
 
-void
+bool
 ReportingETL::doETL()
 {
     org::xrpl::rpc::v1::GetLedgerResponse fetchResponse;
 
     if (not fetchLedger(fetchResponse))
-        return;
+        return false;
 
     std::vector<TxMeta> metas;
     updateLedger(fetchResponse, metas);
 
     flushLedger();
 
+    bool abort = false;
     if (app_.config().usePostgresTx())
-        writeToPostgres(ledger_->info(), metas);
+        abort = !writeToPostgres(ledger_->info(), metas);
+    if (abort)
+        return false;
 
     storeLedger();
 
@@ -705,6 +687,7 @@ ReportingETL::doETL()
         app_.getNodeStore().sync();
         assert(consistencyCheck());
     }
+    return true;
 }
 
 void
@@ -720,44 +703,55 @@ ReportingETL::outputMetrics()
 }
 
 void
+ReportingETL::doContinousETL()
+{
+    assert(!readOnly_);
+    JLOG(journal_.info()) << "Downloading initial ledger";
+
+    loadInitialLedger();
+
+    JLOG(journal_.info()) << "Done downloading initial ledger";
+
+    // reset after first iteration
+    totalMetrics = {};
+    roundMetrics = {};
+
+    size_t numLoops = 0;
+
+    while (not stopping_)
+    {
+        if (!doETL())
+            break;
+        numLoops++;
+        if (numLoops == 10)
+            totalMetrics = {};
+    }
+}
+
+void
+ReportingETL::monitor()
+{
+    auto idx = 0;
+    bool success = true;
+    while ((idx = indexQueue_.front()) != 0)
+    {
+        // take over responsibility of writer after 10 failed attempts
+        // for strict read only mode, after 30 failed attempts to publish
+        // the ledger, only attempt to publish subsequent ledgers one time.
+        // this is really only needed if the database is deleted while a
+        // the read only node is running, or the database was not populated
+        // when the read only node was started. The read only node tries
+        // to catch up to the database once it detects a ledger is missing
+        // and most likely never going to appear in the database
+        success = publishLedger(idx, success ? (readOnly_ ? 30 : 10) : 1);
+        indexQueue_.pop();
+    }
+}
+
+void
 ReportingETL::doWork()
 {
-    if (app_.config().reportingReadOnly())
-    {
-        // In readOnly mode, the only work that needs to be done is to publish
-        // ledgers to subscription streams when validated
-        worker_ = std::thread([this]() {
-            auto idx = 0;
-            while ((idx = indexQueue_.pop()) != 0)
-            {
-                publishLedger(idx);
-            }
-        });
-    }
-    else
-    {
-        worker_ = std::thread([this]() {
-            JLOG(journal_.info()) << "Downloading initial ledger";
-
-            loadInitialLedger();
-
-            JLOG(journal_.info()) << "Done downloading initial ledger";
-
-            // reset after first iteration
-            totalMetrics = {};
-            roundMetrics = {};
-
-            size_t numLoops = 0;
-
-            while (not stopping_)
-            {
-                doETL();
-                numLoops++;
-                if (numLoops == 10)
-                    totalMetrics = {};
-            }
-        });
-    }
+    worker_ = std::thread([this]() { monitor(); });
 }
 
 ReportingETL::ReportingETL(Application& app, Stoppable& parent)
@@ -776,7 +770,10 @@ ReportingETL::ReportingETL(Application& app, Stoppable& parent)
 
         std::pair<std::string, bool> ro = section.find("read_only");
         if (ro.second)
-            app_.config().setReportingReadOnly(ro.first == "true");
+        {
+            readOnly_ = ro.first == "true";
+            app_.config().setReportingReadOnly(readOnly_);
+        }
 
         auto& vals = section.values();
         for (auto& v : vals)
@@ -837,15 +834,9 @@ ReportingETL::ReportingETL(Application& app, Stoppable& parent)
 
         if (checkConsistency_)
         {
-            initNumLedgers();
-
             Section nodeDb = app_.config().section("node_db");
             std::pair<std::string, bool> onlineDelete =
                 nodeDb.find("online_delete");
-            if (onlineDelete.second)
-                checkRange_ = false;
-            else
-                checkRange_ = true;
 
             std::pair<std::string, bool> postgresNodestore =
                 nodeDb.find("type");

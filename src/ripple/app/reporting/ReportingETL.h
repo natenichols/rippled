@@ -63,19 +63,11 @@ private:
 
     ETLLoadBalancer loadBalancer_;
 
-    std::thread subscriber_;
-
     LedgerIndexQueue indexQueue_;
 
     std::thread writer_;
 
     ThreadSafeQueue<std::shared_ptr<SLE>> writeQueue_;
-
-    std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub> stub_;
-
-    std::unique_ptr<
-        boost::beast::websocket::stream<boost::asio::ip::tcp::socket>>
-        ws_;
 
     // TODO stopping logic needs to be better
     // There are a variety of loops and mutexs in play
@@ -94,16 +86,24 @@ private:
 
     bool checkConsistency_ = false;
 
-    bool checkRange_ = false;
-
-    uint32_t numLedgers_ = 0;
+    bool readOnly_ = false;
 
     void
     loadInitialLedger();
 
-    void
+    // returns true if the etl was successful. False could mean etl is
+    // shutting down, or there was a write conflict
+    bool
     doETL();
 
+    void
+    doContinousETL();
+
+    void
+    monitor();
+
+    // returns true if a ledger was actually fetched
+    // this will only be false if the etl mechanism is shutting down
     bool
     fetchLedger(
         org::xrpl::rpc::v1::GetLedgerResponse& out,
@@ -120,11 +120,12 @@ private:
     void
     storeLedger();
 
-    void
+    bool
     writeToPostgres(LedgerInfo const& info, std::vector<TxMeta>& meta);
 
-    void
-    publishLedger(uint32_t ledgerSequence);
+    // returns true if publish was successful (if ledger is in db)
+    bool
+    publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts = 10);
 
     // Publishes the ledger held in ledger_ member variable
     void
@@ -144,9 +145,6 @@ private:
 
     bool
     consistencyCheck();
-
-    void
-    initNumLedgers();
 
     Metrics totalMetrics;
     Metrics roundMetrics;
@@ -205,16 +203,27 @@ public:
     }
 
     void
-    run()
+    setup()
     {
-        JLOG(journal_.info()) << "Starting reporting etl";
-        assert(app_.config().reporting());
-        assert(app_.config().standalone());
-        assert(!app_.config().reportingReadOnly());
+        if (app_.config().START_UP == Config::StartUpType::FRESH)
+        {
+            if (app_.config().usePostgresTx())
+            {
+                // if we don't load the ledger from disk, the dbs need to be
+                // cleared out, since the db will not allow any gaps
+                truncateDBs();
+            }
+            assert(app_.config().exists("reporting"));
+            Section section = app_.config().section("reporting");
+            std::pair<std::string, bool> startIndexPair =
+                section.find("start_index");
 
-        stopping_ = false;
-
-        if (app_.config().START_UP == Config::StartUpType::LOAD)
+            if (startIndexPair.second)
+            {
+                indexQueue_.push(std::stoi(startIndexPair.first));
+            }
+        }
+        else if (!readOnly_)
         {
             // This ledger will not actually be mutated, but every ledger
             // after it will therefore ledger_ is not const
@@ -231,34 +240,20 @@ public:
                 JLOG(journal_.warn()) << "Failed to load ledger. Will download";
             }
         }
-        else if (app_.config().usePostgresTx())
-        {
-            // if we don't load the ledger from disk, the dbs need to be cleared
-            // out, since the db will not allow any gaps
-            truncateDBs();
-        }
-
-        // if we loaded the ledger from disk, don't use start_index
-        if (!ledger_)
-        {
-            assert(app_.config().exists("reporting"));
-            Section section = app_.config().section("reporting");
-            std::pair<std::string, bool> startIndexPair =
-                section.find("start_index");
-
-            if (startIndexPair.second)
-            {
-                indexQueue_.push(std::stoi(startIndexPair.first));
-            }
-        }
-        loadBalancer_.start();
-        doWork();
     }
 
     void
-    runReadOnly()
+    run()
     {
-        assert(app_.config().reportingReadOnly());
+        JLOG(journal_.info()) << "Starting reporting etl";
+        assert(app_.config().reporting());
+        assert(app_.config().standalone());
+        assert(app_.config().reportingReadOnly() == readOnly_);
+
+        stopping_ = false;
+
+        setup();
+
         loadBalancer_.start();
         doWork();
     }

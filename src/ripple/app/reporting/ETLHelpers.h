@@ -91,6 +91,18 @@ public:
         return next;
     }
 
+    uint32_t
+    front()
+    {
+        std::unique_lock<std::mutex> lck(mtx_);
+        cv_.wait(
+            lck, [this]() { return this->queue_.size() > 0 || stopping_; });
+        if (stopping_)
+            return 0;  // TODO return empty optional instead of 0
+        uint32_t next = queue_.front();
+        return next;
+    }
+
     void
     stop()
     {
