@@ -858,11 +858,8 @@ DatabaseShardImp::getWriteLoad() const
 }
 
 void
-DatabaseShardImp::store(
-    NodeObjectType type,
-    Blob&& data,
-    uint256 const& hash,
-    std::uint32_t seq)
+DatabaseShardImp::store(NodeObjectType type,
+    Blob&& data, uint256 const& hash, std::uint32_t seq, bool const etl)
 {
     auto const shardIndex{seqToShardIndex(seq)};
     std::shared_ptr<Shard> shard;

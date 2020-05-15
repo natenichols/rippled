@@ -107,12 +107,11 @@ public:
 
         @return `true` if the object was stored?
     */
-    virtual void
-    store(
-        NodeObjectType type,
-        Blob&& data,
-        uint256 const& hash,
-        std::uint32_t seq) = 0;
+    virtual
+    void
+    store(NodeObjectType type, Blob&& data,
+        uint256 const& hash, std::uint32_t seq,
+        bool const etl=false) = 0;
 
     virtual void sync() = 0;
 

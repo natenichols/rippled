@@ -67,6 +67,7 @@ public:
         int readThreads,
         Stoppable& parent,
         Section const& config,
+        bool const reporting,
         beast::Journal journal,
         std::shared_ptr<PgPool> pool) override;
 };

@@ -270,7 +270,7 @@ public:
     bool compare (SHAMap const& otherMap,
                   Delta& differences, int maxCount) const;
 
-    int flushDirty (NodeObjectType t, std::uint32_t seq);
+    int flushDirty (NodeObjectType t, std::uint32_t seq, bool const etl=false);
     int flushDirtyNoWrite(NodeObjectType t, std::uint32_t seq);
     void walkMap (std::vector<SHAMapMissingNode>& missingNodes, int maxMissing) const;
     bool deepCompare (SHAMap & other) const;  // Intended for debug/test only
@@ -341,10 +341,9 @@ private:
 
     /** write and canonicalize modified node */
     std::shared_ptr<SHAMapAbstractNode>
-    writeNode(
-        NodeObjectType t,
-        std::uint32_t seq,
-        std::shared_ptr<SHAMapAbstractNode> node) const;
+        writeNode(NodeObjectType t, std::uint32_t seq,
+                  std::shared_ptr<SHAMapAbstractNode> node,
+                  bool const etl) const;
 
     SHAMapTreeNode*
     firstBelow(
@@ -384,27 +383,18 @@ private:
     descendNoStore(std::shared_ptr<SHAMapInnerNode> const&, int branch) const;
 
     /** If there is only one leaf below this node, get its contents */
-    std::shared_ptr<SHAMapItem const> const&
-    onlyBelow(SHAMapAbstractNode*) const;
+    std::shared_ptr<SHAMapItem const> const& onlyBelow (SHAMapAbstractNode*) const;
 
-    bool
-    hasInnerNode(SHAMapNodeID const& nodeID, SHAMapHash const& hash) const;
-    bool
-    hasLeafNode(uint256 const& tag, SHAMapHash const& hash) const;
+    bool hasInnerNode (SHAMapNodeID const& nodeID, SHAMapHash const& hash) const;
+    bool hasLeafNode (uint256 const& tag, SHAMapHash const& hash) const;
 
-    SHAMapTreeNode const*
-    peekFirstItem(SharedPtrNodeStack& stack) const;
-    SHAMapTreeNode const*
-    peekNextItem(uint256 const& id, SharedPtrNodeStack& stack) const;
-    bool
-    walkBranch(
-        SHAMapAbstractNode* node,
-        std::shared_ptr<SHAMapItem const> const& otherMapItem,
-        bool isFirstMap,
-        Delta& differences,
-        int& maxCount) const;
-    int
-    walkSubTree(bool doWrite, NodeObjectType t, std::uint32_t seq);
+    SHAMapTreeNode const* peekFirstItem(SharedPtrNodeStack& stack) const;
+    SHAMapTreeNode const* peekNextItem(uint256 const& id, SharedPtrNodeStack& stack) const;
+    bool walkBranch (SHAMapAbstractNode* node,
+                     std::shared_ptr<SHAMapItem const> const& otherMapItem,
+                     bool isFirstMap, Delta & differences, int & maxCount) const;
+    int walkSubTree (bool doWrite, NodeObjectType t, std::uint32_t seq,
+                bool const etl=false);
 
     // Structure to track information about call to
     // getMissingNodes while it's in progress

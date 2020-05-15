@@ -25,15 +25,13 @@ namespace ripple {
 namespace NodeStore {
 
 void
-DatabaseNodeImp::store(
-    NodeObjectType type,
-    Blob&& data,
-    uint256 const& hash,
-    std::uint32_t seq)
+DatabaseNodeImp::store(NodeObjectType type, Blob&& data,
+    uint256 const& hash, std::uint32_t seq, bool const etl)
 {
     auto nObj = NodeObject::createObject(type, std::move(data), hash);
     pCache_->canonicalize_replace_cache(hash, nObj);
-    backend_->store(nObj);
+    if (etl || ! reporting_)
+        backend_->store(nObj);
     nCache_->erase(hash);
     storeStats(nObj->getData().size());
 }

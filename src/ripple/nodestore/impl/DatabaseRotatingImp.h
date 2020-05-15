@@ -41,6 +41,7 @@ public:
         std::shared_ptr<Backend> writableBackend,
         std::shared_ptr<Backend> archiveBackend,
         Section const& config,
+        bool const reporting,
         beast::Journal j);
 
     ~DatabaseRotatingImp() override
@@ -54,6 +55,7 @@ public:
         std::function<std::unique_ptr<NodeStore::Backend>(
             std::string const& writableBackendName)> const& f) override;
 
+
     std::string
     getName() const override;
 
@@ -63,12 +65,8 @@ public:
     void
     import(Database& source) override;
 
-    void
-    store(
-        NodeObjectType type,
-        Blob&& data,
-        uint256 const& hash,
-        std::uint32_t seq) override;
+    void store(NodeObjectType type, Blob&& data,
+        uint256 const& hash, std::uint32_t seq, bool const etl) override;
 
     void
     sync() override
@@ -129,8 +127,21 @@ private:
     std::shared_ptr<Backend> archiveBackend_;
     mutable std::mutex mutex_;
 
-    std::shared_ptr<NodeObject>
-    fetchFrom(uint256 const& hash, std::uint32_t seq) override;
+    bool const reporting_;
+
+    struct Backends {
+        std::shared_ptr<Backend> const& writableBackend;
+        std::shared_ptr<Backend> const& archiveBackend;
+    };
+
+    Backends getBackends() const
+    {
+        std::lock_guard lock (mutex_);
+        return Backends {writableBackend_, archiveBackend_};
+    }
+
+    std::shared_ptr<NodeObject> fetchFrom(
+        uint256 const& hash, std::uint32_t seq) override;
 
     void
     for_each(std::function<void(std::shared_ptr<NodeObject>)> f) override;

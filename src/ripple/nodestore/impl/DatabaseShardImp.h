@@ -142,11 +142,8 @@ public:
     getWriteLoad() const override;
 
     void
-    store(
-        NodeObjectType type,
-        Blob&& data,
-        uint256 const& hash,
-        std::uint32_t seq) override;
+    store(NodeObjectType type, Blob&& data,
+        uint256 const& hash, std::uint32_t seq, bool const etl) override;
 
     void
     sync() override {};

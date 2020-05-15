@@ -32,6 +32,7 @@ DatabaseRotatingImp::DatabaseRotatingImp(
     std::shared_ptr<Backend> writableBackend,
     std::shared_ptr<Backend> archiveBackend,
     Section const& config,
+    bool const reporting,
     beast::Journal j)
     : DatabaseRotating(name, parent, scheduler, readThreads, config, j)
     , pCache_(std::make_shared<TaggedCache<uint256, NodeObject>>(
@@ -47,6 +48,7 @@ DatabaseRotatingImp::DatabaseRotatingImp(
           cacheTargetAge))
     , writableBackend_(std::move(writableBackend))
     , archiveBackend_(std::move(archiveBackend))
+    , reporting_(reporting)
 {
     if (writableBackend_)
         fdRequired_ += writableBackend_->fdRequired();
@@ -106,21 +108,19 @@ DatabaseRotatingImp::storeLedger(std::shared_ptr<Ledger const> const& srcLedger)
 }
 
 void
-DatabaseRotatingImp::store(
-    NodeObjectType type,
-    Blob&& data,
-    uint256 const& hash,
-    std::uint32_t seq)
+DatabaseRotatingImp::store(NodeObjectType type, Blob&& data,
+    uint256 const& hash, std::uint32_t seq, bool const etl)
 {
     auto nObj = NodeObject::createObject(type, std::move(data), hash);
-    pCache_->canonicalize_replace_cache(hash, nObj);
 
     auto const backend = [&] {
         std::lock_guard lock(mutex_);
         return writableBackend_;
     }();
-    backend->store(nObj);
 
+    pCache_->canonicalize_replace_cache(hash, nObj);
+    if (etl || !reporting_)
+        backend->store(nObj);
     nCache_->erase(hash);
     storeStats(nObj->getData().size());
 }

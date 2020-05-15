@@ -52,14 +52,14 @@ ReportingETL::startWriter()
                 JLOG(journal_.debug())
                     << "Flushing! key = " << strHex(sle->key());
                 ledger_->stateMap().flushDirty(
-                    hotACCOUNT_NODE, ledger_->info().seq);
+                    hotACCOUNT_NODE, ledger_->info().seq, true);
             }
             ++num;
         }
         /*
         if (not stopping_)
             ledger_->stateMap().flushDirty(
-                hotACCOUNT_NODE, ledger_->info().seq);
+                hotACCOUNT_NODE, ledger_->info().seq, true);
                 */
     }};
 }
@@ -124,10 +124,12 @@ ReportingETL::flushLedger()
     ledger_->setImmutable(app_.config(), false);
 
     auto numFlushed =
-        ledger_->stateMap().flushDirty(hotACCOUNT_NODE, ledger_->info().seq);
+        ledger_->stateMap().flushDirty(hotACCOUNT_NODE, ledger_->info().seq,
+                                       true);
 
     auto numTxFlushed =
-        ledger_->txMap().flushDirty(hotTRANSACTION_NODE, ledger_->info().seq);
+        ledger_->txMap().flushDirty(hotTRANSACTION_NODE, ledger_->info().seq,
+                                    true);
 
     JLOG(journal_.debug()) << "Flushed " << numFlushed
                            << " nodes to nodestore from stateMap";

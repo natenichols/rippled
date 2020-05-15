@@ -100,6 +100,7 @@ public:
         int readThreads,
         Stoppable& parent,
         Section const& backendParameters,
+        bool const reporting,
         beast::Journal journal,
         std::shared_ptr<PgPool> pool) = 0;
 };

@@ -41,6 +41,7 @@ public:
         Stoppable& parent,
         std::shared_ptr<Backend> backend,
         Section const& config,
+        bool const reporting,
         beast::Journal j)
         : Database(name, parent, scheduler, readThreads, config, j)
         , pCache_(std::make_shared<TaggedCache<uint256, NodeObject>>(
@@ -55,6 +56,7 @@ public:
               cacheTargetSize,
               cacheTargetAge))
         , backend_(std::move(backend))
+        , reporting_ (reporting)
     {
         assert(backend_);
         setParent(parent);
@@ -85,11 +87,8 @@ public:
     }
 
     void
-    store(
-        NodeObjectType type,
-        Blob&& data,
-        uint256 const& hash,
-        std::uint32_t seq) override;
+    store(NodeObjectType type, Blob&& data,
+        uint256 const& hash, std::uint32_t seq, bool const etl) override;
 
     void
     sync() override
@@ -146,6 +145,8 @@ private:
 
     // Persistent key/value storage
     std::shared_ptr<Backend> backend_;
+
+    bool reporting_;
 
     std::shared_ptr<NodeObject>
     fetchFrom(uint256 const& hash, std::uint32_t seq) override

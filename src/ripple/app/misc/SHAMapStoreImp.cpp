@@ -263,6 +263,7 @@ SHAMapStoreImp::makeNodeStore(std::string const& name, std::int32_t readThreads)
             std::move(writableBackend),
             std::move(archiveBackend),
             app_.config().section(ConfigSection::nodeDatabase()),
+            app_.config().reporting(),
             app_.logs().journal(nodeStoreName_));
         fdRequired_ += dbr->fdRequired();
         dbRotating_ = dbr.get();
@@ -276,6 +277,7 @@ SHAMapStoreImp::makeNodeStore(std::string const& name, std::int32_t readThreads)
             readThreads,
             app_.getJobQueue(),
             app_.config().section(ConfigSection::nodeDatabase()),
+            app_.config().reporting(),
             app_.logs().journal(nodeStoreName_),
             app_.pgPool());
         fdRequired_ += db->fdRequired();

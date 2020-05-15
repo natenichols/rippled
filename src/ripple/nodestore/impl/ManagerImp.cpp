@@ -70,6 +70,7 @@ ManagerImp::make_Database(
     int readThreads,
     Stoppable& parent,
     Section const& config,
+    bool const reporting,
     beast::Journal journal,
     std::shared_ptr<PgPool> pool)
 {
@@ -82,6 +83,7 @@ ManagerImp::make_Database(
         parent,
         std::move(backend),
         config,
+        reporting,
         journal);
 }
 
