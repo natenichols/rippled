@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <variant>
 
 namespace ripple {
 
@@ -495,11 +496,46 @@ writeToLedgersDB(
         info.closeTimeResolution.count() % info.closeFlags %
         strHex(info.accountHash) % strHex(info.txHash));
     JLOG(journal.trace()) << "writeToTxDB - ledgerInsert = " << ledgerInsert;
-    auto res = pgQuery->querySync(ledgerInsert.data());
+    auto res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
 
-    assert(res);
-    auto result = PQresultStatus(res.get());
-    assert(result == PGRES_COMMAND_OK);
+    // Uncomment to trigger "Ledger Ancestry error"
+//    res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
+
+    // Uncomment to trigger "duplicate key"
+//    static int z = 0;
+//    if (++z < 10)
+//        return;
+//    res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
+
+    if (std::holds_alternative<pg_error_type>(res))
+    {
+        pg_error_type const& err = std::get<pg_error_type>(res);
+        JLOG(journal.error())
+            << "Insert into ledger DB error: " << PQresStatus(err.first)
+            << ", " << err.second;
+        if (err.first == PGRES_FATAL_ERROR && (
+            (err.second.find("ERROR:  duplicate key") != err.second.npos)
+                || (err.second.find(
+                    "ERROR:  Ledger Ancestry error") != err.second.npos)))
+        {
+            JLOG(journal.error()) << "ETL must stop based on this.";
+            assert(false);
+        }
+        else
+        {
+            JLOG(journal.error()) << "This error can be retried, and "
+                                     "definitely logged.";
+            assert(false);
+        }
+    }
+
+    auto const& queryResult = std::get<pg_result_type>(res);
+    if (!queryResult || PQresultStatus(queryResult.get()) != PGRES_COMMAND_OK)
+    {
+        JLOG(journal.error()) << "empty query or other type of error not "
+                                 "caught above. This is retryable and "
+                                 "should be logged.";
+    }
 }
 
 void

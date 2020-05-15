@@ -191,7 +191,7 @@ Pg::connect(yield_context yield, boost::asio::io_context::strand& strand)
     }
 }
 
-pg_result_type
+pg_variant_type
 Pg::query(yield_context yield, boost::asio::io_context::strand& strand,
     char const* command, std::size_t nParams, char const* const* values)
 {
@@ -310,11 +310,15 @@ Pg::query(yield_context yield, boost::asio::io_context::strand& strand,
             std::stringstream ss;
             ss << "bad query result: "
                << PQresStatus(PQresultStatus(ret.get()))
+               << " error message: "
+               << PQerrorMessage(conn_.get())
                << ", number of tuples: "
                << PQntuples(ret.get())
                << ", number of fields: "
                << PQnfields(ret.get());
-            Throw<std::runtime_error>(ss.str().c_str());
+            JLOG(j_.error()) << ss.str();
+            return pg_error_type{
+                PQresultStatus(ret.get()), PQerrorMessage(conn_.get())};
         }
     }
 
@@ -378,7 +382,7 @@ formatParams(pg_params const& dbParams, beast::Journal const j)
     return valuesIdx;
 }
 
-pg_result_type
+pg_variant_type
 Pg::query(yield_context yield, boost::asio::io_context::strand& strand,
     pg_params const& dbParams)
 {
@@ -726,15 +730,15 @@ PgPool::checkin(std::shared_ptr<Pg>& pg)
 
 //-----------------------------------------------------------------------------
 
-pg_result_type
-PgQuery::querySync(pg_params const& dbParams, std::shared_ptr<Pg>& conn)
+pg_variant_type
+PgQuery::querySyncVariant(pg_params const& dbParams, std::shared_ptr<Pg>& conn)
 {
     auto self(shared_from_this());
     boost::asio::io_context::strand strand(pool_->io_);
     std::mutex mtx;
     std::condition_variable cv;
     bool finished = false;
-    pg_result_type result {nullptr, [](PGresult* result){ PQclear(result); }};
+    pg_variant_type result;
     boost::asio::spawn(strand,
         [this, self, &conn, &strand, &dbParams, &mtx, &cv, &finished, &result]
         (boost::asio::yield_context yield)
@@ -912,78 +916,6 @@ PgQuery::store(std::vector<std::shared_ptr<NodeObject>> const& nos,
     }
     store(keyBytes, false);
 }
-
-std::pair<std::shared_ptr<Pg>, std::optional<LedgerIndex>>
-PgQuery::lockLedger(std::optional<LedgerIndex> seq)
-{
-    auto self(shared_from_this());
-    boost::asio::io_context::strand strand(pool_->io_);
-    std::mutex mtx;
-    std::condition_variable cv;
-    bool finished = false;
-    pg_result_type result {nullptr, [](PGresult* result){ PQclear(result); }};
-    std::shared_ptr<Pg> conn;
-    std::optional<LedgerIndex> locked;
-
-    boost::asio::spawn(strand,
-        [this, self, &seq, &strand, &mtx, &cv, &finished, &result, &conn,
-         &locked]
-        (boost::asio::yield_context yield)
-        {
-          try
-          {
-              // TODO make something with a condition var instead of spinning.
-              while (!conn)
-                  conn = pool_->checkout();
-
-              std::stringstream cmd;
-              cmd << "BEGIN;"
-                     "SELECT ledger_seq"
-                     "  FROM ledgers"
-                     " WHERE ledger_seq = ";
-              if (seq.has_value())
-                  cmd << std::to_string(*seq);
-              else
-                  cmd << "min_ledger()";
-              cmd << " FOR UPDATE";
-              result = conn->batchQuery(yield, strand, cmd.str().c_str());
-
-              if (result && PQntuples(result.get())
-                  && ! PQgetisnull(result.get(), 0, 0))
-              {
-                  locked = std::atoll(PQgetvalue(result.get(), 0, 0));
-              }
-          }
-          catch (std::exception const& e)
-          {
-              JLOG(pool_->j_.error()) << "lockLedger exception: "
-                                      << e.what() << '\n';
-          }
-
-          if (! locked.has_value())
-          {
-              try
-              {
-                  if (conn)
-                  {
-                      conn->query(yield, strand, "ROLLBACK");
-                      conn.reset();
-                  }
-              }
-              catch (...) {}
-          }
-
-          std::unique_lock<std::mutex> lambdaLock(mtx);
-          finished = true;
-          cv.notify_one();
-        });
-
-    std::unique_lock<std::mutex> lock(mtx);
-    cv.wait(lock, [&finished]() { return finished; });
-
-    return {conn, locked};
-}
-
 
 //-----------------------------------------------------------------------------
 

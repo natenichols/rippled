@@ -39,13 +39,18 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace ripple {
 
-// These postgres structs must be freed only by the postges API.
+// These postgres structs must be freed only by the postgres API.
 using pg_result_type = std::unique_ptr<PGresult, void(*)(PGresult*)>;
 using pg_connection_type = std::unique_ptr<PGconn, void(*)(PGconn*)>;
+
+using pg_error_type = std::pair<ExecStatusType, std::string>;
+using pg_variant_type = std::variant<std::monostate,
+                                     pg_result_type, pg_error_type>;
 
 /** first: command
  * second: parameter values
@@ -104,7 +109,6 @@ public:
      *
      * @param dbConfig Config parameters.
      */
-//     Pg() {}
     Pg(PgConfig const& config, beast::Journal const j)
         : config_ (config)
         , j_ (j)
@@ -159,7 +163,7 @@ public:
      * @param values postgres API array of parameter.
      * @return Postgres API result struct if successful.
      */
-    pg_result_type
+    pg_variant_type
     query(yield_context yield, boost::asio::io_context::strand& strand,
         char const* command, std::size_t nParams, char const* const* values);
 
@@ -169,7 +173,7 @@ public:
      * @param strand Asio strand upon which to execute asynchronous ops.
      * @return Postgres API result struct.
      */
-    pg_result_type
+    pg_variant_type
     query(yield_context yield, boost::asio::io_context::strand& strand,
         char const* command)
     {
@@ -183,7 +187,7 @@ public:
      * @param dbParams Database command and parameter values.
      * @return PostgreSQL API result struct.
      */
-    pg_result_type
+    pg_variant_type
     query(yield_context yield, boost::asio::io_context::strand& strand,
         pg_params const& dbParams);
 
@@ -317,8 +321,17 @@ public:
      * @return PostgreSQL API result struct.
      */
 
-    pg_result_type querySync(pg_params const& dbParams,
+    pg_variant_type querySyncVariant(pg_params const& dbParams,
               std::shared_ptr<Pg>& conn);
+
+    pg_result_type querySync(pg_params const& dbParams,
+        std::shared_ptr<Pg>& conn)
+    {
+        auto result = querySyncVariant(dbParams, conn);
+        if (std::holds_alternative<pg_result_type>(result))
+            return std::move(std::get<pg_result_type>(result));
+        return {nullptr, [](PGresult* result){ PQclear(result); }};
+    }
 
     pg_result_type
     querySync(pg_params const& dbParams)
@@ -353,8 +366,6 @@ public:
     {
         store(keyBytes, true);
     }
-    std::pair<std::shared_ptr<Pg>, std::optional<LedgerIndex>>
-    lockLedger(std::optional<LedgerIndex> seq = {});
 
 };
 

@@ -555,7 +555,7 @@ DECLARE
     _child  bytea;
 BEGIN
     IF length(NEW.ledger_hash) != 32 OR length(NEW.prev_hash) != 32 THEN
-        RAISE 'ledger_hash and parent_has must each be 32 bytes: %', NEW;
+        RAISE 'ledger_hash and prev_hash must each be 32 bytes: %', NEW;
     END IF;
 
     IF (SELECT ledger_hash

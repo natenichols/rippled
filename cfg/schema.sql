@@ -45,7 +45,7 @@ CREATE TABLE public.account_transactions (
 CREATE TABLE public.ledgers (
     ledger_seq        bigint PRIMARY KEY,
     ledger_hash       bytea  UNIQUE NOT NULL,
-    prev_hash         bytea  UNIQUE NOT NULL,
+    prev_hash         bytea  NOT NULL,
     total_coins       bigint NOT NULL,
     closing_time      bigint NOT NULL,
     prev_closing_time bigint NOT NULL,
