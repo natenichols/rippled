@@ -1349,7 +1349,8 @@ ApplicationImp::setup()
     // Optionally turn off logging to console.
     logs_->silent(config_->silent());
 
-    m_jobQueue->setThreadCount(config_->WORKERS, config_->standalone());
+    m_jobQueue->setThreadCount(
+        config_->WORKERS, config_->standalone() && !config_->reporting());
     grpcServer_->run();
 
     if (!config_->standalone())
@@ -1522,7 +1523,8 @@ ApplicationImp::setup()
     validatorSites_->start();
 
     // start first consensus round
-    if (!m_networkOPs->beginConsensus(
+    if (!config_->reporting() &&
+        !m_networkOPs->beginConsensus(
             m_ledgerMaster->getClosedLedger()->info().hash))
     {
         JLOG(m_journal.fatal()) << "Unable to start consensus";
