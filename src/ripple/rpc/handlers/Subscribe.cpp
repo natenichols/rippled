@@ -127,8 +127,12 @@ doSubscribe(RPC::JsonContext& context)
             std::string streamName = it.asString();
             if (streamName == "server")
             {
-                context.netOps.subServer(
-                    ispSub, jvResult, context.role == Role::ADMIN);
+                if (context.app.config().reporting())
+                    return rpcError(
+                        rpcINVALID_PARAMS,
+                        "Operation not supported: Server is in reporting mode");
+                context.netOps.subServer (ispSub, jvResult,
+                    context.role == Role::ADMIN);
             }
             else if (streamName == "ledger")
             {
@@ -136,7 +140,11 @@ doSubscribe(RPC::JsonContext& context)
             }
             else if (streamName == "manifests")
             {
-                context.netOps.subManifests(ispSub);
+                if (context.app.config().reporting())
+                    return rpcError(
+                        rpcINVALID_PARAMS,
+                        "Operation not supported: Server is in reporting mode");
+                context.netOps.subManifests (ispSub);
             }
             else if (streamName == "transactions")
             {
@@ -146,21 +154,37 @@ doSubscribe(RPC::JsonContext& context)
                 streamName == "transactions_proposed" ||
                 streamName == "rt_transactions")  // DEPRECATED
             {
-                context.netOps.subRTTransactions(ispSub);
+                if (context.app.config().reporting())
+                    return rpcError(
+                        rpcINVALID_PARAMS,
+                        "Operation not supported: Server is in reporting mode");
+                context.netOps.subRTTransactions (ispSub);
             }
             else if (streamName == "validations")
             {
-                context.netOps.subValidations(ispSub);
+                if (context.app.config().reporting())
+                    return rpcError(
+                        rpcINVALID_PARAMS,
+                        "Operation not supported: Server is in reporting mode");
+                context.netOps.subValidations (ispSub);
             }
             else if (streamName == "peer_status")
             {
+                if (context.app.config().reporting())
+                    return rpcError(
+                        rpcINVALID_PARAMS,
+                        "Operation not supported: Server is in reporting mode");
                 if (context.role != Role::ADMIN)
                     return rpcError(rpcNO_PERMISSION);
                 context.netOps.subPeerStatus(ispSub);
             }
             else if (streamName == "consensus")
             {
-                context.netOps.subConsensus(ispSub);
+                if (context.app.config().reporting())
+                    return rpcError(
+                        rpcINVALID_PARAMS,
+                        "Operation not supported: Server is in reporting mode");
+                context.netOps.subConsensus (ispSub);
             }
             else
             {

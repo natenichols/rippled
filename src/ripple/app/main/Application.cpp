@@ -1405,43 +1405,47 @@ ApplicationImp::setup()
     Pathfinder::initPathTable();
 
     auto const startUp = config_->START_UP;
-    if (startUp == Config::FRESH)
+    if (!config_->reporting())
     {
-        JLOG(m_journal.info()) << "Starting new Ledger";
-
-        startGenesisLedger();
-    }
-    else if (
-        startUp == Config::LOAD || startUp == Config::LOAD_FILE ||
-        startUp == Config::REPLAY)
-    {
-        JLOG(m_journal.info()) << "Loading specified Ledger";
-
-        if (!loadOldLedger(
-                config_->START_LEDGER,
-                startUp == Config::REPLAY,
-                startUp == Config::LOAD_FILE))
+        if (startUp == Config::FRESH)
         {
-            JLOG(m_journal.error())
-                << "The specified ledger could not be loaded.";
-            return false;
+            JLOG(m_journal.info()) << "Starting new Ledger";
+
+            startGenesisLedger();
+        }
+        else if (
+            startUp == Config::LOAD || startUp == Config::LOAD_FILE ||
+            startUp == Config::REPLAY)
+        {
+            JLOG(m_journal.info()) << "Loading specified Ledger";
+
+            if (!loadOldLedger(
+                    config_->START_LEDGER,
+                    startUp == Config::REPLAY,
+                    startUp == Config::LOAD_FILE))
+            {
+                JLOG(m_journal.error())
+                    << "The specified ledger could not be loaded.";
+                return false;
+            }
+        }
+        else if (startUp == Config::NETWORK)
+        {
+            // This should probably become the default once we have a stable
+            // network.
+            if (!config_->standalone())
+                m_networkOPs->setNeedNetworkLedger();
+
+            startGenesisLedger();
+        }
+        else
+        {
+            startGenesisLedger();
         }
     }
-    else if (startUp == Config::NETWORK)
-    {
-        // This should probably become the default once we have a stable
-        // network.
-        if (!config_->standalone())
-            m_networkOPs->setNeedNetworkLedger();
 
-        startGenesisLedger();
-    }
-    else
-    {
-        startGenesisLedger();
-    }
-
-    m_orderBookDB.setup(getLedgerMaster().getCurrentLedger());
+    if (!config().reporting())
+        m_orderBookDB.setup(getLedgerMaster().getCurrentLedger());
 
     nodeIdentity_ = loadNodeIdentity(*this);
 

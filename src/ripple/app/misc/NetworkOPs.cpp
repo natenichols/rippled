@@ -2649,77 +2649,82 @@ NetworkOPsImp::getServerInfo(bool human, bool admin, bool counters)
     if (admin)
         info[jss::load] = m_job_queue.getJson();
 
-    auto const escalationMetrics =
-        app_.getTxQ().getMetrics(*app_.openLedger().current());
-
-    auto const loadFactorServer = app_.getFeeTrack().getLoadFactor();
-    auto const loadBaseServer = app_.getFeeTrack().getLoadBase();
-    /* Scale the escalated fee level to unitless "load factor".
-       In practice, this just strips the units, but it will continue
-       to work correctly if either base value ever changes. */
-    auto const loadFactorFeeEscalation =
-        mulDiv(
-            escalationMetrics.openLedgerFeeLevel,
-            loadBaseServer,
-            escalationMetrics.referenceFeeLevel)
-            .second;
-
-    auto const loadFactor = std::max(
-        safe_cast<std::uint64_t>(loadFactorServer), loadFactorFeeEscalation);
-
-    if (!human)
+    if (!app_.config().reporting())
     {
-        info[jss::load_base] = loadBaseServer;
-        info[jss::load_factor] = trunc32(loadFactor);
-        info[jss::load_factor_server] = loadFactorServer;
+        auto const escalationMetrics =
+            app_.getTxQ().getMetrics(*app_.openLedger().current());
 
-        /* Json::Value doesn't support uint64, so clamp to max
-            uint32 value. This is mostly theoretical, since there
-            probably isn't enough extant XRP to drive the factor
-            that high.
-        */
-        info[jss::load_factor_fee_escalation] =
-            escalationMetrics.openLedgerFeeLevel.jsonClipped();
-        info[jss::load_factor_fee_queue] =
-            escalationMetrics.minProcessingFeeLevel.jsonClipped();
-        info[jss::load_factor_fee_reference] =
-            escalationMetrics.referenceFeeLevel.jsonClipped();
-    }
-    else
-    {
-        info[jss::load_factor] =
-            static_cast<double>(loadFactor) / loadBaseServer;
+        auto const loadFactorServer = app_.getFeeTrack().getLoadFactor();
+        auto const loadBaseServer = app_.getFeeTrack().getLoadBase();
+        /* Scale the escalated fee level to unitless "load factor".
+           In practice, this just strips the units, but it will continue
+           to work correctly if either base value ever changes. */
+        auto const loadFactorFeeEscalation =
+            mulDiv(
+                escalationMetrics.openLedgerFeeLevel,
+                loadBaseServer,
+                escalationMetrics.referenceFeeLevel)
+                .second;
 
-        if (loadFactorServer != loadFactor)
-            info[jss::load_factor_server] =
-                static_cast<double>(loadFactorServer) / loadBaseServer;
+        auto const loadFactor = std::max(
+            safe_cast<std::uint64_t>(loadFactorServer),
+            loadFactorFeeEscalation);
 
-        if (admin)
+        if (!human)
         {
-            std::uint32_t fee = app_.getFeeTrack().getLocalFee();
-            if (fee != loadBaseServer)
-                info[jss::load_factor_local] =
-                    static_cast<double>(fee) / loadBaseServer;
-            fee = app_.getFeeTrack().getRemoteFee();
-            if (fee != loadBaseServer)
-                info[jss::load_factor_net] =
-                    static_cast<double>(fee) / loadBaseServer;
-            fee = app_.getFeeTrack().getClusterFee();
-            if (fee != loadBaseServer)
-                info[jss::load_factor_cluster] =
-                    static_cast<double>(fee) / loadBaseServer;
-        }
-        if (escalationMetrics.openLedgerFeeLevel !=
-                escalationMetrics.referenceFeeLevel &&
-            (admin || loadFactorFeeEscalation != loadFactor))
+            info[jss::load_base] = loadBaseServer;
+            info[jss::load_factor] = trunc32(loadFactor);
+            info[jss::load_factor_server] = loadFactorServer;
+
+            /* Json::Value doesn't support uint64, so clamp to max
+                uint32 value. This is mostly theoretical, since there
+                probably isn't enough extant XRP to drive the factor
+                that high.
+            */
             info[jss::load_factor_fee_escalation] =
-                escalationMetrics.openLedgerFeeLevel.decimalFromReference(
-                    escalationMetrics.referenceFeeLevel);
-        if (escalationMetrics.minProcessingFeeLevel !=
-            escalationMetrics.referenceFeeLevel)
+                escalationMetrics.openLedgerFeeLevel.jsonClipped();
             info[jss::load_factor_fee_queue] =
-                escalationMetrics.minProcessingFeeLevel.decimalFromReference(
-                    escalationMetrics.referenceFeeLevel);
+                escalationMetrics.minProcessingFeeLevel.jsonClipped();
+            info[jss::load_factor_fee_reference] =
+                escalationMetrics.referenceFeeLevel.jsonClipped();
+        }
+        else
+        {
+            info[jss::load_factor] =
+                static_cast<double>(loadFactor) / loadBaseServer;
+
+            if (loadFactorServer != loadFactor)
+                info[jss::load_factor_server] =
+                    static_cast<double>(loadFactorServer) / loadBaseServer;
+
+            if (admin)
+            {
+                std::uint32_t fee = app_.getFeeTrack().getLocalFee();
+                if (fee != loadBaseServer)
+                    info[jss::load_factor_local] =
+                        static_cast<double>(fee) / loadBaseServer;
+                fee = app_.getFeeTrack().getRemoteFee();
+                if (fee != loadBaseServer)
+                    info[jss::load_factor_net] =
+                        static_cast<double>(fee) / loadBaseServer;
+                fee = app_.getFeeTrack().getClusterFee();
+                if (fee != loadBaseServer)
+                    info[jss::load_factor_cluster] =
+                        static_cast<double>(fee) / loadBaseServer;
+            }
+            if (escalationMetrics.openLedgerFeeLevel !=
+                    escalationMetrics.referenceFeeLevel &&
+                (admin || loadFactorFeeEscalation != loadFactor))
+                info[jss::load_factor_fee_escalation] =
+                    escalationMetrics.openLedgerFeeLevel.decimalFromReference(
+                        escalationMetrics.referenceFeeLevel);
+            if (escalationMetrics.minProcessingFeeLevel !=
+                escalationMetrics.referenceFeeLevel)
+                info[jss::load_factor_fee_queue] =
+                    escalationMetrics.minProcessingFeeLevel
+                        .decimalFromReference(
+                            escalationMetrics.referenceFeeLevel);
+        }
     }
 
     bool valid = false;
@@ -2930,8 +2935,9 @@ void NetworkOPsImp::pubLedger (
 void
 NetworkOPsImp::reportFeeChange()
 {
-    ServerFeeSummary f{
-        app_.openLedger().current()->fees().base,
+    if (app_.config().reporting())
+        return;
+    ServerFeeSummary f{app_.openLedger().current()->fees().base,
         app_.getTxQ().getMetrics(*app_.openLedger().current()),
         app_.getFeeTrack()};
 
