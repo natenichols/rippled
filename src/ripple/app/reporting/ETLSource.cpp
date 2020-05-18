@@ -95,6 +95,7 @@ ETLSource::restart(boost::beast::error_code ec)
     numFailures++;
     timer_.expires_after(boost::asio::chrono::seconds(waitTime));
     timer_.async_wait([this](auto ec) {
+        // TODO: handle the timer being cancelled
         JLOG(journal_.debug()) << "async_wait - ec " << ec;
         close(true);
     });

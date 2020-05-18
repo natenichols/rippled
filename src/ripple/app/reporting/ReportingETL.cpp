@@ -467,7 +467,7 @@ writeToLedgersDB(
     LedgerInfo const& info,
     std::shared_ptr<PgQuery>& pgQuery,
     std::shared_ptr<Pg>& conn,
-    beast::Journal& journal)
+    ReportingETL& etl)
 {
     auto cmd = boost::format(
         R"(INSERT INTO ledgers 
@@ -480,49 +480,67 @@ writeToLedgersDB(
         info.parentCloseTime.time_since_epoch().count() %
         info.closeTimeResolution.count() % info.closeFlags %
         strHex(info.accountHash) % strHex(info.txHash));
-    JLOG(journal.trace()) << "writeToTxDB - ledgerInsert = " << ledgerInsert;
-    auto res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
+    JLOG(etl.getJournal().trace())
+        << __func__ << "query string = " << ledgerInsert;
 
-    // Uncomment to trigger "Ledger Ancestry error"
-//    res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
-
-    // Uncomment to trigger "duplicate key"
-//    static int z = 0;
-//    if (++z < 10)
-//        return;
-//    res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
-
-    if (std::holds_alternative<pg_error_type>(res))
+    while (!etl.isStopping())
     {
-        pg_error_type const& err = std::get<pg_error_type>(res);
-        JLOG(journal.error())
-            << "Insert into ledger DB error: " << PQresStatus(err.first)
-            << ", " << err.second;
-        if (err.first == PGRES_FATAL_ERROR && (
-            (err.second.find("ERROR:  duplicate key") != err.second.npos)
-                || (err.second.find(
-                    "ERROR:  Ledger Ancestry error") != err.second.npos)))
+        auto res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
+
+        // Uncomment to trigger "Ledger Ancestry error"
+        //    res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
+
+        // Uncomment to trigger "duplicate key"
+        //    static int z = 0;
+        //    if (++z < 10)
+        //        return;
+        //    res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
+
+        if (std::holds_alternative<pg_error_type>(res))
         {
-            JLOG(journal.error()) << "ETL must stop based on this.";
-            return false;
+            pg_error_type const& err = std::get<pg_error_type>(res);
+            auto resStatus = PQresStatus(err.first);
+            if (err.first == PGRES_FATAL_ERROR &&
+                ((err.second.find("ERROR:  duplicate key") !=
+                  err.second.npos) ||
+                 (err.second.find("ERROR:  Ledger Ancestry error") !=
+                  err.second.npos)))
+            {
+                JLOG(etl.getJournal().error())
+                    << __func__ << "Insert into ledger DB error: " << resStatus
+                    << ", " << err.second << ". Stopping ETL";
+                return false;
+            }
+            else
+            {
+                JLOG(etl.getJournal().error())
+                    << __func__ << "Insert into ledger DB error: " << resStatus
+                    << ", " << err.second << ". Retrying";
+                continue;
+            }
+        }
+
+        auto const& queryResult = std::get<pg_result_type>(res);
+        if (!queryResult)
+        {
+            JLOG(etl.getJournal().error())
+                << __func__ << " queryResult is null. Retrying";
+        }
+        else if (PQresultStatus(queryResult.get()) != PGRES_COMMAND_OK)
+        {
+            JLOG(etl.getJournal().error())
+                << __func__ << " resultStatus != PGRES_COMMAND_OK"
+                << "result status = " << PQresultStatus(queryResult.get())
+                << ". Retrying";
         }
         else
         {
-            JLOG(journal.error()) << "This error can be retried, and "
-                                     "definitely logged.";
-            assert(false);
+            JLOG(etl.getJournal().debug())
+                << __func__ << "Succesfully wrote to ledgers db";
+            break;
         }
     }
-
-    auto const& queryResult = std::get<pg_result_type>(res);
-    if (!queryResult || PQresultStatus(queryResult.get()) != PGRES_COMMAND_OK)
-    {
-        JLOG(journal.error()) << "empty query or other type of error not "
-                                 "caught above. This is retryable and "
-                                 "should be logged.";
-        assert(false);
-    }
-    return true;
+    return !etl.isStopping();
 }
 
 void
@@ -553,72 +571,175 @@ ReportingETL::truncateDBs()
     assert(result == PGRES_COMMAND_OK);
 }
 
+template <class Func>
+void
+executeUntilSuccess(
+    Func f,
+    std::shared_ptr<Pg>& conn,
+    ExecStatusType expectedResult,
+    ReportingETL& etl)
+{
+    // write the data to Postgres
+    while (!etl.isStopping())
+    {
+        auto resCode = f();
+
+        if (resCode == -1)
+        {
+            JLOG(etl.getJournal().error())
+                << __func__ << "resCode is -1. error msg = "
+                << PQerrorMessage(conn->getConn()) << ". Retrying";
+            continue;
+        }
+        else if (resCode == 0)
+        {
+            JLOG(etl.getJournal().error())
+                << __func__ << "resCode is 0. Retrying";
+            continue;
+        }
+
+        auto pqResult = PQgetResult(conn->getConn());
+        auto pqResultStatus = PQresultStatus(pqResult);
+
+        if (pqResultStatus == expectedResult)
+        {
+            JLOG(etl.getJournal().debug())
+                << __func__ << "Successfully executed query";
+            break;
+        }
+        else
+        {
+            JLOG(etl.getJournal().error())
+                << __func__ << "pqResultStatus does not equal "
+                << "expectedResult. pqResultStatus = " << pqResultStatus
+                << " expectedResult = " << expectedResult;
+            continue;
+        }
+    }
+}
+
+void
+executeUntilSuccess(
+    std::shared_ptr<PgQuery>& pg,
+    std::shared_ptr<Pg>& conn,
+    std::string const& query,
+    ExecStatusType expectedResult,
+    ReportingETL& etl)
+{
+    JLOG(etl.getJournal().debug()) << __func__ << " query = " << query
+                                   << " expectedResult = " << expectedResult;
+    while (!etl.isStopping())
+    {
+        auto res = pg->querySyncVariant({query.data(), {}}, conn);
+        if (auto result = std::get_if<pg_result_type>(&res))
+        {
+            auto resultStatus = PQresultStatus(result->get());
+            if (resultStatus == expectedResult)
+            {
+                JLOG(etl.getJournal().debug())
+                    << __func__ << "Successfully executed query. "
+                    << "query = " << query
+                    << "result status = " << resultStatus;
+                return;
+            }
+            else
+            {
+                JLOG(etl.getJournal().error())
+                    << __func__ << "result status does not match expected. "
+                    << "result status = " << resultStatus
+                    << " expected = " << expectedResult << "query = " << query;
+            }
+        }
+        else if (auto result = std::get_if<pg_error_type>(&res))
+        {
+            auto errorStatus = PQresStatus(result->first);
+            JLOG(etl.getJournal().error())
+                << __func__ << "error executing query = " << query
+                << ". errorStatus = " << errorStatus
+                << ". error message = " << result->second << ". Retrying";
+        }
+        else
+        {
+            JLOG(etl.getJournal().error())
+                << __func__ << "empty variant. Retrying";
+        }
+    }
+}
+
 void
 writeToAccountTransactionsDB(
     std::vector<TxMeta>& metas,
     std::shared_ptr<PgQuery>& pgQuery,
     std::shared_ptr<Pg>& conn,
-    beast::Journal& journal)
+    ReportingETL& etl)
 {
-    // Initiate COPY operation
-    auto res = pgQuery->querySync("COPY account_transactions from STDIN", conn);
-    assert(res);
-    auto result = PQresultStatus(res.get());
-    assert(result == PGRES_COPY_IN);
-
-    JLOG(journal.trace()) << "writeToTxDB - COPY result = " << result;
-
-    // Write data to stream
-    std::stringstream copyBuffer;
-    for (auto& m : metas)
+    while (!etl.isStopping())
     {
-        std::string txHash = strHex(m.getTxID());
-        auto idx = m.getIndex();
-        auto ledgerSeq = m.getLgrSeq();
+        // Initiate COPY operation
+        executeUntilSuccess(
+            pgQuery,
+            conn,
+            "COPY account_transactions from STDIN",
+            PGRES_COPY_IN,
+            etl);
 
-        for (auto& a : m.getAffectedAccounts(journal))
+        // Write data to stream
+        std::stringstream copyBuffer;
+        for (auto& m : metas)
         {
-            std::string acct = strHex(a);
-            copyBuffer << "\\\\x" << acct << '\t' << std::to_string(ledgerSeq)
-                       << '\t' << std::to_string(idx) << '\t' << "\\\\x"
-                       << txHash << '\n';
-            JLOG(journal.trace()) << acct;
+            std::string txHash = strHex(m.getTxID());
+            auto idx = m.getIndex();
+            auto ledgerSeq = m.getLgrSeq();
+
+            for (auto& a : m.getAffectedAccounts(etl.getJournal()))
+            {
+                std::string acct = strHex(a);
+                copyBuffer << "\\\\x" << acct << '\t'
+                           << std::to_string(ledgerSeq) << '\t'
+                           << std::to_string(idx) << '\t' << "\\\\x" << txHash
+                           << '\n';
+                JLOG(etl.getJournal().trace()) << acct;
+            }
         }
+
+        PQsetnonblocking(conn->getConn(), 0);
+
+        std::string bufString = copyBuffer.str();
+        JLOG(etl.getJournal().trace()) << "copy buffer = " << bufString;
+        executeUntilSuccess(
+            [&conn, &bufString]() {
+                return PQputCopyData(
+                    conn->getConn(), bufString.c_str(), bufString.size());
+            },
+            conn,
+            PGRES_COPY_IN,
+            etl);
+
+        executeUntilSuccess(
+            [&conn]() { return PQputCopyEnd(conn->getConn(), nullptr); },
+            conn,
+            PGRES_COMMAND_OK,
+            etl);
+        auto pqResultStatus = PGRES_COMMAND_OK;
+        while (!etl.isStopping())
+        {
+            auto pqResult = PQgetResult(conn->getConn());
+            if (!pqResult)
+                break;
+            pqResultStatus = PQresultStatus(pqResult);
+        }
+        if (pqResultStatus != PGRES_COMMAND_OK)
+        {
+            JLOG(etl.getJournal().error())
+                << __func__ << "Result of PQputCopyEnd is not PGRES_COMMAND_OK."
+                << " Result = " << pqResultStatus << ". Retrying";
+            continue;
+        }
+        JLOG(etl.getJournal().debug())
+            << __func__ << "Successfully wrote to account_transactions db";
+        break;
     }
 
-    PQsetnonblocking(conn->getConn(), 0);
-
-    std::string bufString = copyBuffer.str();
-    JLOG(journal.trace()) << "copy buffer = " << bufString;
-
-    // write the data to Postgres
-    auto resCode =
-        PQputCopyData(conn->getConn(), bufString.c_str(), bufString.size());
-
-    auto pqResult = PQgetResult(conn->getConn());
-    auto pqResultStatus = PQresultStatus(pqResult);
-    JLOG(journal.trace()) << "putCopyData - resultCode = " << resCode
-                          << " result = " << pqResultStatus;
-    assert(resCode != -1);
-    assert(resCode != 0);
-    assert(pqResultStatus == 4);
-
-    // Tell Postgres we are done with the COPY operation
-    resCode = PQputCopyEnd(conn->getConn(), nullptr);
-    while (true)
-    {
-        pqResult = PQgetResult(conn->getConn());
-        if (!pqResult)
-            break;
-        pqResultStatus = PQresultStatus(pqResult);
-    }
-
-    JLOG(journal.trace()) << "putCopyEnd - resultCode = " << resCode
-                          << " result = " << pqResultStatus
-                          << " error_msg = " << PQerrorMessage(conn->getConn());
-    assert(resCode != -1);
-    assert(resCode != 0);
-    assert(pqResultStatus != 7);
 }
 
 bool
@@ -627,29 +748,20 @@ ReportingETL::writeToPostgres(
     std::vector<TxMeta>& metas)
 {
     // TODO: clean this up a bit. use less auto, better error handling, etc
-    JLOG(journal_.debug()) << "writeToPostgres";
+    JLOG(journal_.debug()) << __func__;
     assert(app_.pgPool());
     std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
     std::shared_ptr<Pg> conn;
-    JLOG(journal_.trace()) << "createdPqQuery";
 
-    auto res = pg->querySync("BEGIN", conn);
-    assert(res);
-    auto result = PQresultStatus(res.get());
-    JLOG(journal_.trace()) << "writeToTxDB - BEGIN result = " << result;
-    assert(result == PGRES_COMMAND_OK);
+    executeUntilSuccess(pg, conn, "BEGIN", PGRES_COMMAND_OK, *this);
 
-    if (!writeToLedgersDB(info, pg, conn, journal_))
+    if (!writeToLedgersDB(info, pg, conn, *this))
         return false;
 
-    writeToAccountTransactionsDB(metas, pg, conn, journal_);
+    writeToAccountTransactionsDB(metas, pg, conn, *this);
 
-    res = pg->querySync("COMMIT", conn);
-    assert(res);
-    result = PQresultStatus(res.get());
+    executeUntilSuccess(pg, conn, "COMMIT", PGRES_COMMAND_OK, *this);
 
-    JLOG(journal_.trace()) << "writeToTxDB - COMMIT result = " << result;
-    assert(result == PGRES_COMMAND_OK);
     PQsetnonblocking(conn->getConn(), 1);
     app_.pgPool()->checkin(conn);
     return true;

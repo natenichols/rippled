@@ -202,6 +202,12 @@ public:
         return ioc_;
     }
 
+    beast::Journal&
+    getJournal()
+    {
+        return journal_;
+    }
+
     void
     setup()
     {
