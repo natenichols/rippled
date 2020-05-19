@@ -211,7 +211,7 @@ public:
     void
     setup()
     {
-        if (app_.config().START_UP == Config::StartUpType::FRESH)
+        if (app_.config().START_UP == Config::StartUpType::FRESH && !readOnly_)
         {
             if (app_.config().usePostgresTx())
             {
@@ -231,6 +231,8 @@ public:
         }
         else if (!readOnly_)
         {
+            if (checkConsistency_)
+                assert(consistencyCheck());
             // This ledger will not actually be mutated, but every ledger
             // after it will therefore ledger_ is not const
             ledger_ = std::const_pointer_cast<Ledger>(

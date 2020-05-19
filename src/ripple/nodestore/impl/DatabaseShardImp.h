@@ -172,6 +172,9 @@ public:
     void
     sweep() override;
 
+    Backend&
+    getBackend() override;
+
 private:
     struct ShardInfo
     {

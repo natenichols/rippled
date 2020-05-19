@@ -96,6 +96,7 @@ public:
         }};
     CassPrepared* insert_ = nullptr;
     CassPrepared* select_ = nullptr;
+    CassPrepared* truncate_ = nullptr;
 
     std::vector<std::pair<std::shared_ptr<NodeObject>, CassFuture*>> batch_;
 //    std::queue<std::vector<
@@ -266,7 +267,38 @@ public:
         select_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
         cass_future_free(fut);
 
+        fut = cass_session_prepare(session_.get(), "TRUNCATE TABLE objects");
+        rc = cass_future_error_code(fut);
+        if (rc != CASS_OK)
+        {
+            std::stringstream ss;
+            ss << "nodestore: Error preparing Cassandra truncate: " << rc;
+            Throw<std::runtime_error>(ss.str());
+        }
+        truncate_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
+        cass_future_free(fut);
+
         open_ = true;
+    }
+
+    bool
+    truncate() override
+    {
+        CassStatement* statement = cass_prepared_bind(truncate_);
+
+        CassFuture* fut = cass_session_execute(session_.get(), statement);
+        CassError rc = cass_future_error_code(fut);
+        if (rc != CASS_OK)
+        {
+            cass_statement_free(statement);
+            cass_future_free(fut);
+            JLOG(j_.error()) << "Cassandra truncate error: " << rc;
+            return false;
+        }
+
+        cass_statement_free(statement);
+        cass_future_free(fut);
+        return true;
     }
 
     void
@@ -283,6 +315,11 @@ public:
             {
                 cass_prepared_free(select_);
                 select_ = nullptr;
+            }
+            if (truncate_)
+            {
+                cass_prepared_free(truncate_);
+                truncate_ = nullptr;
             }
         }
         open_ = false;

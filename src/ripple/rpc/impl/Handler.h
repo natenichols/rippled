@@ -121,7 +121,8 @@ conditionMet(Condition condition_required, T& context)
     }
 
     if ((condition_required & NEEDS_CLOSED_LEDGER) &&
-        !context.ledgerMaster.getClosedLedger())
+        !context.ledgerMaster.getClosedLedger() &&
+        !context.app.config().reporting())
     {
         if (context.apiVersion == 1)
             return rpcNO_CLOSED;

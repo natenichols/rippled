@@ -226,6 +226,15 @@ public:
     {
         return 0;
     }
+
+    bool
+    truncate() override
+    {
+        auto res = pgQuery_->querySync("truncate objects;");
+        auto result = PQresultStatus(res.get());
+        JLOG(j_.debug()) << __func__ << "result = " << result;
+        return result == PGRES_COMMAND_OK;
+    }
 };
 
 //------------------------------------------------------------------------------

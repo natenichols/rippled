@@ -116,6 +116,12 @@ public:
         return *pCache_;
     }
 
+    Backend&
+    getBackend() override
+    {
+        return *writableBackend_;
+    }
+
 private:
     // Positive cache
     std::shared_ptr<TaggedCache<uint256, NodeObject>> pCache_;

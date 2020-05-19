@@ -244,6 +244,10 @@ ReportingETL::consistencyCheck()
 
     JLOG(journal_.info()) << "consistencyCheck - isConsistent = "
                           << isConsistent;
+    if (!isConsistent)
+    {
+        JLOG(journal_.error()) << __func__ << "consistency check failed!";
+    }
 
     return isConsistent;
 }
@@ -262,7 +266,8 @@ ReportingETL::storeLedger()
             hotLEDGER,
             std::move(s.modData()),
             ledger_->info().hash,
-            ledger_->info().seq);
+            ledger_->info().seq,
+            true);
     }
 
     auto end = std::chrono::system_clock::now();
@@ -543,33 +548,7 @@ writeToLedgersDB(
     return !etl.isStopping();
 }
 
-void
-ReportingETL::truncateDBs()
-{
-    assert(app_.pgPool());
-    assert(!app_.config().reportingReadOnly());
-    std::shared_ptr<PgQuery> pgQuery = std::make_shared<PgQuery>(app_.pgPool());
 
-    auto res = pgQuery->querySync("truncate ledgers cascade;");
-    auto result = PQresultStatus(res.get());
-    JLOG(journal_.trace()) << "truncateDBs - result : " << result;
-    assert(result == PGRES_COMMAND_OK);
-
-    res = pgQuery->querySync("truncate account_transactions;");
-    result = PQresultStatus(res.get());
-    JLOG(journal_.trace()) << "truncateDBs - result : " << result;
-    assert(result == PGRES_COMMAND_OK);
-
-    res = pgQuery->querySync("truncate min_seq;");
-    result = PQresultStatus(res.get());
-    JLOG(journal_.trace()) << "truncateDBs - result : " << result;
-    assert(result == PGRES_COMMAND_OK);
-
-    res = pgQuery->querySync("truncate ancestry_verified;");
-    result = PQresultStatus(res.get());
-    JLOG(journal_.trace()) << "truncateDBs - result : " << result;
-    assert(result == PGRES_COMMAND_OK);
-}
 
 template <class Func>
 void
@@ -579,7 +558,6 @@ executeUntilSuccess(
     ExecStatusType expectedResult,
     ReportingETL& etl)
 {
-    // write the data to Postgres
     while (!etl.isStopping())
     {
         auto resCode = f();
@@ -663,6 +641,36 @@ executeUntilSuccess(
             JLOG(etl.getJournal().error())
                 << __func__ << "empty variant. Retrying";
         }
+    }
+}
+
+void
+ReportingETL::truncateDBs()
+{
+    assert(app_.pgPool());
+    assert(!app_.config().reportingReadOnly());
+    std::shared_ptr<PgQuery> pgQuery = std::make_shared<PgQuery>(app_.pgPool());
+    std::shared_ptr<Pg> conn;
+
+    executeUntilSuccess(
+        pgQuery, conn, "TRUNCATE ledgers CASCADE;", PGRES_COMMAND_OK, *this);
+
+    executeUntilSuccess(
+        pgQuery,
+        conn,
+        "TRUNCATE account_transactions;",
+        PGRES_COMMAND_OK,
+        *this);
+    executeUntilSuccess(
+        pgQuery, conn, "TRUNCATE min_seq;", PGRES_COMMAND_OK, *this);
+    executeUntilSuccess(
+        pgQuery, conn, "TRUNCATE ancestry_verified;", PGRES_COMMAND_OK, *this);
+
+    NodeStore::Backend& backend = app_.getNodeStore().getBackend();
+    while (!stopping_)
+    {
+        if (backend.truncate())
+            break;
     }
 }
 
@@ -947,8 +955,6 @@ ReportingETL::ReportingETL(Application& app, Stoppable& parent)
         if (checkConsistency_)
         {
             Section nodeDb = app_.config().section("node_db");
-            std::pair<std::string, bool> onlineDelete =
-                nodeDb.find("online_delete");
 
             std::pair<std::string, bool> postgresNodestore =
                 nodeDb.find("type");

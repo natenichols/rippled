@@ -136,6 +136,12 @@ public:
     void
     sweep() override;
 
+    Backend&
+    getBackend() override
+    {
+        return *backend_;
+    };
+
 private:
     // Positive cache
     std::shared_ptr<TaggedCache<uint256, NodeObject>> pCache_;
