@@ -40,6 +40,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -54,7 +55,6 @@ class CassandraBackend
     : public Backend
 {
 private:
-    /*
     void
     storeLocked(std::shared_ptr<NodeObject> const& no)
     {
@@ -67,11 +67,10 @@ private:
         }
         batches_.back().push_back({no, nullptr});
     }
-     */
 
 public:
     static constexpr std::size_t currentType = 1;
-    static constexpr std::size_t default_batch_size = 10000000;
+    static constexpr std::size_t default_batch_size = 10000;
 
     beast::Journal const j_;
     size_t const keyBytes_;
@@ -98,9 +97,9 @@ public:
     CassPrepared* select_ = nullptr;
     CassPrepared* truncate_ = nullptr;
 
-    std::vector<std::pair<std::shared_ptr<NodeObject>, CassFuture*>> batch_;
-//    std::queue<std::vector<
-//        std::pair<std::shared_ptr<NodeObject>, CassFuture*>>> batches_;
+//    std::vector<std::pair<std::shared_ptr<NodeObject>, CassFuture*>> batch_;
+    std::queue<std::vector<
+        std::pair<std::shared_ptr<NodeObject>, CassFuture*>>> batches_;
 
     CassandraBackend (
         size_t keyBytes,
@@ -171,7 +170,9 @@ public:
         {
             std::stringstream ss;
             ss << "nodestore: Error setting Cassandra contact_points: "
-                << contact_points << ", result: " << rc;
+                << contact_points << ", result: " << rc
+                << ", " << cass_error_desc(rc);
+
             Throw<std::runtime_error> (ss.str());
         }
         int port = get<int>(config_, "port");
@@ -182,10 +183,13 @@ public:
             {
                 std::stringstream ss;
                 ss << "nodestore: Error setting Cassandra port: "
-                   << port << ", result: " << rc;
+                   << port << ", result: " << rc
+                   << ", " << cass_error_desc(rc);
+
                 Throw<std::runtime_error> (ss.str());
             }
         }
+
         std::string username = get<std::string>(config_, "username");
         if (username.size())
         {
@@ -201,7 +205,58 @@ public:
             std::stringstream ss;
             ss << "nodestore: Error setting Cassandra io threads to "
                << workers
-               << ", result: " << rc;
+               << ", result: " << rc
+               << ", " << cass_error_desc(rc);
+            Throw<std::runtime_error> (ss.str());
+        }
+
+        std::string certfile = get<std::string>(config_, "certfile");
+        if (certfile.size())
+        {
+
+            std::ifstream fileStream(boost::filesystem::path(certfile).string(),
+                                     std::ios::in);
+            if (!fileStream)
+            {
+                std::stringstream ss;
+                ss << "opening config file " << certfile;
+                Throw<std::system_error>(errno, std::generic_category(),
+                                         ss.str());
+            }
+            std::string cert(std::istreambuf_iterator<char>{fileStream},
+                std::istreambuf_iterator<char>{});
+            if (fileStream.bad())
+            {
+                std::stringstream ss;
+                ss << "reading config file " << certfile;
+                Throw<std::system_error>(errno, std::generic_category(),
+                                         ss.str());
+            }
+
+            CassSsl* context = cass_ssl_new();
+            cass_ssl_set_verify_flags(context, CASS_SSL_VERIFY_NONE);
+            rc = cass_ssl_add_trusted_cert(context, cert.c_str());
+            if (rc != CASS_OK)
+            {
+                std::stringstream ss;
+                ss << "nodestore: Error setting Cassandra ssl context: "
+                   << rc
+                   << ", " << cass_error_desc(rc);
+                Throw<std::runtime_error> (ss.str());
+            }
+
+            cass_cluster_set_ssl(cluster, context);
+            cass_ssl_free(context);
+        }
+
+        rc = cass_cluster_set_consistency(cluster,
+                                          CASS_CONSISTENCY_LOCAL_QUORUM);
+        if (rc != CASS_OK)
+        {
+            std::stringstream ss;
+            ss << "nodestore: Error setting Cassandra cluster consistency: "
+               << rc
+               << ", " << cass_error_desc(rc);
             Throw<std::runtime_error> (ss.str());
         }
 
@@ -212,34 +267,62 @@ public:
                 "nodestore: Missing keyspace in Cassandra config");
         }
 
-        session_.reset(cass_session_new());
-        assert(session_);
+        CassFuture* fut;
+        while (true)
+        {
+            session_.reset(cass_session_new());
+            assert(session_);
 
-        CassFuture* fut = cass_session_connect_keyspace(
-            session_.get(), cluster, keyspace.c_str());
+            fut = cass_session_connect_keyspace(
+                session_.get(), cluster, keyspace.c_str());
+            rc = cass_future_error_code(fut);
+            if (rc != CASS_OK)
+            {
+                std::stringstream ss;
+                ss << "nodestore: Error connecting Cassandra session: " << rc
+                   << ", " << cass_error_desc(rc);
+                Throw<std::runtime_error> (ss.str());
+            }
+            cass_future_free(fut);
+
+            CassStatement* statement = cass_statement_new(
+                "CREATE TABLE IF NOT EXISTS objects ("
+                "    hash   blob PRIMARY KEY, "
+                "    object blob)",
+                0);
+            fut = cass_session_execute(session_.get(), statement);
+            rc = cass_future_error_code(fut);
+            if (rc != CASS_OK && rc != CASS_ERROR_SERVER_INVALID_QUERY)
+            {
+                std::stringstream ss;
+                ss << "nodestore: Error creating Cassandra objects table: "
+                   << rc << ", " << cass_error_desc(rc);
+                Throw<std::runtime_error>(ss.str());
+            }
+            cass_future_free(fut);
+
+            statement = cass_statement_new(
+                "SELECT * FROM objects LIMIT 1", 0);
+            fut = cass_session_execute(session_.get(), statement);
+            rc = cass_future_error_code(fut);
+            if (rc != CASS_OK)
+            {
+                if (rc == CASS_ERROR_SERVER_INVALID_QUERY)
+                {
+                    cass_future_free(fut);
+                    std::cerr << "objects table not here yet, sleeping 1s to see if table creation propagates\n";
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    continue;
+                }
+                std::stringstream ss;
+                ss << "nodestore: Error checking for objects table: "
+                   << rc << ", " << cass_error_desc(rc);
+                Throw<std::runtime_error>(ss.str());
+            }
+            cass_future_free(fut);
+            break;
+        }
         cass_cluster_free(cluster);
-        rc = cass_future_error_code(fut);
-        if (rc != CASS_OK)
-        {
-            std::stringstream ss;
-            ss << "nodestore: Error connecting Cassandra session: " << rc;
-            Throw<std::runtime_error> (ss.str());
-        }
-        cass_future_free(fut);
-
-        CassStatement* statement = cass_statement_new(
-            "CREATE TABLE IF NOT EXISTS objects ("
-            "    hash   blob PRIMARY KEY, "
-            "    object blob)", 0);
-        fut = cass_session_execute(session_.get(), statement);
-        rc = cass_future_error_code(fut);
-        if (rc != CASS_OK)
-        {
-            std::stringstream ss;
-            ss << "nodestore: Error creating Cassandra objects table: " << rc;
-            Throw<std::runtime_error> (ss.str());
-        }
-        cass_future_free(fut);
 
         fut = cass_session_prepare(
             session_.get(),
@@ -248,21 +331,22 @@ public:
         if (rc != CASS_OK)
         {
             std::stringstream ss;
-            ss << "nodestore: Error preparing Cassandra insert: " << rc;
-            Throw<std::runtime_error> (ss.str());
+            ss << "nodestore: Error preparing Cassandra insert: " << rc
+               << ", " << cass_error_desc(rc);
+            Throw<std::runtime_error>(ss.str());
         }
         insert_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
         cass_future_free(fut);
 
         fut = cass_session_prepare(
-            session_.get(),
-            "SELECT object FROM objects WHERE hash = ?");
+            session_.get(), "SELECT object FROM objects WHERE hash = ?");
         rc = cass_future_error_code(fut);
         if (rc != CASS_OK)
         {
             std::stringstream ss;
-            ss << "nodestore: Error preparing Cassandra select: " << rc;
-            Throw<std::runtime_error> (ss.str());
+            ss << "nodestore: Error preparing Cassandra select: " << rc
+               << ", " << cass_error_desc(rc);
+            Throw<std::runtime_error>(ss.str());
         }
         select_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
         cass_future_free(fut);
@@ -334,7 +418,8 @@ public:
         if (rc != CASS_OK)
         {
             cass_statement_free(statement);
-            JLOG(j_.error()) << "Binding Cassandra fetch query: " << rc;
+            JLOG(j_.error()) << "Binding Cassandra fetch query: " << rc
+                << ", " << cass_error_desc(rc);
             pno->reset();
             return backendError;
         }
@@ -344,7 +429,8 @@ public:
         {
             cass_statement_free(statement);
             cass_future_free(fut);
-            JLOG(j_.error()) << "Cassandra fetch error: " << rc;
+            JLOG(j_.error()) << "Cassandra fetch error: " << rc
+                << ", " << cass_error_desc(rc);
             pno->reset();
             return backendError;
         }
@@ -367,7 +453,8 @@ public:
         {
             cass_result_free(res);
             pno->reset();
-            JLOG(j_.error()) << "Cassandra fetch result error: " << rc;
+            JLOG(j_.error()) << "Cassandra fetch result error: " << rc
+                << ", " << cass_error_desc(rc);
             return backendError;
         }
 
@@ -380,7 +467,8 @@ public:
         if (!decoded.wasOk())
         {
             pno->reset();
-            JLOG(j_.error()) << "Cassandra error decoding result: " << rc;
+            JLOG(j_.error()) << "Cassandra error decoding result: " << rc
+                << ", " << cass_error_desc(rc);
             return dataCorrupt;
         }
         *pno = decoded.createObject();
@@ -446,8 +534,8 @@ public:
     store (std::shared_ptr <NodeObject> const& no) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        batch_.push_back({no, nullptr});
-//        storeLocked(no);
+//        batch_.push_back({no, nullptr});
+        storeLocked(no);
 
 //        pgQuery_->store(no, keyBytes_);
     }
@@ -457,8 +545,8 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         for (auto const& no : batch)
-            batch_.push_back({no, nullptr});
-//            storeLocked(no);
+//            batch_.push_back({no, nullptr});
+            storeLocked(no);
 
 //        pgQuery_->store(batch, keyBytes_);
     }
@@ -467,14 +555,15 @@ public:
     sync() override
     {
         std::unique_lock<std::mutex> lock(mutex_);
-        JLOG(j_.debug()) << "batch size: " << batch_.size();
-        while(batch_.size())
+        while(batches_.size())
         {
-            auto batch = std::move(batch_);
+            auto batch = std::move(batches_.front());
+            batches_.pop();
             lock.unlock();
+            JLOG(j_.debug()) << "inserting batch size: " << batch.size();
 
             std::vector<std::pair<
-                std::shared_ptr<NodeObject>, CassFuture*>> replacement;
+                std::shared_ptr<NodeObject>, CassFuture*>> retry;
             // TODO This potentially never stops. If ETL is switched, then
             // this needs to check a flag that's set by ETL.
             while (batch.size())
@@ -498,7 +587,8 @@ public:
                     {
                         cass_statement_free(statement);
                         std::stringstream ss;
-                        ss << "Binding cassandra insert hash: " << rc;
+                        ss << "Binding cassandra insert hash: " << rc
+                           << ", " << cass_error_desc(rc);
                         Throw<std::runtime_error>(ss.str());
                     }
                     rc = cass_statement_bind_bytes(
@@ -508,7 +598,8 @@ public:
                     {
                         cass_statement_free(statement);
                         std::stringstream ss;
-                        ss << "Binding cassandra insert object: " << rc;
+                        ss << "Binding cassandra insert object: " << rc
+                           << ", " << cass_error_desc(rc);
                         Throw<std::runtime_error>(ss.str());
                     }
                     fut = cass_session_execute(session_.get(), statement);
@@ -523,13 +614,21 @@ public:
                     if (rc != CASS_OK)
                     {
                         JLOG(j_.error()) << "Cassandra insert error: " << rc
-                            << "retrying " << no->getHash();
-                        replacement.push_back(item);
+                            << ", " << cass_error_desc(rc)
+                            << ". retrying " << no->getHash();
+                        retry.push_back(item);
                     }
                     cass_future_free(fut);
                 }
-                batch.swap(replacement);
-                replacement = {};
+                if ((retry.size() + 0.0) / batch.size() > 0.1)
+                {
+                    JLOG(j_.debug()) << "sleeping 1s before retrying batch of "
+                                     << retry.size() << " out of "
+                                     << batch.size() << " inserts";
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                }
+                batch = std::move(retry);
+                retry = {};
             }
 
             lock.lock();
