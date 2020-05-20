@@ -1,4 +1,3 @@
-
 //------------------------------------------------------------------------------
 /*
     This file is part of rippled: https://github.com/ripple/rippled
@@ -21,9 +20,11 @@
 #ifndef RIPPLE_CORE_ETLHELPERS_H_INCLUDED
 #define RIPPLE_CORE_ETLHELPERS_H_INCLUDED
 #include <ripple/app/main/Application.h>
+#include <ripple/ledger/ReadView.h>
 #include <condition_variable>
 #include <mutex>
 #include <queue>
+#include <sstream>
 
 namespace ripple {
 
@@ -55,7 +56,8 @@ public:
         {
             if (idx <= last)
             {
-                JLOG(j.warn())
+                JLOG(j.trace())
+                    << __func__ << " : "
                     << "Attempted to push old ledger index. index : " << idx
                     << ". Ignoring";
 
@@ -65,6 +67,7 @@ public:
             if (idx > *last + 1)
             {
                 JLOG(j.warn())
+                    << __func__ << " : "
                     << "Encountered gap. Trying to push " << idx
                     << ", but last = " << *last << ". Filling in gap";
                 for (uint32_t i = *last + 1; i < idx; ++i)
@@ -140,6 +143,17 @@ struct ThreadSafeQueue
     }
 };
 
+inline std::string
+toString(LedgerInfo const& info)
+{
+    std::stringstream ss;
+    ss << "LedgerInfo { Sequence : " << info.seq
+       << " Hash : " << strHex(info.hash) << " TxHash : " << strHex(info.txHash)
+       << " AccountHash : " << strHex(info.accountHash)
+       << " ParentHash : " << strHex(info.parentHash) << " }";
+    return ss.str();
+}
+
 struct Metrics
 {
     size_t txnCount = 0;
@@ -150,25 +164,49 @@ struct Metrics
 
     double updateTime = 0;
 
-    double storeTime = 0;
+    double postgresTime = 0;
+
+    void
+    printMetrics(beast::Journal& j, LedgerInfo const& info)
+    {
+        auto totalTime = updateTime + flushTime + postgresTime;
+        auto kvTime = updateTime + flushTime;
+        JLOG(j.info()) << toString(info) << " Metrics: "
+                       << " txnCount = " << txnCount
+                       << " objectCount = " << objectCount
+                       << " updateTime = " << updateTime
+                       << " flushTime = " << flushTime
+                       << " postgresTime = " << postgresTime
+                       << " update tps = " << txnCount / updateTime
+                       << " flush tps = " << txnCount / flushTime
+                       << " postgres tps = " << txnCount / postgresTime
+                       << " update ops = " << objectCount / updateTime
+                       << " flush ops = " << objectCount / flushTime
+                       << " postgres ops = " << objectCount / postgresTime
+                       << " total tps = " << txnCount / totalTime
+                       << " total ops = " << objectCount / totalTime
+                       << " key-value tps = " << txnCount / kvTime
+                       << " key-value ops = " << objectCount / kvTime
+                       << " (All times in seconds)";
+    }
 
     void
     printMetrics(beast::Journal& j)
     {
-        auto totalTime = updateTime + flushTime + storeTime;
+        auto totalTime = updateTime + flushTime + postgresTime;
         auto kvTime = updateTime + flushTime;
         JLOG(j.info()) << " Metrics: "
                        << " txnCount = " << txnCount
                        << " objectCount = " << objectCount
                        << " updateTime = " << updateTime
                        << " flushTime = " << flushTime
-                       << " storeTime = " << storeTime
+                       << " postgresTime = " << postgresTime
                        << " update tps = " << txnCount / updateTime
                        << " flush tps = " << txnCount / flushTime
-                       << " store tps = " << txnCount / storeTime
+                       << " postgres tps = " << txnCount / postgresTime
                        << " update ops = " << objectCount / updateTime
                        << " flush ops = " << objectCount / flushTime
-                       << " store ops = " << objectCount / storeTime
+                       << " postgres ops = " << objectCount / postgresTime
                        << " total tps = " << txnCount / totalTime
                        << " total ops = " << objectCount / totalTime
                        << " key-value tps = " << txnCount / kvTime
@@ -183,7 +221,7 @@ struct Metrics
         objectCount += round.objectCount;
         flushTime += round.flushTime;
         updateTime += round.updateTime;
-        storeTime += round.storeTime;
+        postgresTime += round.postgresTime;
     }
 };
 
@@ -203,5 +241,6 @@ getMarkers(size_t numMarkers)
     }
     return markers;
 }
+
 }  // namespace ripple
 #endif

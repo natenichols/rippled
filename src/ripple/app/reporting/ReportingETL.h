@@ -112,13 +112,11 @@ private:
     void
     updateLedger(
         org::xrpl::rpc::v1::GetLedgerResponse& in,
-        std::vector<TxMeta>& out);
+        std::vector<TxMeta>& out,
+        bool updateSkiplist = true);
 
     void
     flushLedger();
-
-    void
-    storeLedger();
 
     bool
     writeToPostgres(LedgerInfo const& info, std::vector<TxMeta>& meta);
@@ -132,9 +130,6 @@ private:
     publishLedger();
 
     void
-    truncateDBs();
-
-    void
     outputMetrics();
 
     void
@@ -142,9 +137,6 @@ private:
 
     void
     joinWriter();
-
-    bool
-    consistencyCheck();
 
     Metrics totalMetrics;
     Metrics roundMetrics;
@@ -209,46 +201,7 @@ public:
     }
 
     void
-    setup()
-    {
-        if (app_.config().START_UP == Config::StartUpType::FRESH && !readOnly_)
-        {
-            if (app_.config().usePostgresTx())
-            {
-                // if we don't load the ledger from disk, the dbs need to be
-                // cleared out, since the db will not allow any gaps
-                truncateDBs();
-            }
-            assert(app_.config().exists("reporting"));
-            Section section = app_.config().section("reporting");
-            std::pair<std::string, bool> startIndexPair =
-                section.find("start_index");
-
-            if (startIndexPair.second)
-            {
-                indexQueue_.push(std::stoi(startIndexPair.first));
-            }
-        }
-        else if (!readOnly_)
-        {
-            if (checkConsistency_)
-                assert(consistencyCheck());
-            // This ledger will not actually be mutated, but every ledger
-            // after it will therefore ledger_ is not const
-            ledger_ = std::const_pointer_cast<Ledger>(
-                app_.getLedgerMaster().getValidatedLedger());
-            if (ledger_)
-            {
-                JLOG(journal_.info()) << "Loaded ledger successfully. "
-                                      << "seq = " << ledger_->info().seq;
-                indexQueue_.push(ledger_->info().seq + 1);
-            }
-            else
-            {
-                JLOG(journal_.warn()) << "Failed to load ledger. Will download";
-            }
-        }
-    }
+    setup();
 
     void
     run()

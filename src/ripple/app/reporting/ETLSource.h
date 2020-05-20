@@ -121,12 +121,12 @@ struct ETLSource
     void
     stop()
     {
-        JLOG(journal_.debug()) << "Closing websocket";
+        JLOG(journal_.debug()) << __func__ << " : "
+                               << "Closing websocket";
 
         assert(ws_);
         close(false);
 
-        JLOG(journal_.debug()) << "Closed websocket";
     }
 
     grpc::Status
@@ -138,8 +138,9 @@ struct ETLSource
     std::string
     toString()
     {
-        return "validated_ledger = " + validatedLedgers + " , ip = " + ip_ +
-            " , web socket port = " + wsPort_ + " grpc port" + grpcPort_;
+        return "{ validated_ledger : " + validatedLedgers + " , ip : " + ip_ +
+            " , web socket port : " + wsPort_ + ", grpc port : " + grpcPort_ +
+            " }";
     }
 
     bool
@@ -151,7 +152,7 @@ struct ETLSource
     start();
 
     void
-    restart(boost::beast::error_code ec);
+    reconnect(boost::beast::error_code ec);
 
     void
     onResolve(

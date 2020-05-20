@@ -79,24 +79,37 @@ ETLSource::ETLSource(
 }
 
 void
-ETLSource::restart(boost::beast::error_code ec)
+ETLSource::reconnect(boost::beast::error_code ec)
 {
-    JLOG(journal_.error()) << "restart() : error_code = " << ec << " : "
-                           << toString();
+    // These are somewhat normal errors. operation_aborted occurs on shutdown,
+    // when the timer is cancelled. connection_refused will occur repeatedly
+    // if we cannot connect to the transaction processing process
+    if (ec != boost::asio::error::operation_aborted &&
+        ec != boost::asio::error::connection_refused)
+    {
+        JLOG(journal_.error()) << __func__ << " : "
+                               << "error code = " << ec << " - " << toString();
+    }
+    else
+    {
+        JLOG(journal_.warn()) << __func__ << " : "
+                              << "error code = " << ec << " - " << toString();
+    }
 
     if (etl_.isStopping())
     {
-        JLOG(journal_.debug())
-            << "restart() : " << toString() << " - etl is stopping. aborting";
+        JLOG(journal_.debug()) << __func__ << " : " << toString()
+                               << " - etl is stopping. aborting reconnect";
         return;
     }
 
+    // exponentially increasing timeouts, with a max of 30 seconds
     size_t waitTime = std::min(pow(2, numFailures), 30.0);
     numFailures++;
     timer_.expires_after(boost::asio::chrono::seconds(waitTime));
     timer_.async_wait([this](auto ec) {
         bool startAgain = (ec != boost::asio::error::operation_aborted);
-        JLOG(journal_.debug()) << "async_wait - ec " << ec;
+        JLOG(journal_.debug()) << __func__ << " async_wait : ec = " << ec;
         close(startAgain);
     });
 }
@@ -121,8 +134,8 @@ ETLSource::close(bool startAgain)
                     if (ec)
                     {
                         JLOG(journal_.error())
-                            << "restart()-async_close : error_code = " << ec
-                            << " : " << toString();
+                            << __func__ << " async_close : "
+                            << "error code = " << ec << " - " << toString();
                     }
                     closing = false;
                     if (startAgain)
@@ -139,7 +152,7 @@ ETLSource::close(bool startAgain)
 void
 ETLSource::start()
 {
-    JLOG(journal_.debug()) << "start() : " << toString();
+    JLOG(journal_.debug()) << __func__ << " : " << toString();
 
     auto const host = ip_;
     auto const port = wsPort_;
@@ -153,12 +166,12 @@ ETLSource::onResolve(
     boost::beast::error_code ec,
     boost::asio::ip::tcp::resolver::results_type results)
 {
-    JLOG(journal_.debug()) << "onResolve() : ec = " << ec << " : "
+    JLOG(journal_.debug()) << __func__ << " : ec = " << ec << " - "
                            << toString();
     if (ec)
     {
         // try again
-        restart(ec);
+        reconnect(ec);
     }
     else
     {
@@ -174,12 +187,12 @@ ETLSource::onConnect(
     boost::beast::error_code ec,
     boost::asio::ip::tcp::resolver::results_type::endpoint_type endpoint)
 {
-    JLOG(journal_.debug()) << "onConnect() : ec = " << ec << " : "
+    JLOG(journal_.debug()) << __func__ << " : ec = " << ec << " - "
                            << toString();
     if (ec)
     {
         // start over
-        restart(ec);
+        reconnect(ec);
     }
     else
     {
@@ -214,12 +227,12 @@ ETLSource::onConnect(
 void
 ETLSource::onHandshake(boost::beast::error_code ec)
 {
-    JLOG(journal_.debug()) << "onHandshake() : ec = " << ec << " : "
+    JLOG(journal_.debug()) << __func__ << " : ec = " << ec << " - "
                            << toString();
     if (ec)
     {
         // start over
-        restart(ec);
+        reconnect(ec);
     }
     else
     {
@@ -242,11 +255,12 @@ ETLSource::onHandshake(boost::beast::error_code ec)
 void
 ETLSource::onWrite(boost::beast::error_code ec, size_t bytesWritten)
 {
-    JLOG(journal_.debug()) << "onWrite() : ec = " << ec << " : " << toString();
+    JLOG(journal_.debug()) << __func__ << " : ec = " << ec << " - "
+                           << toString();
     if (ec)
     {
         // start over
-        restart(ec);
+        reconnect(ec);
     }
     else
     {
@@ -258,18 +272,20 @@ ETLSource::onWrite(boost::beast::error_code ec, size_t bytesWritten)
 void
 ETLSource::onRead(boost::beast::error_code ec, size_t size)
 {
-    JLOG(journal_.debug()) << "onRead() : ec = " << ec << " : " << toString();
+    JLOG(journal_.debug()) << __func__ << " : ec = " << ec << " - "
+                           << toString();
     // if error or error reading message, start over
     if (ec || !handleMessage())
     {
-        restart(ec);
+        reconnect(ec);
     }
     else
     {
         boost::beast::flat_buffer buffer;
         swap(readBuffer_, buffer);
 
-        JLOG(journal_.debug()) << "calling async_read : " << toString();
+        JLOG(journal_.debug())
+            << __func__ << " : calling async_read - " << toString();
         ws_->async_read(
             readBuffer_, [this](auto ec, size_t size) { onRead(ec, size); });
     }
@@ -278,7 +294,7 @@ ETLSource::onRead(boost::beast::error_code ec, size_t size)
 bool
 ETLSource::handleMessage()
 {
-    JLOG(journal_.debug()) << "handleMessage() : " << toString();
+    JLOG(journal_.debug()) << __func__ << " : " << toString();
     try
     {
         Json::Value response;
@@ -287,18 +303,20 @@ ETLSource::handleMessage()
                 static_cast<char const*>(readBuffer_.data().data()), response))
         {
             JLOG(journal_.error())
+                << __func__ << " : "
                 << "Error parsing stream message."
                 << " Message = " << readBuffer_.data().data();
             return false;
         }
-        JLOG(journal_.info())
+        JLOG(journal_.debug())
+            << __func__ << " : "
             << "Received a message on ledger "
-            << " subscription stream. Message : " << response.toStyledString();
+            << " subscription stream. Message : " << response.toStyledString()
+            << " - " << toString();
 
         uint32_t ledgerIndex = 0;
         // TODO is this index always validated?
         if (response.isMember("result"))
-
         {
             if (response["result"].isMember(jss::ledger_index))
             {
@@ -320,9 +338,11 @@ ETLSource::handleMessage()
                 response[jss::result][jss::validated_ledgers].asString());
         if (ledgerIndex != 0)
         {
-            JLOG(journal_.debug()) << "Pushing ledger index: " << toString();
+            JLOG(journal_.debug())
+                << __func__ << " : "
+                << "Pushing ledger sequence = " << ledgerIndex << " - "
+                << toString();
             indexQueue_.push(ledgerIndex);
-            JLOG(journal_.debug()) << "Pushed ledger index : " << toString();
         }
         return true;
     }
@@ -566,6 +586,8 @@ ETLLoadBalancer::add(
     std::unique_ptr<ETLSource> ptr =
         std::make_unique<ETLSource>(host, websocketPort, grpcPort, etl_);
     sources_.push_back(std::move(ptr));
+    JLOG(journal_.info()) << __func__ << " : added etl source - "
+                          << sources_.back()->toString();
 }
 
 void
@@ -574,6 +596,8 @@ ETLLoadBalancer::add(std::string& host, std::string& websocketPort)
     std::unique_ptr<ETLSource> ptr =
         std::make_unique<ETLSource>(host, websocketPort, etl_);
     sources_.push_back(std::move(ptr));
+    JLOG(journal_.info()) << __func__ << " : added etl source - "
+                          << sources_.back()->toString();
 }
 
 void
@@ -640,35 +664,46 @@ ETLLoadBalancer::execute(Func f, uint32_t ledgerSequence)
         auto& source = sources_[sourceIdx];
 
         JLOG(journal_.debug())
-            << "Attempting at source = " << source->toString();
+            << __func__ << " : "
+            << "Attempting to execute func. ledger sequence = "
+            << ledgerSequence << " - source = " << source->toString();
         if (source->hasLedger(ledgerSequence))
         {
             bool res = f(source);
             if (res)
             {
                 JLOG(journal_.debug())
+                    << __func__ << " : "
                     << "Successfully executed func at source = "
-                    << source->toString();
+                    << source->toString()
+                    << " - ledger sequence = " << ledgerSequence;
                 break;
             }
             else
             {
-                JLOG(journal_.warn()) << "Failed to execute func at source = "
-                                      << source->toString();
+                JLOG(journal_.warn())
+                    << __func__ << " : "
+                    << "Failed to execute func at source = "
+                    << source->toString()
+                    << " - ledger sequence = " << ledgerSequence;
             }
         }
         else
         {
             JLOG(journal_.warn())
-                << "Ledger not present at source = " << source->toString();
+                << __func__ << " : "
+                << "Ledger not present at source = " << source->toString()
+                << " - ledger sequence = " << ledgerSequence;
         }
         sourceIdx = (sourceIdx + 1) % sources_.size();
         numAttempts++;
         if (numAttempts % sources_.size() == 0)
         {
-            JLOG(journal_.warn())
-                << "Error executing function."
-                << " . Tried all sources. Sleeping and trying again";
+            JLOG(journal_.error())
+                << __func__ << " : "
+                << "Error executing function "
+                << " - ledger sequence = " << ledgerSequence
+                << " - Tried all sources. Sleeping and trying again";
             std::this_thread::sleep_for(std::chrono::seconds(2));
         }
     }
