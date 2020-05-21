@@ -378,7 +378,7 @@ std::shared_ptr<PgPool> make_PgPool(Section const& network_db_config,
 // calls. This function simplifies one-off calls to PgQuery->querySync().
 template <class T>
 pg_result_type
-doQuery(std::shared_ptr<PgPool>& pgPool, T const& cmd)
+doQuery(std::shared_ptr<PgPool> const& pgPool, T const& cmd)
 {
     std::shared_ptr<PgQuery> pgQuery = std::make_shared<PgQuery>(pgPool);
     return pgQuery->querySync(cmd);
