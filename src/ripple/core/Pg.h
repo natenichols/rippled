@@ -298,7 +298,7 @@ class PgQuery
     : public std::enable_shared_from_this<PgQuery>
 {
 private:
-    std::shared_ptr<PgPool> pool_;
+    std::shared_ptr<PgPool> const& pool_;
     std::vector<std::shared_ptr<NodeObject>> batch_;
     std::mutex batchMutex_;
     bool submitting_ {false};
@@ -308,7 +308,7 @@ private:
     void store(std::size_t const keyBytes, bool const sync);
 
 public:
-    PgQuery(std::shared_ptr<PgPool>& pool)
+    PgQuery(std::shared_ptr<PgPool> const& pool)
         : pool_ (pool)
     {}
 
