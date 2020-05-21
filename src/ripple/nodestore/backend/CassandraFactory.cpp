@@ -351,16 +351,19 @@ public:
         select_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
         cass_future_free(fut);
 
+        /*
         fut = cass_session_prepare(session_.get(), "TRUNCATE TABLE objects");
         rc = cass_future_error_code(fut);
         if (rc != CASS_OK)
         {
             std::stringstream ss;
-            ss << "nodestore: Error preparing Cassandra truncate: " << rc;
+            ss << "nodestore: Error preparing Cassandra truncate: " << rc
+               << ", " << cass_error_desc(rc);
             Throw<std::runtime_error>(ss.str());
         }
         truncate_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
         cass_future_free(fut);
+         */
 
         open_ = true;
     }
@@ -368,6 +371,8 @@ public:
     bool
     truncate() override
     {
+        return true;
+        /*
         CassStatement* statement = cass_prepared_bind(truncate_);
 
         CassFuture* fut = cass_session_execute(session_.get(), statement);
@@ -383,6 +388,7 @@ public:
         cass_statement_free(statement);
         cass_future_free(fut);
         return true;
+         */
     }
 
     void

@@ -666,11 +666,11 @@ ReportingETL::truncateDBs()
     executeUntilSuccess(
         pgQuery, conn, "TRUNCATE ancestry_verified;", PGRES_COMMAND_OK, *this);
 
-    NodeStore::Backend& backend = app_.getNodeStore().getBackend();
+//    NodeStore::Backend& backend = app_.getNodeStore().getBackend();
     while (!stopping_)
     {
-        if (backend.truncate())
-            break;
+//        if (backend.truncate())
+//            break;
     }
 }
 
