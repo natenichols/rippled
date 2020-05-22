@@ -327,21 +327,7 @@ public:
             break;
         }
         cass_cluster_free(cluster);
-
-        statement = cass_statement_new(
-            "CONSISTENCY LOCAL_QUORUM", 0);
-        fut = cass_session_execute(session_.get(), statement);
-        rc = cass_future_error_code(fut);
-        if (rc != CASS_OK)
-        {
-            std::stringstream ss;
-            ss << "nodestore: Error setting CONSISTENCY LOCAL_QUORUM: "
-               << rc << ", " << cass_error_desc(rc);
-            Throw<std::runtime_error>(ss.str());
-        }
-        cass_future_free(fut);
-        cass_statement_free(statement);
-
+        
         statement = cass_statement_new(
             "INSERT INTO objects (hash, object) VALUES (?, ?)", 2);
         rc = cass_statement_set_consistency(statement,
