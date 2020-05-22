@@ -327,7 +327,8 @@ public:
             break;
         }
         cass_cluster_free(cluster);
-        
+
+        /*
         statement = cass_statement_new(
             "INSERT INTO objects (hash, object) VALUES (?, ?)", 2);
         rc = cass_statement_set_consistency(statement,
@@ -372,9 +373,10 @@ public:
             Throw<std::runtime_error>(ss.str());
         }
         cass_future_free(fut);
+         */
+
         cass_statement_free(statement);
 
-        /*
         fut = cass_session_prepare(
             session_.get(),
             "INSERT INTO objects (hash, object) VALUES (?, ?)");
@@ -401,7 +403,6 @@ public:
         }
         select_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
         cass_future_free(fut);
-         */
 
         /*
         fut = cass_session_prepare(session_.get(), "TRUNCATE TABLE objects");
@@ -471,7 +472,16 @@ public:
     fetch (void const* key, std::shared_ptr<NodeObject>* pno) override
     {
         CassStatement* statement = cass_prepared_bind(select_);
-        CassError rc = cass_statement_bind_bytes(
+        CassError rc = cass_statement_set_consistency(statement,
+            CASS_CONSISTENCY_LOCAL_QUORUM);
+        if (rc != CASS_OK)
+        {
+            std::stringstream ss;
+            ss << "nodestore: Error setting consistency for select: "
+               << rc << ", " << cass_error_desc(rc);
+            Throw<std::runtime_error>(ss.str());
+        }
+        rc = cass_statement_bind_bytes(
             statement, 0, static_cast<cass_byte_t const*>(key), keyBytes_);
         if (rc != CASS_OK)
         {
@@ -642,7 +652,16 @@ public:
                             e.getSize(), bf);
 
                     CassStatement* statement = cass_prepared_bind(insert_);
-                    CassError rc = cass_statement_bind_bytes(
+                    CassError rc = cass_statement_set_consistency(statement,
+                        CASS_CONSISTENCY_LOCAL_QUORUM);
+                    if (rc != CASS_OK)
+                    {
+                        std::stringstream ss;
+                        ss << "nodestore: Error setting consistency for insert: "
+                           << rc << ", " << cass_error_desc(rc);
+                        Throw<std::runtime_error>(ss.str());
+                    }
+                    rc = cass_statement_bind_bytes(
                         statement, 0, static_cast<cass_byte_t const*>(
                                           e.getKey()), keyBytes_);
                     if (rc != CASS_OK)
