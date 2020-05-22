@@ -267,6 +267,7 @@ public:
                 "nodestore: Missing keyspace in Cassandra config");
         }
 
+        CassStatement* statement;
         CassFuture* fut;
         while (true)
         {
@@ -285,7 +286,7 @@ public:
             }
             cass_future_free(fut);
 
-            CassStatement* statement = cass_statement_new(
+            statement = cass_statement_new(
                 "CREATE TABLE IF NOT EXISTS objects ("
                 "    hash   blob PRIMARY KEY, "
                 "    object blob)",
@@ -300,6 +301,7 @@ public:
                 Throw<std::runtime_error>(ss.str());
             }
             cass_future_free(fut);
+            cass_statement_free(statement);
 
             statement = cass_statement_new(
                 "SELECT * FROM objects LIMIT 1", 0);
@@ -310,6 +312,7 @@ public:
                 if (rc == CASS_ERROR_SERVER_INVALID_QUERY)
                 {
                     cass_future_free(fut);
+                    cass_statement_free(statement);
                     std::cerr << "objects table not here yet, sleeping 1s to see if table creation propagates\n";
                     std::this_thread::sleep_for(std::chrono::seconds(1));
                     continue;
@@ -320,10 +323,72 @@ public:
                 Throw<std::runtime_error>(ss.str());
             }
             cass_future_free(fut);
+            cass_statement_free(statement);
             break;
         }
         cass_cluster_free(cluster);
 
+        statement = cass_statement_new(
+            "CONSISTENCY LOCAL_QUORUM", 0);
+        fut = cass_session_execute(session_.get(), statement);
+        rc = cass_future_error_code(fut);
+        if (rc != CASS_OK)
+        {
+            std::stringstream ss;
+            ss << "nodestore: Error setting CONSISTENCY LOCAL_QUORUM: "
+               << rc << ", " << cass_error_desc(rc);
+            Throw<std::runtime_error>(ss.str());
+        }
+        cass_future_free(fut);
+        cass_statement_free(statement);
+
+        statement = cass_statement_new(
+            "INSERT INTO objects (hash, object) VALUES (?, ?)", 2);
+        rc = cass_statement_set_consistency(statement,
+                                            CASS_CONSISTENCY_LOCAL_QUORUM);
+        if (rc != CASS_OK)
+        {
+            std::stringstream ss;
+            ss << "nodestore: Error setting consistency for insert: "
+               << rc << ", " << cass_error_desc(rc);
+            Throw<std::runtime_error>(ss.str());
+        }
+        fut = cass_session_prepare_from_existing(session_.get(), statement);
+        rc = cass_future_error_code(fut);
+        if (rc != CASS_OK)
+        {
+            std::stringstream ss;
+            ss << "nodestore: Error preparing insert: " << rc
+               << ", " << cass_error_desc(rc);
+            Throw<std::runtime_error>(ss.str());
+        }
+        cass_future_free(fut);
+        cass_statement_free(statement);
+
+        statement = cass_statement_new(
+            "SELECT object FROM objects WHERE hash = ?", 1);
+        rc = cass_statement_set_consistency(statement,
+            CASS_CONSISTENCY_LOCAL_QUORUM);
+        if (rc != CASS_OK)
+        {
+            std::stringstream ss;
+            ss << "nodestore: Error setting consistency for select: "
+               << rc << ", " << cass_error_desc(rc);
+            Throw<std::runtime_error>(ss.str());
+        }
+        fut = cass_session_prepare_from_existing(session_.get(), statement);
+        rc = cass_future_error_code(fut);
+        if (rc != CASS_OK)
+        {
+            std::stringstream ss;
+            ss << "nodestore: Error preparing select: " << rc
+               << ", " << cass_error_desc(rc);
+            Throw<std::runtime_error>(ss.str());
+        }
+        cass_future_free(fut);
+        cass_statement_free(statement);
+
+        /*
         fut = cass_session_prepare(
             session_.get(),
             "INSERT INTO objects (hash, object) VALUES (?, ?)");
@@ -350,6 +415,7 @@ public:
         }
         select_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
         cass_future_free(fut);
+         */
 
         /*
         fut = cass_session_prepare(session_.get(), "TRUNCATE TABLE objects");
