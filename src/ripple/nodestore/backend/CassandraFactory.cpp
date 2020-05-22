@@ -541,6 +541,7 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
 //        batch_.push_back({no, nullptr});
+        JLOG(j_.debug()) << "store " << no->getHash();
         storeLocked(no);
 
 //        pgQuery_->store(no, keyBytes_);
@@ -551,8 +552,11 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         for (auto const& no : batch)
-//            batch_.push_back({no, nullptr});
+        {
+            //            batch_.push_back({no, nullptr});
+            JLOG(j_.debug()) << "storeBatch " << no->getHash();
             storeLocked(no);
+        }
 
 //        pgQuery_->store(batch, keyBytes_);
     }
