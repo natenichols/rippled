@@ -373,9 +373,8 @@ public:
             Throw<std::runtime_error>(ss.str());
         }
         cass_future_free(fut);
-         */
-
         cass_statement_free(statement);
+         */
 
         fut = cass_session_prepare(
             session_.get(),
