@@ -68,6 +68,24 @@ private:
         batches_.back().push_back({no, nullptr});
     }
 
+    CassStatement*
+    makeStatement(char const* query, std::size_t params)
+    {
+        CassStatement* ret = cass_statement_new(query, params);
+        CassError rc = cass_statement_set_consistency(ret,
+            CASS_CONSISTENCY_LOCAL_QUORUM);
+        if (rc != CASS_OK)
+        {
+            std::stringstream ss;
+            ss << "nodestore: Error setting query consistency: "
+               << query << ", result: " << rc
+               << ", " << cass_error_desc(rc);
+            Throw<std::runtime_error> (ss.str());
+        }
+        return ret;
+    }
+
+
 public:
     static constexpr std::size_t currentType = 1;
     static constexpr std::size_t default_batch_size = 10000;
@@ -93,8 +111,8 @@ public:
             cass_future_free(fut);
             cass_session_free(session);
         }};
-    CassPrepared* insert_ = nullptr;
-    CassPrepared* select_ = nullptr;
+//    CassPrepared* insert_ = nullptr;
+//    CassPrepared* select_ = nullptr;
     CassPrepared* truncate_ = nullptr;
 
 //    std::vector<std::pair<std::shared_ptr<NodeObject>, CassFuture*>> batch_;
@@ -175,6 +193,18 @@ public:
 
             Throw<std::runtime_error> (ss.str());
         }
+        rc = cass_cluster_set_protocol_version(cluster,
+            CASS_PROTOCOL_VERSION_V4);
+        if (rc != CASS_OK)
+        {
+            std::stringstream ss;
+            ss << "nodestore: Error setting cassandra protocol version: "
+               << contact_points << ", result: " << rc
+               << ", " << cass_error_desc(rc);
+
+            Throw<std::runtime_error> (ss.str());
+        }
+
         int port = get<int>(config_, "port");
         if (port)
         {
@@ -286,7 +316,7 @@ public:
             }
             cass_future_free(fut);
 
-            statement = cass_statement_new(
+            statement = makeStatement(
                 "CREATE TABLE IF NOT EXISTS objects ("
                 "    hash   blob PRIMARY KEY, "
                 "    object blob)",
@@ -303,8 +333,7 @@ public:
             cass_future_free(fut);
             cass_statement_free(statement);
 
-            statement = cass_statement_new(
-                "SELECT * FROM objects LIMIT 1", 0);
+            statement = makeStatement("SELECT * FROM objects LIMIT 1", 0);
             fut = cass_session_execute(session_.get(), statement);
             rc = cass_future_error_code(fut);
             if (rc != CASS_OK)
@@ -376,6 +405,7 @@ public:
         cass_statement_free(statement);
          */
 
+        /*
         fut = cass_session_prepare(
             session_.get(),
             "INSERT INTO objects (hash, object) VALUES (?, ?)");
@@ -389,7 +419,9 @@ public:
         }
         insert_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
         cass_future_free(fut);
+         */
 
+        /*
         fut = cass_session_prepare(
             session_.get(), "SELECT object FROM objects WHERE hash = ?");
         rc = cass_future_error_code(fut);
@@ -402,6 +434,7 @@ public:
         }
         select_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
         cass_future_free(fut);
+         */
 
         /*
         fut = cass_session_prepare(session_.get(), "TRUNCATE TABLE objects");
@@ -448,6 +481,7 @@ public:
     {
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            /*
             if (insert_)
             {
                 cass_prepared_free(insert_);
@@ -458,6 +492,7 @@ public:
                 cass_prepared_free(select_);
                 select_ = nullptr;
             }
+             */
             if (truncate_)
             {
                 cass_prepared_free(truncate_);
@@ -470,6 +505,9 @@ public:
     Status
     fetch (void const* key, std::shared_ptr<NodeObject>* pno) override
     {
+        CassStatement* statement = makeStatement(
+            "SELECT object FROM objects WHERE hash = ?", 1);
+        /*
         CassStatement* statement = cass_prepared_bind(select_);
         CassError rc = cass_statement_set_consistency(statement,
             CASS_CONSISTENCY_LOCAL_QUORUM);
@@ -480,7 +518,8 @@ public:
                << rc << ", " << cass_error_desc(rc);
             Throw<std::runtime_error>(ss.str());
         }
-        rc = cass_statement_bind_bytes(
+         */
+        CassError rc = cass_statement_bind_bytes(
             statement, 0, static_cast<cass_byte_t const*>(key), keyBytes_);
         if (rc != CASS_OK)
         {
@@ -650,7 +689,10 @@ public:
                         NodeStore::nodeobject_compress(e.getData(),
                             e.getSize(), bf);
 
-                    CassStatement* statement = cass_prepared_bind(insert_);
+//                    CassStatement* statement = cass_prepared_bind(insert_);
+                    CassStatement* statement = makeStatement(
+                        "INSERT INTO objects (hash, object) VALUES (?, ?)", 2);
+                    /*
                     CassError rc = cass_statement_set_consistency(statement,
                         CASS_CONSISTENCY_LOCAL_QUORUM);
                     if (rc != CASS_OK)
@@ -660,7 +702,8 @@ public:
                            << rc << ", " << cass_error_desc(rc);
                         Throw<std::runtime_error>(ss.str());
                     }
-                    rc = cass_statement_bind_bytes(
+                     */
+                    CassError rc = cass_statement_bind_bytes(
                         statement, 0, static_cast<cass_byte_t const*>(
                                           e.getKey()), keyBytes_);
                     if (rc != CASS_OK)
