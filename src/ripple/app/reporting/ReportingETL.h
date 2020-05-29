@@ -88,6 +88,25 @@ private:
 
     bool readOnly_ = false;
 
+    bool writing_ = false;
+
+    std::chrono::time_point<std::chrono::system_clock> lastPublish_;
+    std::mutex publishTimeMtx_;
+
+    std::chrono::time_point<std::chrono::system_clock>
+    getLastPublish()
+    {
+        std::unique_lock<std::mutex> lck(publishTimeMtx_);
+        return lastPublish_;
+    }
+
+    void
+    setLastPublish()
+    {
+        std::unique_lock<std::mutex> lck(publishTimeMtx_);
+        lastPublish_ = std::chrono::system_clock::now();
+    }
+
     void
     loadInitialLedger();
 
@@ -140,6 +159,7 @@ private:
 
     Metrics totalMetrics;
     Metrics roundMetrics;
+    Metrics lastRoundMetrics;
 
 public:
     ReportingETL(Application& app, Stoppable& parent);
@@ -198,6 +218,21 @@ public:
     getJournal()
     {
         return journal_;
+    }
+
+    Json::Value
+    getInfo()
+    {
+        Json::Value result(Json::objectValue);
+
+        result["queue_size"] = std::to_string(indexQueue_.size());
+        result["etl_sources"] = loadBalancer_.toJson();
+        result["is_writer"] = writing_;
+        auto last = getLastPublish();
+        if (last.time_since_epoch().count() != 0)
+            result["last_publish_time"] = to_string(
+                date::floor<std::chrono::microseconds>(getLastPublish()));
+        return result;
     }
 
     void

@@ -870,6 +870,13 @@ public:
         return *txProxy_;
     }
 
+    ReportingETL&
+    getReportingETL() override
+    {
+        assert(reportingETL_.get() != nullptr);
+        return *reportingETL_;
+    }
+
     bool serverOkay (std::string& reason) override;
 
     beast::Journal

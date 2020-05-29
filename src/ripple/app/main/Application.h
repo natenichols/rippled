@@ -89,6 +89,7 @@ class Cluster;
 class DatabaseCon;
 class SHAMapStore;
 
+class ReportingETL;
 class TxProxy;
 
 using NodeCache     = TaggedCache <SHAMapHash, Blob>;
@@ -245,6 +246,8 @@ public:
 
     virtual TxProxy&
     getTxProxy() = 0;
+    virtual ReportingETL&
+    getReportingETL() = 0;
 
     virtual bool
     serverOkay(std::string& reason) = 0;

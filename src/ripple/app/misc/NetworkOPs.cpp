@@ -37,6 +37,7 @@
 #include <ripple/app/misc/ValidatorKeys.h>
 #include <ripple/app/misc/ValidatorList.h>
 #include <ripple/app/misc/impl/AccountTxPaging.h>
+#include <ripple/app/reporting/ReportingETL.h>
 #include <ripple/app/tx/apply.h>
 #include <ripple/basics/PerfLog.h>
 #include <ripple/basics/UptimeClock.h>
@@ -2808,6 +2809,11 @@ NetworkOPsImp::getServerInfo(bool human, bool admin, bool counters)
         std::to_string(app_.overlay().getPeerDisconnect());
     info[jss::peer_disconnects_resources] =
         std::to_string(app_.overlay().getPeerDisconnectCharges());
+
+    if (app_.config().reporting())
+    {
+        info["reporting"] = app_.getReportingETL().getInfo();
+    }
 
     return info;
 }

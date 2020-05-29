@@ -81,6 +81,7 @@ ETLSource::ETLSource(
 void
 ETLSource::reconnect(boost::beast::error_code ec)
 {
+    connected = false;
     // These are somewhat normal errors. operation_aborted occurs on shutdown,
     // when the timer is cancelled. connection_refused will occur repeatedly
     // if we cannot connect to the transaction processing process
@@ -295,6 +296,9 @@ bool
 ETLSource::handleMessage()
 {
     JLOG(journal_.debug()) << __func__ << " : " << toString();
+
+    setLastMsgTime();
+    connected = true;
     try
     {
         Json::Value response;

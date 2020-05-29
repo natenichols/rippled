@@ -210,6 +210,8 @@ void
 ReportingETL::publishLedger()
 {
     app_.getOPs().pubLedger(ledger_);
+
+    lastPublish_ = std::chrono::system_clock::now();
 }
 
 bool
@@ -278,6 +280,7 @@ ReportingETL::publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts)
             continue;
         }
         app_.getOPs().pubLedger(ledger);
+        lastPublish_ = std::chrono::system_clock::now();
         JLOG(journal_.info())
             << __func__ << " : "
             << "Published ledger. " << toString(ledger->info());
@@ -527,6 +530,7 @@ ReportingETL::outputMetrics()
 void
 ReportingETL::doContinousETL()
 {
+    writing_ = true;
     assert(!readOnly_);
     JLOG(journal_.info()) << "Downloading initial ledger";
 
@@ -543,7 +547,10 @@ ReportingETL::doContinousETL()
     while (not stopping_)
     {
         if (!doETL())
+        {
+            writing_ = false;
             break;
+        }
         numLoops++;
         // At the rate of 1 ledger per 4 seconds, 21600 is one day of ledgers
         size_t constexpr ledgersPerDay = 21600;

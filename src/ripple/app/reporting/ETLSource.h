@@ -53,6 +53,7 @@ struct ETLSource
 
     boost::beast::flat_buffer readBuffer_;
 
+    // TODO: make this not a string?
     std::string validatedLedgers;
 
     LedgerIndexQueue& indexQueue_;
@@ -66,6 +67,25 @@ struct ETLSource
     size_t numFailures = 0;
 
     bool closing = false;
+
+    bool connected = false;
+
+    std::chrono::time_point<std::chrono::system_clock> lastMsgTime;
+    std::mutex lastMsgTimeMtx_;
+
+    std::chrono::time_point<std::chrono::system_clock>
+    getLastMsgTime()
+    {
+        std::unique_lock<std::mutex> lck(lastMsgTimeMtx_);
+        return lastMsgTime;
+    }
+
+    void
+    setLastMsgTime()
+    {
+        std::unique_lock<std::mutex> lck(lastMsgTimeMtx_);
+        lastMsgTime = std::chrono::system_clock::now();
+    }
 
     boost::asio::steady_timer timer_;
 
@@ -118,6 +138,13 @@ struct ETLSource
         validatedLedgers = range;
     }
 
+    std::string
+    getValidatedRange()
+    {
+        std::lock_guard<std::mutex> lck(mtx_);
+        return validatedLedgers;
+    }
+
     void
     stop()
     {
@@ -141,6 +168,22 @@ struct ETLSource
         return "{ validated_ledger : " + validatedLedgers + " , ip : " + ip_ +
             " , web socket port : " + wsPort_ + ", grpc port : " + grpcPort_ +
             " }";
+    }
+
+    Json::Value
+    toJson()
+    {
+        Json::Value result(Json::objectValue);
+        result["connected"] = connected;
+        result["validated_ledgers_range"] = getValidatedRange();
+        result["ip"] = ip_;
+        result["websocket_port"] = wsPort_;
+        result["grpc_port"] = grpcPort_;
+        auto last = getLastMsgTime();
+        if (last.time_since_epoch().count() != 0)
+            result["last_message_arrival_time"] =
+                to_string(date::floor<std::chrono::microseconds>(last));
+        return result;
     }
 
     bool
@@ -216,6 +259,17 @@ public:
 
     void
     stop();
+
+    Json::Value
+    toJson()
+    {
+        Json::Value ret(Json::arrayValue);
+        for (auto& src : sources_)
+        {
+            ret.append(src->toJson());
+        }
+        return ret;
+    }
 
 private:
     template <class Func>

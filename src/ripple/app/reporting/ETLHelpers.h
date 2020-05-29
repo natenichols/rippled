@@ -76,6 +76,14 @@ public:
                 }
             }
         }
+        auto qsize = queue_.size();
+        if (qsize > 0)
+        {
+            JLOG(j.warn())
+                << __func__ << "Queue size of " << qsize
+                << " is greater than one. This usually indicates that the ETL "
+                << "process is lagging behind the network";
+        }
         queue_.push(idx);
         last = idx;
         cv_.notify_all();
@@ -112,6 +120,13 @@ public:
         std::unique_lock<std::mutex> lck(mtx_);
         stopping_ = true;
         cv_.notify_all();
+    }
+
+    size_t
+    size()
+    {
+        std::unique_lock<std::mutex> lck(mtx_);
+        return queue_.size();
     }
 };
 
@@ -171,12 +186,14 @@ struct Metrics
     {
         auto totalTime = updateTime + flushTime + postgresTime;
         auto kvTime = updateTime + flushTime;
+        auto dbTime = flushTime + postgresTime;
         JLOG(j.info()) << toString(info) << " Metrics: "
                        << " txnCount = " << txnCount
                        << " objectCount = " << objectCount
                        << " updateTime = " << updateTime
                        << " flushTime = " << flushTime
                        << " postgresTime = " << postgresTime
+                       << " dbTime = " << dbTime
                        << " update tps = " << txnCount / updateTime
                        << " flush tps = " << txnCount / flushTime
                        << " postgres tps = " << txnCount / postgresTime
@@ -187,6 +204,8 @@ struct Metrics
                        << " total ops = " << objectCount / totalTime
                        << " key-value tps = " << txnCount / kvTime
                        << " key-value ops = " << objectCount / kvTime
+                       << " db tps = " << txnCount / dbTime
+                       << " db ops = " << objectCount / dbTime
                        << " (All times in seconds)";
     }
 
@@ -195,12 +214,14 @@ struct Metrics
     {
         auto totalTime = updateTime + flushTime + postgresTime;
         auto kvTime = updateTime + flushTime;
+        auto dbTime = flushTime + postgresTime;
         JLOG(j.info()) << " Metrics: "
                        << " txnCount = " << txnCount
                        << " objectCount = " << objectCount
                        << " updateTime = " << updateTime
                        << " flushTime = " << flushTime
                        << " postgresTime = " << postgresTime
+                       << " dbTime = " << dbTime
                        << " update tps = " << txnCount / updateTime
                        << " flush tps = " << txnCount / flushTime
                        << " postgres tps = " << txnCount / postgresTime
@@ -211,7 +232,26 @@ struct Metrics
                        << " total ops = " << objectCount / totalTime
                        << " key-value tps = " << txnCount / kvTime
                        << " key-value ops = " << objectCount / kvTime
+                       << " db tps = " << txnCount / dbTime
+                       << " db ops = " << objectCount / dbTime
                        << " (All times in seconds)";
+    }
+
+    Json::Value
+    toJson()
+    {
+        Json::Value res(Json::objectValue);
+        auto totalTime = updateTime + flushTime + postgresTime;
+        auto dbTime = flushTime + postgresTime;
+        res["total_time"] = totalTime;
+        res["kv_flush_time"] = flushTime;
+        res["total_db_time"] = dbTime;
+        res["update_time"] = updateTime;
+        res["total_tps"] = txnCount / totalTime;
+        res["kv_flush_tps"] = txnCount / flushTime;
+        res["total_db_tps"] = txnCount / dbTime;
+        res["update_tps"] = txnCount / updateTime;
+        return res;
     }
 
     void
