@@ -529,8 +529,13 @@ public:
             pno->reset();
             return backendError;
         }
-        CassFuture* fut = cass_session_execute(session_.get(), statement);
-        rc = cass_future_error_code(fut);
+        CassFuture* fut;
+        do
+        {
+            fut = cass_session_execute(session_.get(), statement);
+            rc = cass_future_error_code(fut);
+        } while (rc == CASS_ERROR_LIB_REQUEST_TIMED_OUT);
+
         if (rc != CASS_OK)
         {
             cass_statement_free(statement);
