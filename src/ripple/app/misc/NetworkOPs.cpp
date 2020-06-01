@@ -2534,8 +2534,9 @@ NetworkOPsImp::getServerInfo(bool human, bool admin, bool counters)
     if (human)
         info[jss::hostid] = getHostId(admin);
 
-    if (auto const netid = app_.overlay().networkID())
-        info[jss::network_id] = static_cast<Json::UInt>(*netid);
+    if (!app_.config().reporting())
+        if (auto const netid = app_.overlay().networkID())
+            info[jss::network_id] = static_cast<Json::UInt>(*netid);
 
     info[jss::build_version] = BuildInfo::getVersionString();
 
@@ -2627,7 +2628,8 @@ NetworkOPsImp::getServerInfo(bool human, bool admin, bool counters)
     if (fp != 0)
         info[jss::fetch_pack] = Json::UInt(fp);
 
-    info[jss::peers] = Json::UInt(app_.overlay().size());
+    if (!app_.config().reporting())
+        info[jss::peers] = Json::UInt(app_.overlay().size());
 
     Json::Value lastClose = Json::objectValue;
     lastClose[jss::proposers] = Json::UInt(mConsensus.prevProposers());
@@ -2803,12 +2805,15 @@ NetworkOPsImp::getServerInfo(bool human, bool admin, bool counters)
     std::tie(info[jss::state_accounting], info[jss::server_state_duration_us]) =
         accounting_.json();
     info[jss::uptime] = UptimeClock::now().time_since_epoch().count();
-    info[jss::jq_trans_overflow] =
-        std::to_string(app_.overlay().getJqTransOverflow());
-    info[jss::peer_disconnects] =
-        std::to_string(app_.overlay().getPeerDisconnect());
-    info[jss::peer_disconnects_resources] =
-        std::to_string(app_.overlay().getPeerDisconnectCharges());
+    if (!app_.config().reporting())
+    {
+        info[jss::jq_trans_overflow] =
+            std::to_string(app_.overlay().getJqTransOverflow());
+        info[jss::peer_disconnects] =
+            std::to_string(app_.overlay().getPeerDisconnect());
+        info[jss::peer_disconnects_resources] =
+            std::to_string(app_.overlay().getPeerDisconnectCharges());
+    }
 
     if (app_.config().reporting())
     {

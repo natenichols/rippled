@@ -224,6 +224,8 @@ Ledger::Ledger(
     , rules_(config.features)
     , info_(info)
 {
+    if (config.reporting())
+        acquire = false;
     loaded = true;
 
     if (info_.txHash.isNonZero() &&
