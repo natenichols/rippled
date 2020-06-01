@@ -81,13 +81,15 @@ CREATE OR REPLACE FUNCTION tx (
     _in_trans_id bytea
 ) RETURNS jsonb AS $$
 DECLARE
+    _min_ledger        bigint := min_ledger();
     _min_seq           bigint := (SELECT ledger_seq
 	                            FROM ledgers
-				   WHERE ledger_seq = min_ledger()
-			             FOR UPDATE);
+				   WHERE ledger_seq = _min_ledger
+			             FOR SHARE);
     _max_seq           bigint := max_ledger();
     _ledger_seq        bigint;
 BEGIN
+
     IF _min_seq IS NULL THEN
         RETURN jsonb_build_object('error', 'empty database');
     END IF;
