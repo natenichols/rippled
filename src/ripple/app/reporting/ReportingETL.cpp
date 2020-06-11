@@ -124,13 +124,11 @@ ReportingETL::flushLedger()
 
     ledger_->setImmutable(app_.config(), false);
 
-    auto numFlushed =
-        ledger_->stateMap().flushDirty(hotACCOUNT_NODE, ledger_->info().seq,
-                                       true);
+    auto numFlushed = ledger_->stateMap().flushDirty(
+        hotACCOUNT_NODE, ledger_->info().seq, true);
 
-    auto numTxFlushed =
-        ledger_->txMap().flushDirty(hotTRANSACTION_NODE, ledger_->info().seq,
-                                    true);
+    auto numTxFlushed = ledger_->txMap().flushDirty(
+        hotTRANSACTION_NODE, ledger_->info().seq, true);
 
     {
         Serializer s(128);
@@ -204,6 +202,100 @@ ReportingETL::flushLedger()
     JLOG(journal_.info()) << __func__ << " : "
                           << "Successfully flushed ledger! "
                           << toString(ledger_->info());
+}
+
+void
+ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
+{
+    JLOG(journal_.debug()) << __func__ << " : "
+                           << "Flushing ledger. " << toString(ledger->info());
+    // These are recomputed in setImmutable
+    auto& accountHash = ledger->info().accountHash;
+    auto& txHash = ledger->info().txHash;
+    auto& ledgerHash = ledger->info().hash;
+
+    auto start = std::chrono::system_clock::now();
+
+    ledger->setImmutable(app_.config(), false);
+
+    auto numFlushed = ledger->stateMap().flushDirty(
+        hotACCOUNT_NODE, ledger->info().seq, true);
+
+    auto numTxFlushed = ledger->txMap().flushDirty(
+        hotTRANSACTION_NODE, ledger->info().seq, true);
+
+    {
+        Serializer s(128);
+        s.add32(HashPrefix::ledgerMaster);
+        addRaw(ledger->info(), s);
+        app_.getNodeStore().store(
+            hotLEDGER,
+            std::move(s.modData()),
+            ledger->info().hash,
+            ledger->info().seq,
+            true);
+    }
+
+    app_.getNodeStore().sync();
+
+    auto end = std::chrono::system_clock::now();
+
+    JLOG(journal_.debug()) << __func__ << " : "
+                           << "Flushed " << numFlushed
+                           << " nodes to nodestore from stateMap";
+    JLOG(journal_.debug()) << __func__ << " : "
+                           << "Flushed " << numTxFlushed
+                           << " nodes to nodestore from txMap";
+
+    if (numFlushed == 0 && roundMetrics.objectCount != 0)
+    {
+        JLOG(journal_.fatal()) << __func__ << " : "
+                               << "Failed to flush state map";
+        assert(false);
+    }
+    if (numTxFlushed == 0 && roundMetrics.txnCount == 0)
+    {
+        JLOG(journal_.fatal()) << __func__ << " : "
+                               << "Failed to flush tx map";
+        assert(false);
+    }
+
+    roundMetrics.flushTime = ((end - start).count()) / 1000000000.0;
+
+    // Make sure calculated hashes are correct
+    if (ledger->stateMap().getHash().as_uint256() != accountHash)
+    {
+        JLOG(journal_.fatal())
+            << __func__ << " : "
+            << "State map hash does not match. "
+            << "Expected hash = " << strHex(accountHash) << "Actual hash = "
+            << strHex(ledger->stateMap().getHash().as_uint256());
+        assert(false);
+    }
+
+    if (ledger->txMap().getHash().as_uint256() != txHash)
+    {
+        JLOG(journal_.fatal())
+            << __func__ << " : "
+            << "Tx map hash does not match. "
+            << "Expected hash = " << strHex(txHash) << "Actual hash = "
+            << strHex(ledger->txMap().getHash().as_uint256());
+        assert(false);
+    }
+
+    if (ledger->info().hash != ledgerHash)
+    {
+        JLOG(journal_.fatal())
+            << __func__ << " : "
+            << "Ledger hash does not match. "
+            << "Expected hash = " << strHex(ledgerHash)
+            << "Actual hash = " << strHex(ledger->info().hash);
+        assert(false);
+    }
+
+    JLOG(journal_.info()) << __func__ << " : "
+                          << "Successfully flushed ledger! "
+                          << toString(ledger->info());
 }
 
 void
@@ -555,6 +647,85 @@ ReportingETL::doContinousETL()
     }
 }
 
+
+
+void
+ReportingETL::doContinousETLPipelined()
+{
+    writing_ = true;
+    assert(!readOnly_);
+    JLOG(journal_.info()) << "Downloading initial ledger";
+
+    loadInitialLedger();
+
+    JLOG(journal_.info()) << "Done downloading initial ledger";
+
+    // reset after first iteration
+    totalMetrics = {};
+    roundMetrics = {};
+ 
+    runETLPipeline();
+    writing_ = false;
+}
+
+
+void
+ReportingETL::runETLPipeline()
+{
+    std::atomic_bool pipelineStopping = false;
+    extracter_ = std::thread{[this, &pipelineStopping]() {
+        while (!pipelineStopping)
+        {
+            org::xrpl::rpc::v1::GetLedgerResponse fetchResponse;
+
+            if (not fetchLedger(fetchResponse))
+            {
+                // drain transform queue. this occurs when the server is shutting down
+                break;
+            }
+
+            transformQueue_.push(fetchResponse);
+        }
+    }};
+
+    transformer_ = std::thread{[this, &pipelineStopping]() {
+        while (!pipelineStopping)
+        {
+            org::xrpl::rpc::v1::GetLedgerResponse fetchResponse =
+                transformQueue_.pop();
+            // TODO detect that transform queue was drained, and drain loadQueue
+            std::vector<TxMeta> metas;
+            updateLedger(fetchResponse, metas);
+            loadQueue_.push(std::make_pair(ledger_, metas));
+        }
+    }};
+
+    loader_ = std::thread{[this]() {
+        while (!stopping_)
+        {
+            std::pair<std::shared_ptr<Ledger>, std::vector<TxMeta>> result =
+                loadQueue_.pop();
+            // TODO detect load queue was drained and abort
+            auto& ledger = result.first;
+            auto& metas = result.second;
+
+            flushLedger(ledger);
+
+            if (app_.config().usePostgresTx())
+                if (!writeToPostgres(ledger->info(), metas))
+                    break;
+
+            publishLedger();
+        }
+    }};
+
+    loader_.join();
+    pipelineStopping = true;
+    extracter_.join();
+    transformer_.join();
+    
+}
+
 void
 ReportingETL::monitor()
 {
@@ -568,20 +739,21 @@ ReportingETL::monitor()
                               << " has been validated by the network. "
                               << "Attempting to find in database and publish";
         // Attempt to take over responsibility of ETL writer after 10 failed
-        // attempts to publish the ledger. publishLedger() fails if the ledger
-        // that has been validated by the network is not found in the database
-        // after the specified number of attempts. publishLedger() waits one
-        // second between each attempt to read the ledger from the database
+        // attempts to publish the ledger. publishLedger() fails if the
+        // ledger that has been validated by the network is not found in the
+        // database after the specified number of attempts. publishLedger()
+        // waits one second between each attempt to read the ledger from the
+        // database
         //
-        // In strict read-only mode, when the software fails to find a ledger
-        // in the database that has been validated by the network, the software
-        // will only try to publish subsequent ledgers once, until one of those
-        // ledgers is found in the database. Once the software successfully
-        // publishes a ledger, the software will fall back to the normal
-        // behavior of trying several times to publish the ledger that has been
-        // validated by the network. In this manner, a reporting processing
-        // running in read-only mode does not need to restart if the database
-        // is wiped.
+        // In strict read-only mode, when the software fails to find a
+        // ledger in the database that has been validated by the network,
+        // the software will only try to publish subsequent ledgers once,
+        // until one of those ledgers is found in the database. Once the
+        // software successfully publishes a ledger, the software will fall
+        // back to the normal behavior of trying several times to publish
+        // the ledger that has been validated by the network. In this
+        // manner, a reporting processing running in read-only mode does not
+        // need to restart if the database is wiped.
         success = publishLedger(idx, success ? (readOnly_ ? 30 : 10) : 1);
         if (!success)
         {
@@ -691,8 +863,8 @@ ReportingETL::ReportingETL(Application& app, Stoppable& parent)
             if (!grpcPortPair.second)
             {
                 // add source without grpc port
-                // used in read-only mode to detect when new ledgers have been
-                // validated. Used for publishing
+                // used in read-only mode to detect when new ledgers have
+                // been validated. Used for publishing
                 if (app_.config().reportingReadOnly())
                     loadBalancer_.add(ipPair.first, wsPortPair.first);
                 continue;

@@ -67,6 +67,17 @@ private:
 
     std::thread writer_;
 
+    std::thread extracter_;
+
+    std::thread transformer_;
+
+    ThreadSafeQueue<org::xrpl::rpc::v1::GetLedgerResponse> transformQueue_;
+
+    std::thread loader_;
+
+    ThreadSafeQueue<std::pair<std::shared_ptr<Ledger>, std::vector<TxMeta>>>
+        loadQueue_;
+
     ThreadSafeQueue<std::shared_ptr<SLE>> writeQueue_;
 
     // TODO stopping logic needs to be better
@@ -119,6 +130,12 @@ private:
     doContinousETL();
 
     void
+    doContinousETLPipelined();
+
+    void
+    runETLPipeline();
+
+    void
     monitor();
 
     // returns true if a ledger was actually fetched
@@ -136,6 +153,9 @@ private:
 
     void
     flushLedger();
+
+    void
+    flushLedger(std::shared_ptr<Ledger>& ledger);
 
     bool
     writeToPostgres(LedgerInfo const& info, std::vector<TxMeta>& meta);
