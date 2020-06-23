@@ -249,18 +249,7 @@ ReportingETL::publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts)
                 {
                     JLOG(journal_.info()) << __func__ << " : "
                                           << "Attempting to become ETL writer";
-
-                    ledger_ = std::const_pointer_cast<Ledger>(
-                        app_.getLedgerMaster().getLedgerBySeq(
-                            ledgerSequence - 1));
-                    doContinousETL();
-
-                    if (!stopping_)
-                    {
-                        JLOG(journal_.info()) << __func__ << " : "
-                                              << "Failed to become writer. "
-                                              << "Falling back to publishing";
-                    }
+                    return false;
                 }
                 else
                 {
@@ -500,9 +489,10 @@ ReportingETL::doETL()
 
     flushLedger();
 
+    bool toContinue = true;
     if (app_.config().usePostgresTx())
         if (!writeToPostgres(ledger_->info(), metas))
-            return false;
+            toContinue = false;
 
     publishLedger();
 
@@ -512,7 +502,7 @@ ReportingETL::doETL()
     {
         assert(checkConsistency(*this));
     }
-    return true;
+    return toContinue;
 }
 
 void
@@ -593,7 +583,22 @@ ReportingETL::monitor()
         // running in read-only mode does not need to restart if the database
         // is wiped.
         success = publishLedger(idx, success ? (readOnly_ ? 30 : 10) : 1);
-        indexQueue_.pop();
+        if (!success)
+        {
+            JLOG(journal_.warn())
+                << __func__ << " : "
+                << "Failed to publish ledger with sequence = " << idx
+                << " . Beginning ETL";
+            ledger_ = std::const_pointer_cast<Ledger>(
+                app_.getLedgerMaster().getLedgerBySeq(idx - 1));
+            doContinousETL();
+            JLOG(journal_.info()) << __func__ << " : "
+                                  << "Aborting ETL. Falling back to publishing";
+        }
+        else
+        {
+            indexQueue_.pop();
+        }
     }
 }
 
