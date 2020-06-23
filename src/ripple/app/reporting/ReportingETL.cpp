@@ -306,6 +306,14 @@ ReportingETL::publishLedger()
     lastPublish_ = std::chrono::system_clock::now();
 }
 
+void
+ReportingETL::publishLedger(std::shared_ptr<Ledger>& ledger)
+{
+    app_.getOPs().pubLedger(ledger);
+
+    lastPublish_ = std::chrono::system_clock::now();
+}
+
 bool
 ReportingETL::publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts)
 {
@@ -382,16 +390,17 @@ ReportingETL::fetchLedger(
         JLOG(journal_.debug()) << "Popped 0 from index queue. Stopping";
         return false;
     }
-
-    if (ledger_ && idx != ledger_->info().seq + 1)
-    {
-        JLOG(journal_.fatal())
-            << __func__ << " : "
-            << "Sequence popped from index queue is not 1 greater than "
-            << "previous sequence. Popped sequence = " << idx << ". "
-            << "Expected sequence = " << (ledger_->info().seq + 1);
-        assert(false);
-    }
+    /*
+        if (ledger_ && idx != ledger_->info().seq + 1)
+        {
+            JLOG(journal_.fatal())
+                << __func__ << " : "
+                << "Sequence popped from index queue is not 1 greater than "
+                << "previous sequence. Popped sequence = " << idx << ". "
+                << "Expected sequence = " << (ledger_->info().seq + 1);
+            assert(false);
+        }
+    */
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Attempting to fetch ledger with sequence = "
@@ -678,9 +687,10 @@ ReportingETL::runETLPipeline()
         {
             org::xrpl::rpc::v1::GetLedgerResponse fetchResponse;
 
-            if (not fetchLedger(fetchResponse))
+            if (!fetchLedger(fetchResponse))
             {
                 // drain transform queue. this occurs when the server is shutting down
+                transformQueue_.push({});
                 break;
             }
 
@@ -691,11 +701,17 @@ ReportingETL::runETLPipeline()
     transformer_ = std::thread{[this, &pipelineStopping]() {
         while (!pipelineStopping)
         {
-            org::xrpl::rpc::v1::GetLedgerResponse fetchResponse =
+            std::optional<org::xrpl::rpc::v1::GetLedgerResponse> fetchResponse =
                 transformQueue_.pop();
+            if (!fetchResponse)
+            {
+                loadQueue_.push({});
+                break;
+            }
+
             // TODO detect that transform queue was drained, and drain loadQueue
             std::vector<TxMeta> metas;
-            updateLedger(fetchResponse, metas);
+            updateLedger(*fetchResponse, metas);
             loadQueue_.push(std::make_pair(ledger_, metas));
         }
     }};
@@ -703,19 +719,25 @@ ReportingETL::runETLPipeline()
     loader_ = std::thread{[this]() {
         while (!stopping_)
         {
-            std::pair<std::shared_ptr<Ledger>, std::vector<TxMeta>> result =
-                loadQueue_.pop();
+            std::optional<
+                std::pair<std::shared_ptr<Ledger>, std::vector<TxMeta>>>
+                result = loadQueue_.pop();
+            if (!result)
+                break;
             // TODO detect load queue was drained and abort
-            auto& ledger = result.first;
-            auto& metas = result.second;
+            auto& ledger = result->first;
+            auto& metas = result->second;
 
             flushLedger(ledger);
 
+            bool writeConflict = false;
             if (app_.config().usePostgresTx())
                 if (!writeToPostgres(ledger->info(), metas))
-                    break;
+                    writeConflict = true;
 
-            publishLedger();
+            publishLedger(ledger);
+            if (writeConflict)
+                break;
         }
     }};
 
@@ -763,7 +785,7 @@ ReportingETL::monitor()
                 << " . Beginning ETL";
             ledger_ = std::const_pointer_cast<Ledger>(
                 app_.getLedgerMaster().getLedgerBySeq(idx - 1));
-            doContinousETL();
+            doContinousETLPipelined();
             JLOG(journal_.info()) << __func__ << " : "
                                   << "Aborting ETL. Falling back to publishing";
         }
