@@ -36,7 +36,7 @@ ETLSource::ETLSource(std::string ip, std::string wsPort, ReportingETL& etl)
           boost::beast::websocket::stream<boost::beast::tcp_stream>>(
           boost::asio::make_strand(etl_.getIOContext())))
     , resolver_(boost::asio::make_strand(etl_.getIOContext()))
-    , indexQueue_(etl_.getLedgerIndexQueue())
+    , networkValidatedLedgers_(etl_.getNetworkValidatedLedgers())
     , journal_(etl_.getApplication().journal("ReportingETL::ETLSource"))
     , app_(etl_.getApplication())
     , timer_(etl_.getIOContext())
@@ -56,7 +56,7 @@ ETLSource::ETLSource(
           boost::beast::websocket::stream<boost::beast::tcp_stream>>(
           boost::asio::make_strand(etl_.getIOContext())))
     , resolver_(boost::asio::make_strand(etl_.getIOContext()))
-    , indexQueue_(etl_.getLedgerIndexQueue())
+    , networkValidatedLedgers_(etl_.getNetworkValidatedLedgers())
     , journal_(etl_.getApplication().journal("ReportingETL::ETLSource"))
     , app_(etl_.getApplication())
     , timer_(etl_.getIOContext())
@@ -346,7 +346,7 @@ ETLSource::handleMessage()
                 << __func__ << " : "
                 << "Pushing ledger sequence = " << ledgerIndex << " - "
                 << toString();
-            indexQueue_.push(ledgerIndex);
+            networkValidatedLedgers_.push(ledgerIndex);
         }
         return true;
     }
@@ -404,11 +404,8 @@ struct AsyncCallData
     }
 
     enum Status { MORE, DONE, ERROR };
-    // TODO change bool to enum. Three possible results. Success + more to do.
-    // Success + finished. Error.
     Status
     process(
-        std::shared_ptr<Ledger>& ledger,
         std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>& stub,
         grpc::CompletionQueue& cq,
         ThreadSafeQueue<std::shared_ptr<SLE>>& queue,
@@ -483,7 +480,7 @@ struct AsyncCallData
 
 bool
 ETLSource::loadInitialLedger(
-    std::shared_ptr<Ledger>& ledger,
+    uint32_t sequence,
     ThreadSafeQueue<std::shared_ptr<SLE>>& writeQueue)
 {
     if (!stub_)
@@ -497,18 +494,16 @@ ETLSource::loadInitialLedger(
 
     std::vector<AsyncCallData> calls;
     std::vector<uint256> markers{getMarkers(etl_.getNumMarkers())};
-    uint32_t ledgerSequence = ledger->info().seq;
 
     for (size_t i = 0; i < markers.size(); ++i)
     {
         std::optional<uint256> nextMarker;
         if (i + 1 < markers.size())
             nextMarker = markers[i + 1];
-        calls.emplace_back(markers[i], nextMarker, ledgerSequence, journal_);
+        calls.emplace_back(markers[i], nextMarker, sequence, journal_);
     }
 
-    JLOG(journal_.debug()) << "Starting data download for ledger "
-                           << ledgerSequence;
+    JLOG(journal_.debug()) << "Starting data download for ledger " << sequence;
 
     for (auto& c : calls)
         c.call(stub_, cq);
@@ -539,7 +534,7 @@ ETLSource::loadInitialLedger(
             {
                 JLOG(journal_.debug()) << "Empty marker";
             }
-            auto result = ptr->process(ledger, stub_, cq, writeQueue, abort);
+            auto result = ptr->process(stub_, cq, writeQueue, abort);
             if (result != AsyncCallData::Status::MORE)
             {
                 numFinished++;
@@ -606,21 +601,21 @@ ETLLoadBalancer::add(std::string& host, std::string& websocketPort)
 
 void
 ETLLoadBalancer::loadInitialLedger(
-    std::shared_ptr<Ledger> ledger,
+    uint32_t sequence,
     ThreadSafeQueue<std::shared_ptr<SLE>>& writeQueue)
 {
     execute(
-        [this, &ledger, &writeQueue](auto& source) {
-            bool res = source->loadInitialLedger(ledger, writeQueue);
+        [this, &sequence, &writeQueue](auto& source) {
+            bool res = source->loadInitialLedger(sequence, writeQueue);
             if (!res)
             {
                 JLOG(journal_.error()) << "Failed to download initial ledger. "
-                                       << " Sequence = " << ledger->info().seq
+                                       << " Sequence = " << sequence
                                        << " source = " << source->toString();
             }
             return res;
         },
-        ledger->info().seq);
+        sequence);
 }
 
 bool
@@ -703,6 +698,19 @@ ETLLoadBalancer::execute(Func f, uint32_t ledgerSequence)
         numAttempts++;
         if (numAttempts % sources_.size() == 0)
         {
+            // If another process loaded the ledger into the database, we can
+            // abort trying to fetch the ledger from a transaction processing
+            // process
+            if (etl_.getApplication().getLedgerMaster().getLedgerBySeq(
+                    ledgerSequence))
+            {
+                JLOG(journal_.warn())
+                    << __func__ << " : "
+                    << "Error executing function. "
+                    << " Tried all sources, but ledger was found in db."
+                    << " Sequence = " << ledgerSequence;
+                break;
+            }
             JLOG(journal_.error())
                 << __func__ << " : "
                 << "Error executing function "

@@ -63,9 +63,11 @@ private:
 
     ETLLoadBalancer loadBalancer_;
 
-    LedgerIndexQueue indexQueue_;
+    NetworkValidatedLedgers networkValidatedLedgers_;
 
     std::thread writer_;
+
+    ThreadSafeQueue<std::shared_ptr<SLE>> writeQueue_;
 
     std::thread extracter_;
 
@@ -80,18 +82,11 @@ private:
         std::optional<std::pair<std::shared_ptr<Ledger>, std::vector<TxMeta>>>>
         loadQueue_;
 
-    ThreadSafeQueue<std::shared_ptr<SLE>> writeQueue_;
 
     // TODO stopping logic needs to be better
     // There are a variety of loops and mutexs in play
     // Sometimes, the software can't stop
     std::atomic_bool stopping_ = false;
-
-    std::shared_ptr<Ledger> ledger_;
-
-    std::string ip_;
-
-    std::string wsPort_;
 
     size_t flushInterval_ = 0;
 
@@ -120,41 +115,33 @@ private:
         lastPublish_ = std::chrono::system_clock::now();
     }
 
-    void
-    loadInitialLedger();
+    std::shared_ptr<Ledger>
+    loadInitialLedger(uint32_t startingSequence);
 
-    // returns true if the etl was successful. False could mean etl is
-    // shutting down, or there was a write conflict
-    bool
-    doETL();
+    std::optional<uint32_t>
+    doContinousETLPipelined(uint32_t startSequence);
 
-    void
-    doContinousETL();
-
-    void
-    doContinousETLPipelined();
-
-    void
-    runETLPipeline();
+    std::optional<uint32_t>
+    runETLPipeline(std::shared_ptr<Ledger>& startLedger);
 
     void
     monitor();
 
     // returns true if a ledger was actually fetched
-    // this will only be false if the etl mechanism is shutting down
+    // this will be false if the etl mechanism is shutting down
+    // or the ledger was found in the database
     bool
     fetchLedger(
+        uint32_t sequence,
         org::xrpl::rpc::v1::GetLedgerResponse& out,
         bool getObjects = true);
 
-    void
+    std::shared_ptr<Ledger>
     updateLedger(
         org::xrpl::rpc::v1::GetLedgerResponse& in,
+        std::shared_ptr<Ledger>& parent,
         std::vector<TxMeta>& out,
         bool updateSkiplist = true);
-
-    void
-    flushLedger();
 
     void
     flushLedger(std::shared_ptr<Ledger>& ledger);
@@ -166,19 +153,15 @@ private:
     bool
     publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts = 10);
 
-    // Publishes the ledger held in ledger_ member variable
-    void
-    publishLedger();
-
     // Publishes the passed in ledger
     void
     publishLedger(std::shared_ptr<Ledger>& ledger);
 
     void
-    outputMetrics();
+    outputMetrics(std::shared_ptr<Ledger>& ledger);
 
     void
-    startWriter();
+    startWriter(std::shared_ptr<Ledger>& ledger);
 
     void
     joinWriter();
@@ -194,26 +177,16 @@ public:
     {
     }
 
-    LedgerIndexQueue&
-    getLedgerIndexQueue()
+    NetworkValidatedLedgers&
+    getNetworkValidatedLedgers()
     {
-        return indexQueue_;
+        return networkValidatedLedgers_;
     }
 
     bool
     isStopping()
     {
         return stopping_;
-    }
-
-    template <class Func>
-    bool
-    execute(Func f, uint32_t ledgerSequence);
-
-    std::shared_ptr<Ledger>&
-    getLedger()
-    {
-        return ledger_;
     }
 
     uint32_t
@@ -251,7 +224,8 @@ public:
     {
         Json::Value result(Json::objectValue);
 
-        result["queue_size"] = std::to_string(indexQueue_.size());
+        result["most_recent_validated"] =
+            std::to_string(networkValidatedLedgers_.getMostRecent());
         result["etl_sources"] = loadBalancer_.toJson();
         result["is_writer"] = writing_;
         auto last = getLastPublish();
@@ -286,7 +260,7 @@ public:
         JLOG(journal_.info()) << "onStop called";
         JLOG(journal_.debug()) << "Stopping Reporting ETL";
         stopping_ = true;
-        indexQueue_.stop();
+        networkValidatedLedgers_.stop();
         loadBalancer_.stop();
 
         JLOG(journal_.debug()) << "Stopped loadBalancer";

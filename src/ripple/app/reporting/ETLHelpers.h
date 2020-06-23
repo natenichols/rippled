@@ -28,90 +28,42 @@
 
 namespace ripple {
 
-class LedgerIndexQueue
+// TODO handle stopping logic
+class NetworkValidatedLedgers
 {
-    std::queue<uint32_t> queue_;
+    uint32_t max_ = 0;
 
     std::mutex mtx_;
 
     std::condition_variable cv_;
 
-    std::atomic_bool stopping_ = false;
-
-    std::optional<uint32_t> last;
-
-    beast::Journal j;
+    bool stopping_ = false;
 
 public:
-    LedgerIndexQueue(beast::Journal& journal) : j(journal)
-    {
-    }
-
     void
     push(uint32_t idx)
     {
         std::unique_lock<std::mutex> lck(mtx_);
-
-        if (last)
-        {
-            if (idx <= last)
-            {
-                JLOG(j.trace())
-                    << __func__ << " : "
-                    << "Attempted to push old ledger index. index : " << idx
-                    << ". Ignoring";
-
-                return;
-            }
-            assert(idx > last);
-            if (idx > *last + 1)
-            {
-                JLOG(j.warn())
-                    << __func__ << " : "
-                    << "Encountered gap. Trying to push " << idx
-                    << ", but last = " << *last << ". Filling in gap";
-                for (uint32_t i = *last + 1; i < idx; ++i)
-                {
-                    queue_.push(i);
-                }
-            }
-        }
-        auto qsize = queue_.size();
-        if (qsize > 0)
-        {
-            JLOG(j.warn())
-                << __func__ << "Queue size of " << qsize
-                << " is greater than one. This usually indicates that the ETL "
-                << "process is lagging behind the network";
-        }
-        queue_.push(idx);
-        last = idx;
+        if (idx > max_)
+            max_ = idx;
         cv_.notify_all();
     }
 
     uint32_t
-    pop()
+    getMostRecent()
     {
         std::unique_lock<std::mutex> lck(mtx_);
-        cv_.wait(
-            lck, [this]() { return this->queue_.size() > 0 || stopping_; });
-        if (stopping_)
-            return 0;  // TODO return empty optional instead of 0
-        uint32_t next = queue_.front();
-        queue_.pop();
-        return next;
+        cv_.wait(lck, [this]() { return max_ != 0; });
+        return max_;
     }
 
-    uint32_t
-    front()
+    bool
+    waitUntilValidatedByNetwork(uint32_t sequence)
     {
         std::unique_lock<std::mutex> lck(mtx_);
         cv_.wait(
-            lck, [this]() { return this->queue_.size() > 0 || stopping_; });
-        if (stopping_)
-            return 0;  // TODO return empty optional instead of 0
-        uint32_t next = queue_.front();
-        return next;
+            lck, [sequence, this]() { return sequence <= max_ || stopping_; });
+        return !stopping_;
     }
 
     void
@@ -120,13 +72,6 @@ public:
         std::unique_lock<std::mutex> lck(mtx_);
         stopping_ = true;
         cv_.notify_all();
-    }
-
-    size_t
-    size()
-    {
-        std::unique_lock<std::mutex> lck(mtx_);
-        return queue_.size();
     }
 };
 

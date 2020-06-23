@@ -54,9 +54,11 @@ struct ETLSource
     boost::beast::flat_buffer readBuffer_;
 
     // TODO: make this not a string?
-    std::string validatedLedgers;
+    std::vector<std::pair<uint32_t, uint32_t>> validatedLedgers;
 
-    LedgerIndexQueue& indexQueue_;
+    std::string validatedLedgersRaw;
+
+    NetworkValidatedLedgers& networkValidatedLedgers_;
 
     beast::Journal journal_;
 
@@ -104,28 +106,18 @@ struct ETLSource
     hasLedger(uint32_t sequence)
     {
         std::lock_guard<std::mutex> lck(mtx_);
-        if (validatedLedgers.empty())
-            return false;
-        std::vector<std::string> ranges;
-        boost::split(ranges, validatedLedgers, boost::is_any_of(","));
-        for (auto& pair : ranges)
+        for (auto& pair : validatedLedgers)
         {
-            std::vector<std::string> minAndMax;
-
-            boost::split(minAndMax, pair, boost::is_any_of("-"));
-
-            if (minAndMax.size() == 1)
+            if (sequence >= pair.first && sequence <= pair.second)
             {
-                if (sequence == std::stoll(minAndMax[0]))
-                    return true;
+                return true;
             }
-            else
+            else if (sequence < pair.first)
             {
-                assert(minAndMax.size() == 2);
-                uint32_t min = std::stoll(minAndMax[0]);
-                uint32_t max = std::stoll(minAndMax[1]);
-                if (sequence >= min && sequence <= max)
-                    return true;
+                // validatedLedgers is a sorted list of disjoint ranges
+                // if the sequence comes before this range, the sequence will
+                // come before all subsequent ranges
+                return false;
             }
         }
         return false;
@@ -134,15 +126,43 @@ struct ETLSource
     void
     setValidatedRange(std::string const& range)
     {
-        std::lock_guard<std::mutex> lck(mtx_);
-        validatedLedgers = range;
+        std::vector<std::pair<uint32_t, uint32_t>> pairs;
+        std::vector<std::string> ranges;
+        boost::split(ranges, range, boost::is_any_of(","));
+        for (auto& pair : ranges)
+        {
+            std::vector<std::string> minAndMax;
+
+            boost::split(minAndMax, pair, boost::is_any_of("-"));
+
+            if (minAndMax.size() == 1)
+            {
+                uint32_t sequence = std::stoll(minAndMax[0]);
+                pairs.push_back(std::make_pair(sequence, sequence));
+            }
+            else
+            {
+                assert(minAndMax.size() == 2);
+                uint32_t min = std::stoll(minAndMax[0]);
+                uint32_t max = std::stoll(minAndMax[1]);
+                pairs.push_back(std::make_pair(min, max));
+            }
+        }
+        std::sort(pairs.begin(), pairs.end(), [](auto left, auto right) {
+            return left.first < right.first;
+        });
+
+        std::unique_lock<std::mutex> lck(mtx_);
+        validatedLedgers = std::move(pairs);
+        validatedLedgersRaw = range;
     }
 
     std::string
     getValidatedRange()
     {
         std::lock_guard<std::mutex> lck(mtx_);
-        return validatedLedgers;
+
+        return validatedLedgersRaw;
     }
 
     void
@@ -165,9 +185,9 @@ struct ETLSource
     std::string
     toString()
     {
-        return "{ validated_ledger : " + validatedLedgers + " , ip : " + ip_ +
-            " , web socket port : " + wsPort_ + ", grpc port : " + grpcPort_ +
-            " }";
+        return "{ validated_ledger : " + getValidatedRange() +
+            " , ip : " + ip_ + " , web socket port : " + wsPort_ +
+            ", grpc port : " + grpcPort_ + " }";
     }
 
     Json::Value
@@ -188,7 +208,7 @@ struct ETLSource
 
     bool
     loadInitialLedger(
-        std::shared_ptr<Ledger>& ledger,
+        uint32_t ledgerSequence,
         ThreadSafeQueue<std::shared_ptr<SLE>>& writeQueue);
 
     void
@@ -245,7 +265,7 @@ public:
 
     void
     loadInitialLedger(
-        std::shared_ptr<Ledger> ledger,
+        uint32_t sequence,
         ThreadSafeQueue<std::shared_ptr<SLE>>& writeQueue);
 
     bool

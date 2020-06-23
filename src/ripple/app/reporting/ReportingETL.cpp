@@ -34,9 +34,9 @@
 namespace ripple {
 
 void
-ReportingETL::startWriter()
+ReportingETL::startWriter(std::shared_ptr<Ledger>& ledger)
 {
-    writer_ = std::thread{[this]() {
+    writer_ = std::thread{[this, &ledger]() {
         std::shared_ptr<SLE> sle;
         size_t num = 0;
         // TODO: if this call blocks, flushDirty in the meantime
@@ -44,62 +44,56 @@ ReportingETL::startWriter()
         {
             assert(sle);
             // TODO get rid of this conditional
-            if (!ledger_->exists(sle->key()))
-                ledger_->rawInsert(sle);
+            if (!ledger->exists(sle->key()))
+                ledger->rawInsert(sle);
 
             if (flushInterval_ != 0 and (num % flushInterval_) == 0)
             {
                 JLOG(journal_.debug())
                     << "Flushing! key = " << strHex(sle->key());
-                ledger_->stateMap().flushDirty(
-                    hotACCOUNT_NODE, ledger_->info().seq, true);
+                ledger->stateMap().flushDirty(
+                    hotACCOUNT_NODE, ledger->info().seq, true);
             }
             ++num;
         }
-        /*
-        if (not stopping_)
-            ledger_->stateMap().flushDirty(
-                hotACCOUNT_NODE, ledger_->info().seq, true);
-                */
     }};
 }
 
-void
-ReportingETL::loadInitialLedger()
+// TODO clean up return type in case of error
+std::shared_ptr<Ledger>
+ReportingETL::loadInitialLedger(uint32_t startingSequence)
 {
-    if (ledger_)
-    {
-        JLOG(journal_.info())
-            << "Ledger was loaded from database. Skipping download";
-        // The ledger was already loaded. This happens if --load is passed
-        // on the command line
-        return;
-    }
-
+    std::shared_ptr<Ledger> ledger = std::const_pointer_cast<Ledger>(
+        app_.getLedgerMaster().getLedgerBySeq(startingSequence));
+    // if the ledger is already in the database, no need to perform the
+    // full data download
+    if (ledger)
+        return ledger;
     org::xrpl::rpc::v1::GetLedgerResponse response;
-    if (not fetchLedger(response, false))
-        return;
+    if (not fetchLedger(startingSequence, response, false))
+        return {};
     std::vector<TxMeta> metas;
-    updateLedger(response, metas, false);
+    updateLedger(response, ledger, metas, false);
 
     auto start = std::chrono::system_clock::now();
 
-    startWriter();
+    startWriter(ledger);
 
-    loadBalancer_.loadInitialLedger(ledger_, writeQueue_);
+    loadBalancer_.loadInitialLedger(startingSequence, writeQueue_);
     joinWriter();
     // TODO handle case when there is a network error (other side dies)
     // Shouldn't try to flush in that scenario
     if (not stopping_)
     {
-        flushLedger();
+        flushLedger(ledger);
         if (app_.config().usePostgresTx())
-            writeToPostgres(ledger_->info(), metas);
+            writeToPostgres(ledger->info(), metas);
     }
     auto end = std::chrono::system_clock::now();
     JLOG(journal_.debug()) << "Time to download and store ledger = "
                            << ((end - start).count()) / 1000000000.0
                            << " nanoseconds";
+    return ledger;
 }
 
 void
@@ -108,100 +102,6 @@ ReportingETL::joinWriter()
     std::shared_ptr<SLE> null;
     writeQueue_.push(null);
     writer_.join();
-}
-
-void
-ReportingETL::flushLedger()
-{
-    JLOG(journal_.debug()) << __func__ << " : "
-                           << "Flushing ledger. " << toString(ledger_->info());
-    // These are recomputed in setImmutable
-    auto& accountHash = ledger_->info().accountHash;
-    auto& txHash = ledger_->info().txHash;
-    auto& ledgerHash = ledger_->info().hash;
-
-    auto start = std::chrono::system_clock::now();
-
-    ledger_->setImmutable(app_.config(), false);
-
-    auto numFlushed = ledger_->stateMap().flushDirty(
-        hotACCOUNT_NODE, ledger_->info().seq, true);
-
-    auto numTxFlushed = ledger_->txMap().flushDirty(
-        hotTRANSACTION_NODE, ledger_->info().seq, true);
-
-    {
-        Serializer s(128);
-        s.add32(HashPrefix::ledgerMaster);
-        addRaw(ledger_->info(), s);
-        app_.getNodeStore().store(
-            hotLEDGER,
-            std::move(s.modData()),
-            ledger_->info().hash,
-            ledger_->info().seq,
-            true);
-    }
-
-    app_.getNodeStore().sync();
-
-    auto end = std::chrono::system_clock::now();
-
-    JLOG(journal_.debug()) << __func__ << " : "
-                           << "Flushed " << numFlushed
-                           << " nodes to nodestore from stateMap";
-    JLOG(journal_.debug()) << __func__ << " : "
-                           << "Flushed " << numTxFlushed
-                           << " nodes to nodestore from txMap";
-
-    if (numFlushed == 0 && roundMetrics.objectCount != 0)
-    {
-        JLOG(journal_.fatal()) << __func__ << " : "
-                               << "Failed to flush state map";
-        assert(false);
-    }
-    if (numTxFlushed == 0 && roundMetrics.txnCount == 0)
-    {
-        JLOG(journal_.fatal()) << __func__ << " : "
-                               << "Failed to flush tx map";
-        assert(false);
-    }
-
-    roundMetrics.flushTime = ((end - start).count()) / 1000000000.0;
-
-    // Make sure calculated hashes are correct
-    if (ledger_->stateMap().getHash().as_uint256() != accountHash)
-    {
-        JLOG(journal_.fatal())
-            << __func__ << " : "
-            << "State map hash does not match. "
-            << "Expected hash = " << strHex(accountHash) << "Actual hash = "
-            << strHex(ledger_->stateMap().getHash().as_uint256());
-        assert(false);
-    }
-
-    if (ledger_->txMap().getHash().as_uint256() != txHash)
-    {
-        JLOG(journal_.fatal())
-            << __func__ << " : "
-            << "Tx map hash does not match. "
-            << "Expected hash = " << strHex(txHash) << "Actual hash = "
-            << strHex(ledger_->txMap().getHash().as_uint256());
-        assert(false);
-    }
-
-    if (ledger_->info().hash != ledgerHash)
-    {
-        JLOG(journal_.fatal())
-            << __func__ << " : "
-            << "Ledger hash does not match. "
-            << "Expected hash = " << strHex(ledgerHash)
-            << "Actual hash = " << strHex(ledger_->info().hash);
-        assert(false);
-    }
-
-    JLOG(journal_.info()) << __func__ << " : "
-                          << "Successfully flushed ledger! "
-                          << toString(ledger_->info());
 }
 
 void
@@ -247,6 +147,7 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
                            << "Flushed " << numTxFlushed
                            << " nodes to nodestore from txMap";
 
+    // TODO move these checks to another function?
     if (numFlushed == 0 && roundMetrics.objectCount != 0)
     {
         JLOG(journal_.fatal()) << __func__ << " : "
@@ -296,14 +197,6 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
     JLOG(journal_.info()) << __func__ << " : "
                           << "Successfully flushed ledger! "
                           << toString(ledger->info());
-}
-
-void
-ReportingETL::publishLedger()
-{
-    app_.getOPs().pubLedger(ledger_);
-
-    lastPublish_ = std::chrono::system_clock::now();
 }
 
 void
@@ -380,27 +273,10 @@ ReportingETL::publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts)
 
 bool
 ReportingETL::fetchLedger(
+    uint32_t idx,
     org::xrpl::rpc::v1::GetLedgerResponse& out,
     bool getObjects)
 {
-    auto idx = indexQueue_.pop();
-    // 0 represents the queue is shutting down
-    if (idx == 0)
-    {
-        JLOG(journal_.debug()) << "Popped 0 from index queue. Stopping";
-        return false;
-    }
-    /*
-        if (ledger_ && idx != ledger_->info().seq + 1)
-        {
-            JLOG(journal_.fatal())
-                << __func__ << " : "
-                << "Sequence popped from index queue is not 1 greater than "
-                << "previous sequence. Popped sequence = " << idx << ". "
-                << "Expected sequence = " << (ledger_->info().seq + 1);
-            assert(false);
-        }
-    */
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Attempting to fetch ledger with sequence = "
@@ -413,12 +289,14 @@ ReportingETL::fetchLedger(
     return res;
 }
 
-void
+std::shared_ptr<Ledger>
 ReportingETL::updateLedger(
     org::xrpl::rpc::v1::GetLedgerResponse& in,
+    std::shared_ptr<Ledger>& parent,
     std::vector<TxMeta>& out,
     bool updateSkiplist)
 {
+    std::shared_ptr<Ledger> next;
     JLOG(journal_.info()) << __func__ << " : "
                           << "Beginning ledger update";
     auto start = std::chrono::system_clock::now();
@@ -430,19 +308,18 @@ ReportingETL::updateLedger(
                            << "Deserialized ledger header. "
                            << toString(lgrInfo);
 
-    if (!ledger_)
+    if (!parent)
     {
-        ledger_ = std::make_shared<Ledger>(
-            lgrInfo, app_.config(), app_.getNodeFamily());
+        next = std::make_shared<Ledger>(lgrInfo, app_.config(), app_.getNodeFamily());
     }
     else
     {
-        ledger_ = std::make_shared<Ledger>(*ledger_, NetClock::time_point{});
-        ledger_->setLedgerInfo(lgrInfo);
+        next = std::make_shared<Ledger>(*parent, NetClock::time_point{});
+        next->setLedgerInfo(lgrInfo);
     }
 
-    ledger_->stateMap().clearSynching();
-    ledger_->txMap().clearSynching();
+    next->stateMap().clearSynching();
+    next->txMap().clearSynching();
 
     for (auto& txn : in.transactions_list().transactions())
     {
@@ -455,7 +332,7 @@ ReportingETL::updateLedger(
         auto txSerializer = std::make_shared<Serializer>(sttx.getSerializer());
 
         TxMeta txMeta{
-            sttx.getTransactionID(), ledger_->info().seq, txn.metadata_blob()};
+            sttx.getTransactionID(), next->info().seq, txn.metadata_blob()};
 
         auto metaSerializer =
             std::make_shared<Serializer>(txMeta.getAsObject().getSerializer());
@@ -463,7 +340,7 @@ ReportingETL::updateLedger(
         JLOG(journal_.trace())
             << __func__ << " : "
             << "Inserting transaction = " << sttx.getTransactionID();
-        ledger_->rawTxInsert(
+        next->rawTxInsert(
             sttx.getTransactionID(), txSerializer, metaSerializer);
 
         // TODO use emplace to avoid this copy
@@ -486,8 +363,8 @@ ReportingETL::updateLedger(
         {
             JLOG(journal_.trace()) << __func__ << " : "
                                    << "Erasing object = " << key;
-            if (ledger_->exists(key))
-                ledger_->rawErase(key);
+            if (next->exists(key))
+                next->rawErase(key);
         }
         else
         {
@@ -498,17 +375,17 @@ ReportingETL::updateLedger(
             std::shared_ptr<SLE> sle = std::make_shared<SLE>(it, key);
 
             // TODO maybe remove this conditional
-            if (ledger_->exists(key))
+            if (next->exists(key))
             {
                 JLOG(journal_.trace()) << __func__ << " : "
                                        << "Replacing object = " << key;
-                ledger_->rawReplace(sle);
+                next->rawReplace(sle);
             }
             else
             {
                 JLOG(journal_.trace()) << __func__ << " : "
                                        << "Inserting object = " << key;
-                ledger_->rawInsert(sle);
+                next->rawInsert(sle);
             }
         }
     }
@@ -518,7 +395,7 @@ ReportingETL::updateLedger(
         << in.ledger_objects_size();
 
     if (updateSkiplist)
-        ledger_->updateSkipList();
+        next->updateSkipList();
 
     // update metrics
     auto end = std::chrono::system_clock::now();
@@ -529,6 +406,7 @@ ReportingETL::updateLedger(
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Finished ledger update";
+    return next;
 }
 
 bool
@@ -577,39 +455,10 @@ ReportingETL::writeToPostgres(
     return true;
 }
 
-bool
-ReportingETL::doETL()
-{
-    org::xrpl::rpc::v1::GetLedgerResponse fetchResponse;
-
-    if (not fetchLedger(fetchResponse))
-        return false;
-
-    std::vector<TxMeta> metas;
-    updateLedger(fetchResponse, metas);
-
-    flushLedger();
-
-    bool toContinue = true;
-    if (app_.config().usePostgresTx())
-        if (!writeToPostgres(ledger_->info(), metas))
-            toContinue = false;
-
-    publishLedger();
-
-    outputMetrics();
-
-    if (checkConsistency_)
-    {
-        assert(checkConsistency(*this));
-    }
-    return toContinue;
-}
-
 void
-ReportingETL::outputMetrics()
+ReportingETL::outputMetrics(std::shared_ptr<Ledger>& ledger)
 {
-    roundMetrics.printMetrics(journal_, ledger_->info());
+    roundMetrics.printMetrics(journal_, ledger->info());
 
     totalMetrics.addMetrics(roundMetrics);
     totalMetrics.printMetrics(journal_);
@@ -618,14 +467,16 @@ ReportingETL::outputMetrics()
     roundMetrics = {};
 }
 
-void
-ReportingETL::doContinousETL()
+std::optional<uint32_t>
+ReportingETL::doContinousETLPipelined(uint32_t startSequence)
 {
     writing_ = true;
     assert(!readOnly_);
     JLOG(journal_.info()) << "Downloading initial ledger";
 
-    loadInitialLedger();
+    std::shared_ptr<Ledger> ledger = loadInitialLedger(startSequence);
+    if (!ledger)
+        return {};
 
     JLOG(journal_.info()) << "Done downloading initial ledger";
 
@@ -633,90 +484,58 @@ ReportingETL::doContinousETL()
     totalMetrics = {};
     roundMetrics = {};
 
-    size_t numLoops = 0;
-
-    while (not stopping_)
-    {
-        if (!doETL())
-        {
-            writing_ = false;
-            break;
-        }
-        numLoops++;
-        // At the rate of 1 ledger per 4 seconds, 21600 is one day of ledgers
-        size_t constexpr ledgersPerDay = 21600;
-        // Reset metrics after 100 iterations (let cache warm up)
-        // Reset metrics once per day
-        if (numLoops == 100 || (numLoops % ledgersPerDay) == 0)
-        {
-            JLOG(journal_.info()) << __func__ << " : "
-                                  << "Resetting metrics";
-            totalMetrics = {};
-        }
-    }
-}
-
-
-
-void
-ReportingETL::doContinousETLPipelined()
-{
-    writing_ = true;
-    assert(!readOnly_);
-    JLOG(journal_.info()) << "Downloading initial ledger";
-
-    loadInitialLedger();
-
-    JLOG(journal_.info()) << "Done downloading initial ledger";
-
-    // reset after first iteration
-    totalMetrics = {};
-    roundMetrics = {};
- 
-    runETLPipeline();
+    auto sequence = runETLPipeline(ledger);
     writing_ = false;
+    return sequence;
 }
 
-
-void
-ReportingETL::runETLPipeline()
+std::optional<uint32_t>
+ReportingETL::runETLPipeline(std::shared_ptr<Ledger>& startLedger)
 {
+    if (!startLedger)
+        return {};
     std::atomic_bool pipelineStopping = false;
-    extracter_ = std::thread{[this, &pipelineStopping]() {
-        while (!pipelineStopping)
+    uint32_t startSequence = startLedger->info().seq;
+    std::atomic_uint32_t lastPublishedSequence = 0;
+    extracter_ = std::thread{[this, &pipelineStopping, startSequence]() {
+        uint32_t currentSequence = startSequence;
+        while (!pipelineStopping &&
+               networkValidatedLedgers_.waitUntilValidatedByNetwork(
+                   currentSequence))
         {
             org::xrpl::rpc::v1::GetLedgerResponse fetchResponse;
-
-            if (!fetchLedger(fetchResponse))
+            if (!fetchLedger(currentSequence, fetchResponse))
             {
                 // drain transform queue. this occurs when the server is shutting down
-                transformQueue_.push({});
                 break;
             }
 
             transformQueue_.push(fetchResponse);
+            ++currentSequence;
         }
+        transformQueue_.push({});
     }};
 
-    transformer_ = std::thread{[this, &pipelineStopping]() {
+    transformer_ = std::thread{[this, &pipelineStopping, &startLedger]() {
+        auto& currentLedger = startLedger;
         while (!pipelineStopping)
         {
             std::optional<org::xrpl::rpc::v1::GetLedgerResponse> fetchResponse =
                 transformQueue_.pop();
             if (!fetchResponse)
             {
-                loadQueue_.push({});
                 break;
             }
 
             // TODO detect that transform queue was drained, and drain loadQueue
             std::vector<TxMeta> metas;
-            updateLedger(*fetchResponse, metas);
-            loadQueue_.push(std::make_pair(ledger_, metas));
+            currentLedger = updateLedger(*fetchResponse, currentLedger, metas);
+            loadQueue_.push(std::make_pair(currentLedger, metas));
         }
+        loadQueue_.push({});
     }};
 
-    loader_ = std::thread{[this]() {
+    loader_ = std::thread{[this, &lastPublishedSequence]() {
         while (!stopping_)
         {
             std::optional<
@@ -735,7 +554,9 @@ ReportingETL::runETLPipeline()
                 if (!writeToPostgres(ledger->info(), metas))
                     writeConflict = true;
 
+            // still publish even if we are relinquishing ETL control
             publishLedger(ledger);
+            lastPublishedSequence = ledger->info().seq;
             if (writeConflict)
                 break;
         }
@@ -745,16 +566,29 @@ ReportingETL::runETLPipeline()
     pipelineStopping = true;
     extracter_.join();
     transformer_.join();
-    
+    if (lastPublishedSequence != 0)
+        return lastPublishedSequence;
+    else
+        return {};
 }
 
+// main loop. The software begins monitoring the ledgers that are validated
+// by the nework. The member networkValidatedLedgers_ keeps track of the
+// sequences of ledgers validated by the network. Whenever a ledger is validated
+// by the network, the software looks for that ledger in the database. Once the
+// ledger is found in the database, the software publishes that ledger to the
+// ledgers stream. If a network validated ledger is not found in the database
+// after a certain amount of time, then the software attempts to take over
+// responsibility of the ETL process, where it writes new ledgers to the
+// database. The software will relinquish control of the ETL process if it
+// detects that another process has taken over ETL.
 void
 ReportingETL::monitor()
 {
-    auto idx = 0;
+    auto idx = networkValidatedLedgers_.getMostRecent();
     bool success = true;
-    // when the indexQueue returns 0, ETL is shutting down
-    while ((idx = indexQueue_.front()) != 0)
+    while (!stopping_ &&
+           networkValidatedLedgers_.waitUntilValidatedByNetwork(idx))
     {
         JLOG(journal_.info()) << __func__ << " : "
                               << "Ledger with sequence = " << idx
@@ -783,15 +617,15 @@ ReportingETL::monitor()
                 << __func__ << " : "
                 << "Failed to publish ledger with sequence = " << idx
                 << " . Beginning ETL";
-            ledger_ = std::const_pointer_cast<Ledger>(
-                app_.getLedgerMaster().getLedgerBySeq(idx - 1));
-            doContinousETLPipelined();
+            auto published = doContinousETLPipelined(idx);
             JLOG(journal_.info()) << __func__ << " : "
                                   << "Aborting ETL. Falling back to publishing";
+            if (published)
+                idx = *published + 1;
         }
         else
         {
-            indexQueue_.pop();
+            ++idx;
         }
     }
 }
@@ -820,7 +654,7 @@ ReportingETL::setup()
 
         if (startIndexPair.second)
         {
-            indexQueue_.push(std::stoi(startIndexPair.first));
+            networkValidatedLedgers_.push(std::stoi(startIndexPair.first));
         }
     }
     else if (!readOnly_)
@@ -829,13 +663,13 @@ ReportingETL::setup()
             assert(checkConsistency(*this));
         // This ledger will not actually be mutated, but every ledger
         // after it will therefore ledger_ is not const
-        ledger_ = std::const_pointer_cast<Ledger>(
+        auto ledger = std::const_pointer_cast<Ledger>(
             app_.getLedgerMaster().getValidatedLedger());
-        if (ledger_)
+        if (ledger)
         {
             JLOG(journal_.info()) << "Loaded ledger successfully. "
-                                  << "seq = " << ledger_->info().seq;
-            indexQueue_.push(ledger_->info().seq + 1);
+                                  << "seq = " << ledger->info().seq;
+            networkValidatedLedgers_.push(ledger->info().seq + 1);
         }
         else
         {
@@ -849,7 +683,6 @@ ReportingETL::ReportingETL(Application& app, Stoppable& parent)
     , app_(app)
     , journal_(app.journal("ReportingETL"))
     , loadBalancer_(*this)
-    , indexQueue_(journal_)
 {
     // if present, get endpoint from config
     if (app_.config().exists("reporting"))
