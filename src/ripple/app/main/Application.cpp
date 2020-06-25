@@ -78,6 +78,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <mutex>
 
 namespace ripple {
@@ -2255,13 +2256,22 @@ ApplicationImp::validateShards()
 void
 ApplicationImp::setMaxDisallowedLedger()
 {
-    boost::optional<LedgerIndex> seq;
+    if (config().usePostgresTx())
     {
-        auto db = getLedgerDB().checkoutDb();
-        *db << "SELECT MAX(LedgerSeq) FROM Ledgers;", soci::into(seq);
+        auto seq = doQuery(pgPool(), "SELECT max_ledger()");
+        if (seq && !PQgetisnull(seq.get(), 0, 0))
+            maxDisallowedLedger_ = std::atol(PQgetvalue(seq.get(), 0, 0));
     }
-    if (seq)
-        maxDisallowedLedger_ = *seq;
+    else
+    {
+        boost::optional<LedgerIndex> seq;
+        {
+            auto db = getLedgerDB().checkoutDb();
+            *db << "SELECT MAX(LedgerSeq) FROM Ledgers;", soci::into(seq);
+        }
+        if (seq)
+            maxDisallowedLedger_ = *seq;
+    }
 
     JLOG(m_journal.trace())
         << "Max persisted ledger is " << maxDisallowedLedger_;
