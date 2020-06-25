@@ -73,7 +73,7 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
     if (not fetchLedger(startingSequence, response, false))
         return {};
     std::vector<TxMeta> metas;
-    updateLedger(response, ledger, metas, false);
+    ledger = updateLedger(response, ledger, metas, false);
 
     auto start = std::chrono::system_clock::now();
 
@@ -474,8 +474,14 @@ ReportingETL::doContinousETLPipelined(uint32_t startSequence)
     assert(!readOnly_);
     JLOG(journal_.info()) << "Downloading initial ledger";
 
-    std::shared_ptr<Ledger> ledger = loadInitialLedger(startSequence);
-    if (!ledger)
+    std::shared_ptr<Ledger> tip = std::const_pointer_cast<Ledger>(
+        app_.getLedgerMaster().getValidatedLedger());
+    if (!tip)
+        tip = loadInitialLedger(startSequence);
+    else
+        assert(tip->info().seq == startSequence - 1);
+
+    if (!tip)
         return {};
 
     JLOG(journal_.info()) << "Done downloading initial ledger";
@@ -484,7 +490,7 @@ ReportingETL::doContinousETLPipelined(uint32_t startSequence)
     totalMetrics = {};
     roundMetrics = {};
 
-    auto sequence = runETLPipeline(ledger);
+    auto sequence = runETLPipeline(tip);
     writing_ = false;
     return sequence;
 }
@@ -492,84 +498,116 @@ ReportingETL::doContinousETLPipelined(uint32_t startSequence)
 std::optional<uint32_t>
 ReportingETL::runETLPipeline(std::shared_ptr<Ledger>& startLedger)
 {
+    JLOG(journal_.debug()) << __func__ << " : "
+                           << "Starting etl pipeline";
     if (!startLedger)
         return {};
-    std::atomic_bool pipelineStopping = false;
-    uint32_t startSequence = startLedger->info().seq;
-    std::atomic_uint32_t lastPublishedSequence = 0;
-    extracter_ = std::thread{[this, &pipelineStopping, startSequence]() {
-        uint32_t currentSequence = startSequence;
-        while (!pipelineStopping &&
-               networkValidatedLedgers_.waitUntilValidatedByNetwork(
-                   currentSequence))
-        {
-            org::xrpl::rpc::v1::GetLedgerResponse fetchResponse;
-            if (!fetchLedger(currentSequence, fetchResponse))
+
+    std::atomic_bool writeConflict = false;
+    std::optional<uint32_t> lastPublishedSequence;
+    constexpr uint32_t maxQueueSize = 1000;
+
+    ThreadSafeQueue<std::optional<org::xrpl::rpc::v1::GetLedgerResponse>>
+        transformQueue{maxQueueSize};
+
+    std::thread extracter{
+        [this, &startLedger, &writeConflict, &transformQueue]() {
+            uint32_t currentSequence = startLedger->info().seq + 1;
+
+            // there are two stopping conditions here.
+            // First, if there is a write conflict in the load thread, the ETL
+            // mechanism should stop.
+            // Second, if the entire server is shutting down,
+            // waitUntilValidatedByNetwork() is going to return false.
+            while (networkValidatedLedgers_.waitUntilValidatedByNetwork(
+                       currentSequence) &&
+                   !writeConflict)
             {
-                // drain transform queue. this occurs when the server is shutting down
-                break;
+                org::xrpl::rpc::v1::GetLedgerResponse fetchResponse;
+                // if the fetch is unsuccessful, stop. fetchLedger only returns
+                // false if the server is shutting down, or if the ledger was
+                // found in the database. otherwise, fetchLedger will continue
+                // trying to fetch the specified ledger until successful
+                if (!fetchLedger(currentSequence, fetchResponse))
+                {
+                    break;
+                }
+
+                transformQueue.push(fetchResponse);
+                ++currentSequence;
             }
+            // empty optional tells the transformer to shut down
+            transformQueue.push({});
+        }};
 
-            transformQueue_.push(fetchResponse);
-            ++currentSequence;
-        }
-        transformQueue_.push({});
-    }};
-
-    transformer_ = std::thread{[this, &pipelineStopping, &startLedger]() {
+    ThreadSafeQueue<
+        std::optional<std::pair<std::shared_ptr<Ledger>, std::vector<TxMeta>>>>
+        loadQueue{maxQueueSize};
+    std::thread transformer{[this,
+                             &startLedger,
+                             &writeConflict,
+                             &loadQueue,
+                             &transformQueue]() {
         auto& currentLedger = startLedger;
-        while (!pipelineStopping)
+        while (!writeConflict)
         {
             std::optional<org::xrpl::rpc::v1::GetLedgerResponse> fetchResponse =
-                transformQueue_.pop();
+                transformQueue.pop();
+            // if fetchResponse is an empty optional, the extracter thread has
+            // stopped and the transformer should stop as well
             if (!fetchResponse)
             {
                 break;
             }
 
-            // TODO detect that transform queue was drained, and drain loadQueue
             std::vector<TxMeta> metas;
             currentLedger = updateLedger(*fetchResponse, currentLedger, metas);
-            loadQueue_.push(std::make_pair(currentLedger, metas));
+            loadQueue.push(std::make_pair(currentLedger, metas));
         }
-        loadQueue_.push({});
+        // empty optional tells the loader to shutdown
+        loadQueue.push({});
     }};
 
-    loader_ = std::thread{[this, &lastPublishedSequence]() {
-        while (!stopping_)
-        {
-            std::optional<
-                std::pair<std::shared_ptr<Ledger>, std::vector<TxMeta>>>
-                result = loadQueue_.pop();
-            if (!result)
-                break;
-            // TODO detect load queue was drained and abort
-            auto& ledger = result->first;
-            auto& metas = result->second;
+    std::thread loader{
+        [this, &lastPublishedSequence, &loadQueue, &writeConflict]() {
+            while (!writeConflict)
+            {
+                std::optional<
+                    std::pair<std::shared_ptr<Ledger>, std::vector<TxMeta>>>
+                    result = loadQueue.pop();
+                // if result is an empty optional, the transformer thread has
+                // stopped and the loader should stop as well
+                if (!result)
+                    break;
 
-            flushLedger(ledger);
+                auto& ledger = result->first;
+                auto& metas = result->second;
 
-            bool writeConflict = false;
-            if (app_.config().usePostgresTx())
-                if (!writeToPostgres(ledger->info(), metas))
-                    writeConflict = true;
+                // write to the key-value store
+                flushLedger(ledger);
 
-            // still publish even if we are relinquishing ETL control
-            publishLedger(ledger);
-            lastPublishedSequence = ledger->info().seq;
-            if (writeConflict)
-                break;
-        }
-    }};
+                // write to RDBMS
+                // if there is a write conflict, some other process has already
+                // written this ledger and has taken over as the ETL writer
+                if (app_.config().usePostgresTx())
+                    if (!writeToPostgres(ledger->info(), metas))
+                        writeConflict = true;
 
-    loader_.join();
-    pipelineStopping = true;
-    extracter_.join();
-    transformer_.join();
-    if (lastPublishedSequence != 0)
-        return lastPublishedSequence;
-    else
-        return {};
+                // still publish even if we are relinquishing ETL control
+                publishLedger(ledger);
+                lastPublishedSequence = ledger->info().seq;
+            }
+        }};
+
+    // wait for all of the threads to stop
+    loader.join();
+    extracter.join();
+    transformer.join();
+
+    JLOG(journal_.debug()) << __func__ << " : "
+                           << "Stopping etl pipeline";
+
+    return lastPublishedSequence;
 }
 
 // main loop. The software begins monitoring the ledgers that are validated
@@ -585,13 +623,49 @@ ReportingETL::runETLPipeline(std::shared_ptr<Ledger>& startLedger)
 void
 ReportingETL::monitor()
 {
-    auto idx = networkValidatedLedgers_.getMostRecent();
+    uint32_t currentSequence = 0;
+    // logic to figure out first ledger to publish
+    // First, look in database. If database has data, begin publishing starting
+    // at the tip of that data
+    bool dbEmpty = true;
+    auto ledger = std::const_pointer_cast<Ledger>(
+        app_.getLedgerMaster().getValidatedLedger());
+    if (ledger)
+    {
+        assert(!startSequence_);
+        currentSequence = ledger->info().seq;
+        dbEmpty = false;
+    }
+    // If database is empty, check to see if a start sequence was specified in
+    // config
+    else if (startSequence_)
+    {
+        currentSequence = *startSequence_;
+    }
+    // If database is empty and no start sequence was specified in config, wait
+    // until network validates a ledger and start with that ledger
+    else
+    {
+        // this blocks until network validates a ledger
+        std::optional<uint32_t> mostRecent =
+            networkValidatedLedgers_.getMostRecent();
+        // if mostRecent is an empty optional, the server is shutting down
+        if (!mostRecent)
+            return;
+        currentSequence = *mostRecent;
+    }
+    assert(currentSequence != 0);
+
+    JLOG(journal_.debug()) << __func__ << " : "
+                           << "Starting monitor loop. Current sequence = "
+                           << currentSequence;
     bool success = true;
-    while (!stopping_ &&
-           networkValidatedLedgers_.waitUntilValidatedByNetwork(idx))
+    while (
+        !stopping_ &&
+        networkValidatedLedgers_.waitUntilValidatedByNetwork(currentSequence))
     {
         JLOG(journal_.info()) << __func__ << " : "
-                              << "Ledger with sequence = " << idx
+                              << "Ledger with sequence = " << currentSequence
                               << " has been validated by the network. "
                               << "Attempting to find in database and publish";
         // Attempt to take over responsibility of ETL writer after 10 failed
@@ -610,22 +684,26 @@ ReportingETL::monitor()
         // the ledger that has been validated by the network. In this
         // manner, a reporting processing running in read-only mode does not
         // need to restart if the database is wiped.
-        success = publishLedger(idx, success ? (readOnly_ ? 30 : 10) : 1);
+        success =
+            publishLedger(currentSequence, success ? (readOnly_ ? 30 : 10) : 1);
         if (!success)
         {
-            JLOG(journal_.warn())
-                << __func__ << " : "
-                << "Failed to publish ledger with sequence = " << idx
-                << " . Beginning ETL";
-            auto published = doContinousETLPipelined(idx);
+            JLOG(journal_.warn()) << __func__ << " : "
+                                  << "Failed to publish ledger with sequence = "
+                                  << currentSequence << " . Beginning ETL";
+            // doContinousETLPipelined returns the most recent sequence
+            // published empty optional if no sequence was published
+            std::optional<uint32_t> lastPublished =
+                doContinousETLPipelined(currentSequence);
             JLOG(journal_.info()) << __func__ << " : "
                                   << "Aborting ETL. Falling back to publishing";
-            if (published)
-                idx = *published + 1;
+            // if no ledger was published, don't increment currentSequence
+            if (lastPublished)
+                currentSequence = *lastPublished + 1;
         }
         else
         {
-            ++idx;
+            ++currentSequence;
         }
     }
 }
@@ -641,12 +719,6 @@ ReportingETL::setup()
 {
     if (app_.config().START_UP == Config::StartUpType::FRESH && !readOnly_)
     {
-        if (app_.config().usePostgresTx())
-        {
-            // if we don't load the ledger from disk, the dbs need to be
-            // cleared out, since the db will not allow any gaps
-            truncateDBs(*this);
-        }
         assert(app_.config().exists("reporting"));
         Section section = app_.config().section("reporting");
         std::pair<std::string, bool> startIndexPair =
@@ -654,27 +726,13 @@ ReportingETL::setup()
 
         if (startIndexPair.second)
         {
-            networkValidatedLedgers_.push(std::stoi(startIndexPair.first));
+            startSequence_ = std::stoi(startIndexPair.first);
         }
     }
     else if (!readOnly_)
     {
         if (checkConsistency_)
             assert(checkConsistency(*this));
-        // This ledger will not actually be mutated, but every ledger
-        // after it will therefore ledger_ is not const
-        auto ledger = std::const_pointer_cast<Ledger>(
-            app_.getLedgerMaster().getValidatedLedger());
-        if (ledger)
-        {
-            JLOG(journal_.info()) << "Loaded ledger successfully. "
-                                  << "seq = " << ledger->info().seq;
-            networkValidatedLedgers_.push(ledger->info().seq + 1);
-        }
-        else
-        {
-            JLOG(journal_.warn()) << "Failed to load ledger. Will download";
-        }
     }
 }
 

@@ -69,20 +69,6 @@ private:
 
     ThreadSafeQueue<std::shared_ptr<SLE>> writeQueue_;
 
-    std::thread extracter_;
-
-    std::thread transformer_;
-
-    ThreadSafeQueue<std::optional<org::xrpl::rpc::v1::GetLedgerResponse>>
-        transformQueue_;
-
-    std::thread loader_;
-
-    ThreadSafeQueue<
-        std::optional<std::pair<std::shared_ptr<Ledger>, std::vector<TxMeta>>>>
-        loadQueue_;
-
-
     // TODO stopping logic needs to be better
     // There are a variety of loops and mutexs in play
     // Sometimes, the software can't stop
@@ -97,6 +83,8 @@ private:
     bool readOnly_ = false;
 
     bool writing_ = false;
+
+    std::optional<uint32_t> startSequence_;
 
     std::chrono::time_point<std::chrono::system_clock> lastPublish_;
     std::mutex publishTimeMtx_;
@@ -136,6 +124,7 @@ private:
         org::xrpl::rpc::v1::GetLedgerResponse& out,
         bool getObjects = true);
 
+    // change name to buildNextLedger
     std::shared_ptr<Ledger>
     updateLedger(
         org::xrpl::rpc::v1::GetLedgerResponse& in,
@@ -224,8 +213,6 @@ public:
     {
         Json::Value result(Json::objectValue);
 
-        result["most_recent_validated"] =
-            std::to_string(networkValidatedLedgers_.getMostRecent());
         result["etl_sources"] = loadBalancer_.toJson();
         result["is_writer"] = writing_;
         auto last = getLastPublish();

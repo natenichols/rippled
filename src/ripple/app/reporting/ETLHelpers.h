@@ -28,10 +28,16 @@
 
 namespace ripple {
 
-// TODO handle stopping logic
+// This datastructure is used to keep track of the sequence of the most recent
+// ledger validated by the network. There are two methods that will wait until
+// certain conditions are met. This datastructure is able to be "stopped". When
+// the datastructure is stopped, any threads currently waiting are unblocked.
+// Any later calls to methods of this datastructure will not wait. Once the
+// datastructure is stopped, the datastructure remains stopped for the rest of
+// it's lifetime.
 class NetworkValidatedLedgers
 {
-    uint32_t max_ = 0;
+    std::optional<uint32_t> max_;
 
     std::mutex mtx_;
 
@@ -44,25 +50,33 @@ public:
     push(uint32_t idx)
     {
         std::unique_lock<std::mutex> lck(mtx_);
-        if (idx > max_)
+        if (!max_ || idx > *max_)
             max_ = idx;
         cv_.notify_all();
     }
 
-    uint32_t
+    // @return sequence of most recently validated ledger. will wait until a
+    // sequence is available. empty optional indicates the datastructure has
+    // been stopped
+    std::optional<uint32_t>
     getMostRecent()
     {
         std::unique_lock<std::mutex> lck(mtx_);
-        cv_.wait(lck, [this]() { return max_ != 0; });
+        cv_.wait(lck, [this]() { return max_ || stopping_; });
         return max_;
     }
 
+    // Waits for the sequence to be validated by the network
+    // @param sequence to wait for
+    // @returns true if sequence was validated, false otherwise
+    // a return value of false means the datastructure has been stopped
     bool
     waitUntilValidatedByNetwork(uint32_t sequence)
     {
         std::unique_lock<std::mutex> lck(mtx_);
-        cv_.wait(
-            lck, [sequence, this]() { return sequence <= max_ || stopping_; });
+        cv_.wait(lck, [sequence, this]() {
+            return (max_ && sequence <= *max_) || stopping_;
+        });
         return !stopping_;
     }
 
@@ -82,15 +96,30 @@ struct ThreadSafeQueue
 
     std::mutex m_;
     std::condition_variable cv_;
+    std::optional<uint32_t> maxSize_;
 
+    ThreadSafeQueue(uint32_t maxSize) : maxSize_(maxSize)
+    {
+    }
+
+    ThreadSafeQueue()
+    {
+    }
+
+    // @param element to push onto queue
+    // if maxSize is set, this method will block until free space is available
     void
     push(T const& elt)
     {
         std::unique_lock<std::mutex> lck(m_);
+        // if queue has a max size, wait until not full
+        if (maxSize_)
+            cv_.wait(lck, [this]() { return queue_.size() <= *maxSize_; });
         queue_.push(elt);
         cv_.notify_all();
     }
 
+    // @returns element popped from queue
     T
     pop()
     {
@@ -99,6 +128,9 @@ struct ThreadSafeQueue
         cv_.wait(lck, [this]() { return !queue_.empty(); });
         auto ret = queue_.front();
         queue_.pop();
+        // if queue has a max size, unblock any possible pushers
+        if (maxSize_)
+            cv_.notify_all();
         return ret;
     }
 };
