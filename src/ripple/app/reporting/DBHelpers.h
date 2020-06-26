@@ -239,9 +239,27 @@ truncateDBs(ReportingETL& etl)
     }
 }
 
+struct AccountTransactionsData
+{
+    std::vector<AccountID> accounts;
+    uint32_t ledgerSequence;
+    uint32_t transactionIndex;
+    uint256 txHash;
+    AccountTransactionsData(TxMeta& meta, beast::Journal& j)
+    {
+        ledgerSequence = meta.getLgrSeq();
+        transactionIndex = meta.getIndex();
+        txHash = meta.getTxID();
+        for (auto& acct : meta.getAffectedAccounts(j))
+        {
+            accounts.push_back(acct);
+        }
+    }
+};
+
 void
 writeToAccountTransactionsDB(
-    std::vector<TxMeta>& metas,
+    std::vector<AccountTransactionsData>& accountTxData,
     std::shared_ptr<PgQuery>& pgQuery,
     std::shared_ptr<Pg>& conn,
     ReportingETL& etl)
@@ -259,13 +277,13 @@ writeToAccountTransactionsDB(
 
         // Write data to stream
         std::stringstream copyBuffer;
-        for (auto& m : metas)
+        for (auto& data : accountTxData)
         {
-            std::string txHash = strHex(m.getTxID());
-            auto idx = m.getIndex();
-            auto ledgerSeq = m.getLgrSeq();
+            std::string txHash = strHex(data.txHash);
+            auto idx = data.transactionIndex;
+            auto ledgerSeq = data.ledgerSequence;
 
-            for (auto& a : m.getAffectedAccounts(etl.getJournal()))
+            for (auto& a : data.accounts)
             {
                 std::string acct = strHex(a);
                 copyBuffer << "\\\\x" << acct << '\t'

@@ -50,6 +50,8 @@
 #include <chrono>
 namespace ripple {
 
+struct AccountTransactionsData;
+
 class ReportingETL : Stoppable
 {
 private:
@@ -124,19 +126,23 @@ private:
         org::xrpl::rpc::v1::GetLedgerResponse& out,
         bool getObjects = true);
 
-    // change name to buildNextLedger
-    std::shared_ptr<Ledger>
-    updateLedger(
-        org::xrpl::rpc::v1::GetLedgerResponse& in,
+    std::vector<AccountTransactionsData>
+    insertTransactions(
+        std::shared_ptr<Ledger>& ledger,
+        org::xrpl::rpc::v1::GetLedgerResponse& data);
+
+    std::pair<std::shared_ptr<Ledger>, std::vector<AccountTransactionsData>>
+    buildNextLedger(
         std::shared_ptr<Ledger>& parent,
-        std::vector<TxMeta>& out,
-        bool updateSkiplist = true);
+        org::xrpl::rpc::v1::GetLedgerResponse& rawData);
 
     void
     flushLedger(std::shared_ptr<Ledger>& ledger);
 
     bool
-    writeToPostgres(LedgerInfo const& info, std::vector<TxMeta>& meta);
+    writeToPostgres(
+        LedgerInfo const& info,
+        std::vector<AccountTransactionsData>& accountTxData);
 
     // returns true if publish was successful (if ledger is in db)
     bool

@@ -80,6 +80,9 @@ public:
         return !stopping_;
     }
 
+    // Puts the datastructure in the stopped state
+    // Future calls to this datastructure will not block
+    // This operation cannot be reversed
     void
     stop()
     {

@@ -59,6 +59,38 @@ ReportingETL::startWriter(std::shared_ptr<Ledger>& ledger)
     }};
 }
 
+std::vector<AccountTransactionsData>
+ReportingETL::insertTransactions(
+    std::shared_ptr<Ledger>& ledger,
+    org::xrpl::rpc::v1::GetLedgerResponse& data)
+{
+    std::vector<AccountTransactionsData> accountTxData;
+    for (auto& txn : data.transactions_list().transactions())
+    {
+        auto& raw = txn.transaction_blob();
+
+        // TODO can this be done faster? Move?
+        SerialIter it{raw.data(), raw.size()};
+        STTx sttx{it};
+
+        auto txSerializer = std::make_shared<Serializer>(sttx.getSerializer());
+
+        TxMeta txMeta{
+            sttx.getTransactionID(), ledger->info().seq, txn.metadata_blob()};
+
+        auto metaSerializer =
+            std::make_shared<Serializer>(txMeta.getAsObject().getSerializer());
+
+        JLOG(journal_.trace())
+            << __func__ << " : "
+            << "Inserting transaction = " << sttx.getTransactionID();
+        ledger->rawTxInsert(
+            sttx.getTransactionID(), txSerializer, metaSerializer);
+        accountTxData.emplace_back(txMeta, journal_);
+    }
+    return accountTxData;
+}
+
 // Downloads ledger in full from network. Returns empty shared_ptr on error
 // @param sequence of ledger to download
 // @return the full ledger. All data has been written to the database (key-value
@@ -84,9 +116,17 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
     org::xrpl::rpc::v1::GetLedgerResponse response;
     if (not fetchLedger(startingSequence, response, false))
         return {};
-    std::vector<TxMeta> metas;
-    // add the transactions to the ledger
-    ledger = updateLedger(response, ledger, metas, false);
+
+    LedgerInfo lgrInfo = deserializeHeader(
+        makeSlice(response.ledger_header()), true);
+
+    JLOG(journal_.debug()) << __func__ << " : "
+                           << "Deserialized ledger header. "
+                           << toString(lgrInfo);
+
+    ledger = std::make_shared<Ledger>(lgrInfo, app_.config(), app_.getNodeFamily());
+    std::vector<AccountTransactionsData> accountTxData =
+        insertTransactions(ledger, response);
 
     auto start = std::chrono::system_clock::now();
 
@@ -106,7 +146,7 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
         //TODO handle write conflict
         flushLedger(ledger);
         if (app_.config().usePostgresTx())
-            writeToPostgres(ledger->info(), metas);
+            writeToPostgres(ledger->info(), accountTxData);
     }
     auto end = std::chrono::system_clock::now();
     JLOG(journal_.debug()) << "Time to download and store ledger = "
@@ -308,12 +348,10 @@ ReportingETL::fetchLedger(
     return res;
 }
 
-std::shared_ptr<Ledger>
-ReportingETL::updateLedger(
-    org::xrpl::rpc::v1::GetLedgerResponse& in,
+std::pair<std::shared_ptr<Ledger>, std::vector<AccountTransactionsData>>
+ReportingETL::buildNextLedger(
     std::shared_ptr<Ledger>& parent,
-    std::vector<TxMeta>& out,
-    bool updateSkiplist)
+    org::xrpl::rpc::v1::GetLedgerResponse& rawData)
 {
     std::shared_ptr<Ledger> next;
     JLOG(journal_.info()) << __func__ << " : "
@@ -321,58 +359,29 @@ ReportingETL::updateLedger(
     auto start = std::chrono::system_clock::now();
 
     LedgerInfo lgrInfo = deserializeHeader(
-        makeSlice(in.ledger_header()), true);
+        makeSlice(rawData.ledger_header()), true);
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Deserialized ledger header. "
                            << toString(lgrInfo);
 
-    if (!parent)
-    {
-        next = std::make_shared<Ledger>(lgrInfo, app_.config(), app_.getNodeFamily());
-    }
-    else
-    {
-        next = std::make_shared<Ledger>(*parent, NetClock::time_point{});
-        next->setLedgerInfo(lgrInfo);
-        assert(next->info().seq == parent->info().seq + 1);
-    }
+    assert(next);
+    next = std::make_shared<Ledger>(*parent, NetClock::time_point{});
+    next->setLedgerInfo(lgrInfo);
+    assert(next->info().seq == parent->info().seq + 1);
 
     next->stateMap().clearSynching();
     next->txMap().clearSynching();
 
-    for (auto& txn : in.transactions_list().transactions())
-    {
-        auto& raw = txn.transaction_blob();
-
-        // TODO can this be done faster? Move?
-        SerialIter it{raw.data(), raw.size()};
-        STTx sttx{it};
-
-        auto txSerializer = std::make_shared<Serializer>(sttx.getSerializer());
-
-        TxMeta txMeta{
-            sttx.getTransactionID(), next->info().seq, txn.metadata_blob()};
-
-        auto metaSerializer =
-            std::make_shared<Serializer>(txMeta.getAsObject().getSerializer());
-
-        JLOG(journal_.trace())
-            << __func__ << " : "
-            << "Inserting transaction = " << sttx.getTransactionID();
-        next->rawTxInsert(
-            sttx.getTransactionID(), txSerializer, metaSerializer);
-
-        // TODO use emplace to avoid this copy
-        out.push_back(txMeta);
-    }
+    std::vector<AccountTransactionsData> accountTxData{
+        insertTransactions(next, rawData)};
 
     JLOG(journal_.debug())
         << __func__ << " : "
         << "Inserted all transactions. Number of transactions  = "
-        << in.transactions_list().transactions_size();
+        << rawData.transactions_list().transactions_size();
 
-    for (auto& state : in.ledger_objects())
+    for (auto& state : rawData.ledger_objects())
     {
         auto& index = state.index();
         auto& data = state.data();
@@ -412,27 +421,26 @@ ReportingETL::updateLedger(
     JLOG(journal_.debug())
         << __func__ << " : "
         << "Inserted/modified/deleted all objects. Number of objects = "
-        << in.ledger_objects_size();
+        << rawData.ledger_objects_size();
 
-    if (updateSkiplist)
-        next->updateSkipList();
+    next->updateSkipList();
 
     // update metrics
     auto end = std::chrono::system_clock::now();
 
     roundMetrics.updateTime = ((end - start).count()) / 1000000000.0;
-    roundMetrics.txnCount = in.transactions_list().transactions().size();
-    roundMetrics.objectCount = in.ledger_objects().size();
+    roundMetrics.txnCount = rawData.transactions_list().transactions().size();
+    roundMetrics.objectCount = rawData.ledger_objects().size();
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Finished ledger update";
-    return next;
+    return {next, accountTxData};
 }
 
 bool
 ReportingETL::writeToPostgres(
     LedgerInfo const& info,
-    std::vector<TxMeta>& metas)
+    std::vector<AccountTransactionsData>& accountTxData)
 {
     // TODO: clean this up a bit. use less auto, better error handling, etc
     JLOG(journal_.debug()) << __func__ << " : "
@@ -460,7 +468,7 @@ ReportingETL::writeToPostgres(
         return false;
     }
 
-    writeToAccountTransactionsDB(metas, pg, conn, *this);
+    writeToAccountTransactionsDB(accountTxData, pg, conn, *this);
 
     executeUntilSuccess(pg, conn, "COMMIT", PGRES_COMMAND_OK, *this);
 
@@ -536,15 +544,15 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
             transformQueue.push({});
         }};
 
-    ThreadSafeQueue<
-        std::optional<std::pair<std::shared_ptr<Ledger>, std::vector<TxMeta>>>>
+    ThreadSafeQueue<std::optional<std::pair<
+        std::shared_ptr<Ledger>,
+        std::vector<AccountTransactionsData>>>>
         loadQueue{maxQueueSize};
     std::thread transformer{[this,
                              &parent,
                              &writeConflict,
                              &loadQueue,
                              &transformQueue]() {
-        auto& next = parent;
         while (!writeConflict)
         {
             std::optional<org::xrpl::rpc::v1::GetLedgerResponse> fetchResponse =
@@ -556,9 +564,10 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                 break;
             }
 
-            std::vector<TxMeta> metas;
-            next = updateLedger(*fetchResponse, next, metas);
-            loadQueue.push(std::make_pair(next, metas));
+            auto [next, accountTxData] =
+                buildNextLedger(parent, *fetchResponse);
+            loadQueue.push(std::make_pair(next, accountTxData));
+            parent = next;
         }
         // empty optional tells the loader to shutdown
         loadQueue.push({});
@@ -568,8 +577,9 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
         [this, &lastPublishedSequence, &loadQueue, &writeConflict]() {
             while (!writeConflict)
             {
-                std::optional<
-                    std::pair<std::shared_ptr<Ledger>, std::vector<TxMeta>>>
+                std::optional<std::pair<
+                    std::shared_ptr<Ledger>,
+                    std::vector<AccountTransactionsData>>>
                     result = loadQueue.pop();
                 // if result is an empty optional, the transformer thread has
                 // stopped and the loader should stop as well
@@ -577,7 +587,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                     break;
 
                 auto& ledger = result->first;
-                auto& metas = result->second;
+                auto& accountTxData = result->second;
 
                 // write to the key-value store
                 flushLedger(ledger);
@@ -586,7 +596,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                 // if there is a write conflict, some other process has already
                 // written this ledger and has taken over as the ETL writer
                 if (app_.config().usePostgresTx())
-                    if (!writeToPostgres(ledger->info(), metas))
+                    if (!writeToPostgres(ledger->info(), accountTxData))
                         writeConflict = true;
 
                 // still publish even if we are relinquishing ETL control
