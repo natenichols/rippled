@@ -116,7 +116,7 @@ executeUntilSuccess(
     ExecStatusType expectedResult,
     ReportingETL& etl)
 {
-    JLOG(etl.getJournal().debug()) << __func__ << " : "
+    JLOG(etl.getJournal().trace()) << __func__ << " : "
                                    << " expectedResult = " << expectedResult;
     while (!etl.isStopping())
     {
@@ -142,7 +142,7 @@ executeUntilSuccess(
 
         if (pqResultStatus == expectedResult)
         {
-            JLOG(etl.getJournal().debug()) << __func__ << " : "
+            JLOG(etl.getJournal().trace()) << __func__ << " : "
                                            << "Successfully executed query";
             break;
         }
@@ -166,7 +166,7 @@ executeUntilSuccess(
     ExecStatusType expectedResult,
     ReportingETL& etl)
 {
-    JLOG(etl.getJournal().debug())
+    JLOG(etl.getJournal().trace())
         << __func__ << " : "
         << " query = " << query << " expectedResult = " << expectedResult;
     while (!etl.isStopping())
@@ -177,7 +177,7 @@ executeUntilSuccess(
             auto resultStatus = PQresultStatus(result->get());
             if (resultStatus == expectedResult)
             {
-                JLOG(etl.getJournal().debug())
+                JLOG(etl.getJournal().trace())
                     << __func__ << " : "
                     << "Successfully executed query. "
                     << "query = " << query

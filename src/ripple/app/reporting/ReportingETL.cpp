@@ -59,32 +59,51 @@ ReportingETL::startWriter(std::shared_ptr<Ledger>& ledger)
     }};
 }
 
-// TODO clean up return type in case of error
+// Downloads ledger in full from network. Returns empty shared_ptr on error
+// @param sequence of ledger to download
+// @return the full ledger. All data has been written to the database (key-value
+// and relational). Empty shared_ptr on error
 std::shared_ptr<Ledger>
 ReportingETL::loadInitialLedger(uint32_t startingSequence)
 {
-    std::shared_ptr<Ledger> ledger = std::const_pointer_cast<Ledger>(
-        app_.getLedgerMaster().getLedgerBySeq(startingSequence));
-    // if the ledger is already in the database, no need to perform the
-    // full data download
-    if (ledger)
-        return ledger;
+    // check that database is actually empty
+    auto ledger = std::const_pointer_cast<Ledger>(
+        app_.getLedgerMaster().getValidatedLedger());
+    if(ledger)
+    {
+        JLOG(journal_.fatal()) << __func__ << " : "
+            << "Database is not empty";
+        assert(false);
+        return {};
+    }
+
+    // fetch the ledger from the network. This function will not return until
+    // either the fetch is successful, or the server is being shutdown. This only
+    // fetches the ledger header and the transactions+metadata
+    // TODO change the function to actually return the value, or an optional
     org::xrpl::rpc::v1::GetLedgerResponse response;
     if (not fetchLedger(startingSequence, response, false))
         return {};
     std::vector<TxMeta> metas;
+    // add the transactions to the ledger
     ledger = updateLedger(response, ledger, metas, false);
 
     auto start = std::chrono::system_clock::now();
 
+    // start a writer thread 
     startWriter(ledger);
 
+    // download the full account state map. This function returns immediately
+    // and the download occurs asynchronously
     loadBalancer_.loadInitialLedger(startingSequence, writeQueue_);
+    // wait for the download to finish
     joinWriter();
     // TODO handle case when there is a network error (other side dies)
     // Shouldn't try to flush in that scenario
+    // Retry? Or just die?
     if (not stopping_)
     {
+        //TODO handle write conflict
         flushLedger(ledger);
         if (app_.config().usePostgresTx())
             writeToPostgres(ledger->info(), metas);
@@ -467,41 +486,17 @@ ReportingETL::outputMetrics(std::shared_ptr<Ledger>& ledger)
     roundMetrics = {};
 }
 
+// Database must be populated when this starts
 std::optional<uint32_t>
-ReportingETL::doContinousETLPipelined(uint32_t startSequence)
-{
-    writing_ = true;
-    assert(!readOnly_);
-    JLOG(journal_.info()) << "Downloading initial ledger";
-
-    std::shared_ptr<Ledger> tip = std::const_pointer_cast<Ledger>(
-        app_.getLedgerMaster().getValidatedLedger());
-    if (!tip)
-        tip = loadInitialLedger(startSequence);
-    else
-        assert(tip->info().seq == startSequence - 1);
-
-    if (!tip)
-        return {};
-
-    JLOG(journal_.info()) << "Done downloading initial ledger";
-
-    // reset after first iteration
-    totalMetrics = {};
-    roundMetrics = {};
-
-    auto sequence = runETLPipeline(tip);
-    writing_ = false;
-    return sequence;
-}
-
-std::optional<uint32_t>
-ReportingETL::runETLPipeline(std::shared_ptr<Ledger>& startLedger)
+ReportingETL::runETLPipeline(uint32_t startSequence)
 {
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Starting etl pipeline";
-    if (!startLedger)
-        return {};
+    writing_ = true;
+
+    std::shared_ptr<Ledger> parent = std::const_pointer_cast<Ledger>(
+            app_.getLedgerMaster().getLedgerBySeq(startSequence-1));
+    assert(parent);
 
     std::atomic_bool writeConflict = false;
     std::optional<uint32_t> lastPublishedSequence;
@@ -511,8 +506,8 @@ ReportingETL::runETLPipeline(std::shared_ptr<Ledger>& startLedger)
         transformQueue{maxQueueSize};
 
     std::thread extracter{
-        [this, &startLedger, &writeConflict, &transformQueue]() {
-            uint32_t currentSequence = startLedger->info().seq + 1;
+        [this, &startSequence, &writeConflict, &transformQueue]() {
+            uint32_t currentSequence = startSequence;
 
             // there are two stopping conditions here.
             // First, if there is a write conflict in the load thread, the ETL
@@ -544,11 +539,11 @@ ReportingETL::runETLPipeline(std::shared_ptr<Ledger>& startLedger)
         std::optional<std::pair<std::shared_ptr<Ledger>, std::vector<TxMeta>>>>
         loadQueue{maxQueueSize};
     std::thread transformer{[this,
-                             &startLedger,
+                             &parent,
                              &writeConflict,
                              &loadQueue,
                              &transformQueue]() {
-        auto& currentLedger = startLedger;
+        auto& next = parent;
         while (!writeConflict)
         {
             std::optional<org::xrpl::rpc::v1::GetLedgerResponse> fetchResponse =
@@ -561,8 +556,8 @@ ReportingETL::runETLPipeline(std::shared_ptr<Ledger>& startLedger)
             }
 
             std::vector<TxMeta> metas;
-            currentLedger = updateLedger(*fetchResponse, currentLedger, metas);
-            loadQueue.push(std::make_pair(currentLedger, metas));
+            next = updateLedger(*fetchResponse, parent, metas);
+            loadQueue.push(std::make_pair(next, metas));
         }
         // empty optional tells the loader to shutdown
         loadQueue.push({});
@@ -603,6 +598,7 @@ ReportingETL::runETLPipeline(std::shared_ptr<Ledger>& startLedger)
     loader.join();
     extracter.join();
     transformer.join();
+    writing_ = false;
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Stopping etl pipeline";
@@ -623,49 +619,74 @@ ReportingETL::runETLPipeline(std::shared_ptr<Ledger>& startLedger)
 void
 ReportingETL::monitor()
 {
-    uint32_t currentSequence = 0;
-    // logic to figure out first ledger to publish
-    // First, look in database. If database has data, begin publishing starting
-    // at the tip of that data
-    bool dbEmpty = true;
     auto ledger = std::const_pointer_cast<Ledger>(
         app_.getLedgerMaster().getValidatedLedger());
-    if (ledger)
-    {
-        assert(!startSequence_);
-        currentSequence = ledger->info().seq;
-        dbEmpty = false;
-    }
-    // If database is empty, check to see if a start sequence was specified in
-    // config
-    else if (startSequence_)
-    {
-        currentSequence = *startSequence_;
-    }
-    // If database is empty and no start sequence was specified in config, wait
-    // until network validates a ledger and start with that ledger
-    else
-    {
-        // this blocks until network validates a ledger
-        std::optional<uint32_t> mostRecent =
-            networkValidatedLedgers_.getMostRecent();
-        // if mostRecent is an empty optional, the server is shutting down
-        if (!mostRecent)
-            return;
-        currentSequence = *mostRecent;
-    }
-    assert(currentSequence != 0);
-
-    JLOG(journal_.debug()) << __func__ << " : "
-                           << "Starting monitor loop. Current sequence = "
-                           << currentSequence;
-    bool success = true;
-    while (
-        !stopping_ &&
-        networkValidatedLedgers_.waitUntilValidatedByNetwork(currentSequence))
+    if (!ledger)
     {
         JLOG(journal_.info()) << __func__ << " : "
-                              << "Ledger with sequence = " << currentSequence
+                              << "Database is empty. Will download a ledger "
+                                 "from the network.";
+        if (startSequence_)
+        {
+            JLOG(journal_.info())
+                << __func__ << " : "
+                << "ledger sequence specified in config. "
+                << "Will begin ETL process starting with ledger "
+                << *startSequence_;
+            ledger = loadInitialLedger(*startSequence_);
+        }
+        else
+        {
+            JLOG(journal_.info())
+                << __func__ << " : "
+                << "Waiting for next ledger to be validated by network...";
+            std::optional<uint32_t> mostRecentValidated =
+                networkValidatedLedgers_.getMostRecent();
+            if (mostRecentValidated)
+            {
+                JLOG(journal_.info()) << __func__ << " : "
+                                      << "Ledger " << *mostRecentValidated
+                                      << " has been validated. "
+                                      << "Downloading...";
+                ledger = loadInitialLedger(*mostRecentValidated);
+            }
+            else
+            {
+                JLOG(journal_.info()) << __func__ << " : "
+                                      << "The wait for the next validated "
+                                      << "ledger has been aborted. "
+                                      << "Exiting monitor loop";
+                return;
+            }
+        }
+    }
+    else
+    {
+        JLOG(journal_.info()) << __func__ << " : "
+            << "Database already populated. Picking up from the tip of history";
+    }
+    if(!ledger)
+    {
+        JLOG(journal_.error()) << __func__ << " : "
+            << "Failed to load initial ledger. Exiting monitor loop";
+        return;
+    }
+    else
+    {
+        publishLedger(ledger);
+    }
+    uint32_t nextSequence = ledger->info().seq + 1;
+
+    JLOG(journal_.debug()) << __func__ << " : "
+                           << "Database is populated. "
+                           << "Starting monitor loop. sequence = "
+                           << nextSequence;
+    while (
+        !stopping_ &&
+        networkValidatedLedgers_.waitUntilValidatedByNetwork(nextSequence))
+    {
+        JLOG(journal_.info()) << __func__ << " : "
+                              << "Ledger with sequence = " << nextSequence
                               << " has been validated by the network. "
                               << "Attempting to find in database and publish";
         // Attempt to take over responsibility of ETL writer after 10 failed
@@ -684,26 +705,27 @@ ReportingETL::monitor()
         // the ledger that has been validated by the network. In this
         // manner, a reporting processing running in read-only mode does not
         // need to restart if the database is wiped.
-        success =
-            publishLedger(currentSequence, success ? (readOnly_ ? 30 : 10) : 1);
+        constexpr size_t timeoutSeconds = 10;
+        bool success =
+            publishLedger(nextSequence, timeoutSeconds);
         if (!success)
         {
             JLOG(journal_.warn()) << __func__ << " : "
                                   << "Failed to publish ledger with sequence = "
-                                  << currentSequence << " . Beginning ETL";
+                                  << nextSequence << " . Beginning ETL";
             // doContinousETLPipelined returns the most recent sequence
             // published empty optional if no sequence was published
             std::optional<uint32_t> lastPublished =
-                doContinousETLPipelined(currentSequence);
+                runETLPipeline(nextSequence);
             JLOG(journal_.info()) << __func__ << " : "
                                   << "Aborting ETL. Falling back to publishing";
-            // if no ledger was published, don't increment currentSequence
+            // if no ledger was published, don't increment nextSequence
             if (lastPublished)
-                currentSequence = *lastPublished + 1;
+                nextSequence = *lastPublished + 1;
         }
         else
         {
-            ++currentSequence;
+            ++nextSequence;
         }
     }
 }

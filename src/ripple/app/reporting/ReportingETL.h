@@ -107,10 +107,7 @@ private:
     loadInitialLedger(uint32_t startingSequence);
 
     std::optional<uint32_t>
-    doContinousETLPipelined(uint32_t startSequence);
-
-    std::optional<uint32_t>
-    runETLPipeline(std::shared_ptr<Ledger>& startLedger);
+    runETLPipeline(uint32_t startSequence);
 
     void
     monitor();
