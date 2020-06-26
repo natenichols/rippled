@@ -344,7 +344,7 @@ ReportingETL::fetchLedgerData(uint32_t idx)
                            << "GetLedger reply = " << response.DebugString();
     if (!res)
         return {};
-    return response;
+    return {std::move(response)};
 }
 
 std::optional<org::xrpl::rpc::v1::GetLedgerResponse>
@@ -360,7 +360,7 @@ ReportingETL::fetchLedgerDataAndDiff(uint32_t idx)
                            << "GetLedger reply = " << response.DebugString();
     if (!res)
         return {};
-    return response;
+    return {std::move(response)};
 }
 
 std::pair<std::shared_ptr<Ledger>, std::vector<AccountTransactionsData>>
@@ -449,7 +449,7 @@ ReportingETL::buildNextLedger(
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Finished ledger update";
-    return {next, accountTxData};
+    return {std::move(next), std::move(accountTxData)};
 }
 
 bool
@@ -543,7 +543,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                    !writeConflict)
             {
                 std::optional<org::xrpl::rpc::v1::GetLedgerResponse>
-                    fetchResponse = fetchLedgerDataAndDiff(currentSequence);
+                    fetchResponse{fetchLedgerDataAndDiff(currentSequence)};
                 // if the fetch is unsuccessful, stop. fetchLedger only returns
                 // false if the server is shutting down, or if the ledger was
                 // found in the database. otherwise, fetchLedger will continue
@@ -553,7 +553,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                     break;
                 }
 
-                transformQueue.push(*fetchResponse);
+                transformQueue.push(std::move(fetchResponse));
                 ++currentSequence;
             }
             // empty optional tells the transformer to shut down
@@ -571,8 +571,8 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                              &transformQueue]() {
         while (!writeConflict)
         {
-            std::optional<org::xrpl::rpc::v1::GetLedgerResponse> fetchResponse =
-                transformQueue.pop();
+            std::optional<org::xrpl::rpc::v1::GetLedgerResponse> fetchResponse{
+                transformQueue.pop()};
             // if fetchResponse is an empty optional, the extracter thread has
             // stopped and the transformer should stop as well
             if (!fetchResponse)
@@ -582,8 +582,9 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
 
             auto [next, accountTxData] =
                 buildNextLedger(parent, *fetchResponse);
-            loadQueue.push(std::make_pair(next, accountTxData));
             parent = next;
+            loadQueue.push(
+                std::make_pair(std::move(next), std::move(accountTxData)));
         }
         // empty optional tells the loader to shutdown
         loadQueue.push({});
@@ -596,7 +597,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                 std::optional<std::pair<
                     std::shared_ptr<Ledger>,
                     std::vector<AccountTransactionsData>>>
-                    result = loadQueue.pop();
+                    result{loadQueue.pop()};
                 // if result is an empty optional, the transformer thread has
                 // stopped and the loader should stop as well
                 if (!result)
