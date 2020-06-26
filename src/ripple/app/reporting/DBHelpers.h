@@ -210,35 +210,6 @@ executeUntilSuccess(
     }
 }
 
-void
-truncateDBs(ReportingETL& etl)
-{
-    JLOG(etl.getJournal().debug()) << __func__;
-    assert(etl.getApplication().pgPool());
-    assert(!etl.getApplication().config().reportingReadOnly());
-    std::shared_ptr<PgQuery> pgQuery =
-        std::make_shared<PgQuery>(etl.getApplication().pgPool());
-    std::shared_ptr<Pg> conn;
-
-    executeUntilSuccess(
-        pgQuery, conn, "TRUNCATE ledgers CASCADE;", PGRES_COMMAND_OK, etl);
-
-    executeUntilSuccess(
-        pgQuery, conn, "TRUNCATE account_transactions;", PGRES_COMMAND_OK, etl);
-    executeUntilSuccess(
-        pgQuery, conn, "TRUNCATE min_seq;", PGRES_COMMAND_OK, etl);
-    executeUntilSuccess(
-        pgQuery, conn, "TRUNCATE ancestry_verified;", PGRES_COMMAND_OK, etl);
-
-    NodeStore::Backend& backend =
-        etl.getApplication().getNodeStore().getBackend();
-    while (!etl.isStopping())
-    {
-        if (backend.truncate())
-            break;
-    }
-}
-
 struct AccountTransactionsData
 {
     std::vector<AccountID> accounts;
@@ -408,11 +379,14 @@ checkConsistency(ReportingETL& etl)
 
     if (PQntuples(res.get()) > 0)
     {
-        isConsistent = false;
         for (size_t i = 0; i < PQntuples(res.get()); ++i)
         {
             char const* ledgerSeq = PQgetvalue(res.get(), i, 0);
             char const* txRoot = PQgetvalue(res.get(), i, 1);
+            uint256 txHash;
+            txHash.SetHexExact(txRoot + 2);
+            if (txHash.isZero())
+                isConsistent = false;
             JLOG(etl.getJournal().error())
                 << __func__ << " : "
                 << "tx map root not present in nodestore. sequence = "
