@@ -34,29 +34,28 @@
 namespace ripple {
 
 void
-ReportingETL::startWriter(std::shared_ptr<Ledger>& ledger)
+ReportingETL::consumeLedgerData(
+    std::shared_ptr<Ledger>& ledger,
+    ThreadSafeQueue<std::shared_ptr<SLE>>& writeQueue)
 {
-    writer_ = std::thread{[this, &ledger]() {
-        std::shared_ptr<SLE> sle;
-        size_t num = 0;
-        // TODO: if this call blocks, flushDirty in the meantime
-        while (not stopping_ and (sle = writeQueue_.pop()))
-        {
-            assert(sle);
-            // TODO get rid of this conditional
-            if (!ledger->exists(sle->key()))
-                ledger->rawInsert(sle);
+    std::shared_ptr<SLE> sle;
+    size_t num = 0;
+    // TODO: if this call blocks, flushDirty in the meantime
+    while (not stopping_ and (sle = writeQueue.pop()))
+    {
+        assert(sle);
+        // TODO get rid of this conditional
+        if (!ledger->exists(sle->key()))
+            ledger->rawInsert(sle);
 
-            if (flushInterval_ != 0 and (num % flushInterval_) == 0)
-            {
-                JLOG(journal_.debug())
-                    << "Flushing! key = " << strHex(sle->key());
-                ledger->stateMap().flushDirty(
-                    hotACCOUNT_NODE, ledger->info().seq, true);
-            }
-            ++num;
+        if (flushInterval_ != 0 and (num % flushInterval_) == 0)
+        {
+            JLOG(journal_.debug()) << "Flushing! key = " << strHex(sle->key());
+            ledger->stateMap().flushDirty(
+                hotACCOUNT_NODE, ledger->info().seq, true);
         }
-    }};
+        ++num;
+    }
 }
 
 std::vector<AccountTransactionsData>
@@ -112,32 +111,41 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
     // fetch the ledger from the network. This function will not return until
     // either the fetch is successful, or the server is being shutdown. This only
     // fetches the ledger header and the transactions+metadata
-    // TODO change the function to actually return the value, or an optional
-    org::xrpl::rpc::v1::GetLedgerResponse response;
-    if (not fetchLedger(startingSequence, response, false))
+    std::optional<org::xrpl::rpc::v1::GetLedgerResponse> ledgerData{
+        fetchLedgerData(startingSequence)};
+    if (!ledgerData)
         return {};
 
     LedgerInfo lgrInfo = deserializeHeader(
-        makeSlice(response.ledger_header()), true);
+        makeSlice(ledgerData->ledger_header()), true);
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Deserialized ledger header. "
                            << toString(lgrInfo);
 
     ledger = std::make_shared<Ledger>(lgrInfo, app_.config(), app_.getNodeFamily());
+    ledger->stateMap().clearSynching();
+    ledger->txMap().clearSynching();
     std::vector<AccountTransactionsData> accountTxData =
-        insertTransactions(ledger, response);
+        insertTransactions(ledger, *ledgerData);
 
     auto start = std::chrono::system_clock::now();
 
-    // start a writer thread 
-    startWriter(ledger);
+    ThreadSafeQueue<std::shared_ptr<SLE>> writeQueue;
+    std::thread asyncWriter{[this, &ledger, &writeQueue]() {
+        consumeLedgerData(ledger, writeQueue);
+    }};
 
-    // download the full account state map. This function returns immediately
-    // and the download occurs asynchronously
-    loadBalancer_.loadInitialLedger(startingSequence, writeQueue_);
-    // wait for the download to finish
-    joinWriter();
+    // download the full account state map. This function downloads full ledger
+    // data and pushes the downloaded data into the writeQueue. asyncWriter
+    // consumes from the queue and inserts the data into the Ledger object.
+    // Once the below call returns, all data has been pushed into the queue
+    loadBalancer_.loadInitialLedger(startingSequence, writeQueue);
+    // null is used to respresent the end of the queue
+    std::shared_ptr<SLE> null;
+    writeQueue.push(null);
+    // wait for the writer to finish
+    asyncWriter.join();
     // TODO handle case when there is a network error (other side dies)
     // Shouldn't try to flush in that scenario
     // Retry? Or just die?
@@ -153,14 +161,6 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
                            << ((end - start).count()) / 1000000000.0
                            << " nanoseconds";
     return ledger;
-}
-
-void
-ReportingETL::joinWriter()
-{
-    std::shared_ptr<SLE> null;
-    writeQueue_.push(null);
-    writer_.join();
 }
 
 void
@@ -330,22 +330,37 @@ ReportingETL::publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts)
     return false;
 }
 
-bool
-ReportingETL::fetchLedger(
-    uint32_t idx,
-    org::xrpl::rpc::v1::GetLedgerResponse& out,
-    bool getObjects)
+std::optional<org::xrpl::rpc::v1::GetLedgerResponse>
+ReportingETL::fetchLedgerData(uint32_t idx)
 {
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Attempting to fetch ledger with sequence = "
                            << idx;
 
-    auto res = loadBalancer_.fetchLedger(out, idx, getObjects);
-
+    org::xrpl::rpc::v1::GetLedgerResponse response;
+    auto res = loadBalancer_.fetchLedger(response, idx, false);
     JLOG(journal_.trace()) << __func__ << " : "
-                           << "GetLedger reply = " << out.DebugString();
-    return res;
+                           << "GetLedger reply = " << response.DebugString();
+    if (!res)
+        return {};
+    return response;
+}
+
+std::optional<org::xrpl::rpc::v1::GetLedgerResponse>
+ReportingETL::fetchLedgerDataAndDiff(uint32_t idx)
+{
+    JLOG(journal_.debug()) << __func__ << " : "
+                           << "Attempting to fetch ledger with sequence = "
+                           << idx;
+
+    org::xrpl::rpc::v1::GetLedgerResponse response;
+    auto res = loadBalancer_.fetchLedger(response, idx, true);
+    JLOG(journal_.trace()) << __func__ << " : "
+                           << "GetLedger reply = " << response.DebugString();
+    if (!res)
+        return {};
+    return response;
 }
 
 std::pair<std::shared_ptr<Ledger>, std::vector<AccountTransactionsData>>
@@ -365,7 +380,7 @@ ReportingETL::buildNextLedger(
                            << "Deserialized ledger header. "
                            << toString(lgrInfo);
 
-    assert(next);
+    assert(parent);
     next = std::make_shared<Ledger>(*parent, NetClock::time_point{});
     next->setLedgerInfo(lgrInfo);
     assert(next->info().seq == parent->info().seq + 1);
@@ -527,17 +542,18 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                        currentSequence) &&
                    !writeConflict)
             {
-                org::xrpl::rpc::v1::GetLedgerResponse fetchResponse;
+                std::optional<org::xrpl::rpc::v1::GetLedgerResponse>
+                    fetchResponse = fetchLedgerDataAndDiff(currentSequence);
                 // if the fetch is unsuccessful, stop. fetchLedger only returns
                 // false if the server is shutting down, or if the ledger was
                 // found in the database. otherwise, fetchLedger will continue
                 // trying to fetch the specified ledger until successful
-                if (!fetchLedger(currentSequence, fetchResponse))
+                if (!fetchResponse)
                 {
                     break;
                 }
 
-                transformQueue.push(fetchResponse);
+                transformQueue.push(*fetchResponse);
                 ++currentSequence;
             }
             // empty optional tells the transformer to shut down

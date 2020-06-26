@@ -67,10 +67,6 @@ private:
 
     NetworkValidatedLedgers networkValidatedLedgers_;
 
-    std::thread writer_;
-
-    ThreadSafeQueue<std::shared_ptr<SLE>> writeQueue_;
-
     // TODO stopping logic needs to be better
     // There are a variety of loops and mutexs in play
     // Sometimes, the software can't stop
@@ -117,14 +113,14 @@ private:
     void
     monitorReadOnly();
 
-    // returns true if a ledger was actually fetched
-    // this will be false if the etl mechanism is shutting down
-    // or the ledger was found in the database
-    bool
-    fetchLedger(
-        uint32_t sequence,
-        org::xrpl::rpc::v1::GetLedgerResponse& out,
-        bool getObjects = true);
+    // @return ledger header and transaction+metadata blobs
+    std::optional<org::xrpl::rpc::v1::GetLedgerResponse>
+    fetchLedgerData(uint32_t sequence);
+
+    // @return ledger header, transaction+metadata blobs, and all ledger
+    // objects created, modified or deleted between this ledger and the parent
+    std::optional<org::xrpl::rpc::v1::GetLedgerResponse>
+    fetchLedgerDataAndDiff(uint32_t sequence);
 
     std::vector<AccountTransactionsData>
     insertTransactions(
@@ -156,7 +152,9 @@ private:
     outputMetrics(std::shared_ptr<Ledger>& ledger);
 
     void
-    startWriter(std::shared_ptr<Ledger>& ledger);
+    consumeLedgerData(
+        std::shared_ptr<Ledger>& ledger,
+        ThreadSafeQueue<std::shared_ptr<SLE>>& writeQueue);
 
     void
     joinWriter();
@@ -188,12 +186,6 @@ public:
     getNumMarkers()
     {
         return numMarkers_;
-    }
-
-    ThreadSafeQueue<std::shared_ptr<SLE>>&
-    getWriteQueue()
-    {
-        return writeQueue_;
     }
 
     Application&
