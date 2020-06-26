@@ -19,6 +19,7 @@
 
 #include <ripple/app/main/GRPCServer.h>
 #include <ripple/app/reporting/TxProxy.h>
+#include <ripple/beast/core/CurrentThreadName.h>
 #include <ripple/resource/Fees.h>
 
 namespace ripple {
@@ -511,6 +512,7 @@ GRPCServer::run()
     if ((running_ = impl_.start()))
     {
         thread_ = std::thread([this]() {
+            beast::setCurrentThreadName("rippled : GRPCServer");
             // Start the event loop and begin handling requests
             this->impl_.handleRpcs();
         });

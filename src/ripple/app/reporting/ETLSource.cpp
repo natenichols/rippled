@@ -20,6 +20,7 @@
 
 #include <ripple/app/reporting/ETLSource.h>
 #include <ripple/app/reporting/ReportingETL.h>
+#include <ripple/beast/core/CurrentThreadName.h>
 #include <ripple/json/json_reader.h>
 #include <ripple/json/json_writer.h>
 
@@ -28,18 +29,23 @@ namespace ripple {
 // Create ETL source without grpc endpoint
 // Fetch ledger and load initial ledger will fail for this source
 // Primarly used in read-only mode, to monitor when ledgers are validated
-ETLSource::ETLSource(std::string ip, std::string wsPort, ReportingETL& etl)
+ETLSource::ETLSource(
+    std::string ip,
+    std::string wsPort,
+    ReportingETL& etl,
+    boost::asio::io_context& ioc)
     : ip_(ip)
     , wsPort_(wsPort)
     , etl_(etl)
+    , ioc_(ioc)
     , ws_(std::make_unique<
           boost::beast::websocket::stream<boost::beast::tcp_stream>>(
-          boost::asio::make_strand(etl_.getIOContext())))
-    , resolver_(boost::asio::make_strand(etl_.getIOContext()))
+          boost::asio::make_strand(ioc_)))
+    , resolver_(boost::asio::make_strand(ioc_))
     , networkValidatedLedgers_(etl_.getNetworkValidatedLedgers())
     , journal_(etl_.getApplication().journal("ReportingETL::ETLSource"))
     , app_(etl_.getApplication())
-    , timer_(etl_.getIOContext())
+    , timer_(ioc_)
 {
 }
 
@@ -47,19 +53,21 @@ ETLSource::ETLSource(
     std::string ip,
     std::string wsPort,
     std::string grpcPort,
-    ReportingETL& etl)
+    ReportingETL& etl,
+    boost::asio::io_context& ioc)
     : ip_(ip)
     , wsPort_(wsPort)
     , grpcPort_(grpcPort)
     , etl_(etl)
+    , ioc_(ioc)
     , ws_(std::make_unique<
           boost::beast::websocket::stream<boost::beast::tcp_stream>>(
-          boost::asio::make_strand(etl_.getIOContext())))
-    , resolver_(boost::asio::make_strand(etl_.getIOContext()))
+          boost::asio::make_strand(ioc_)))
+    , resolver_(boost::asio::make_strand(ioc_))
     , networkValidatedLedgers_(etl_.getNetworkValidatedLedgers())
     , journal_(etl_.getApplication().journal("ReportingETL::ETLSource"))
     , app_(etl_.getApplication())
-    , timer_(etl_.getIOContext())
+    , timer_(ioc_)
 {
     try
     {
@@ -119,7 +127,7 @@ void
 ETLSource::close(bool startAgain)
 {
     timer_.cancel();
-    etl_.getIOContext().post([this, startAgain]() {
+    ioc_.post([this, startAgain]() {
         if (closing)
             return;
 
@@ -583,7 +591,7 @@ ETLLoadBalancer::add(
     std::string& grpcPort)
 {
     std::unique_ptr<ETLSource> ptr =
-        std::make_unique<ETLSource>(host, websocketPort, grpcPort, etl_);
+        std::make_unique<ETLSource>(host, websocketPort, grpcPort, etl_, ioc_);
     sources_.push_back(std::move(ptr));
     JLOG(journal_.info()) << __func__ << " : added etl source - "
                           << sources_.back()->toString();
@@ -593,7 +601,7 @@ void
 ETLLoadBalancer::add(std::string& host, std::string& websocketPort)
 {
     std::unique_ptr<ETLSource> ptr =
-        std::make_unique<ETLSource>(host, websocketPort, etl_);
+        std::make_unique<ETLSource>(host, websocketPort, etl_, ioc_);
     sources_.push_back(std::move(ptr));
     JLOG(journal_.info()) << __func__ << " : added etl source - "
                           << sources_.back()->toString();
@@ -727,7 +735,10 @@ ETLLoadBalancer::start()
 {
     for (auto& source : sources_)
         source->start();
-    worker_ = std::thread([this]() { etl_.getIOContext().run(); });
+    worker_ = std::thread([this]() {
+        beast::setCurrentThreadName("ETLLoadBalancer");
+        ioc_.run();
+    });
 }
 
 void

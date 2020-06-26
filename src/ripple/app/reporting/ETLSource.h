@@ -45,6 +45,8 @@ struct ETLSource
 
     ReportingETL& etl_;
 
+    boost::asio::io_context& ioc_;
+
     std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub> stub_;
 
     std::unique_ptr<boost::beast::websocket::stream<boost::beast::tcp_stream>>
@@ -94,13 +96,18 @@ struct ETLSource
     // Create ETL source without grpc endpoint
     // Fetch ledger and load initial ledger will fail for this source
     // Primarly used in read-only mode, to monitor when ledgers are validated
-    ETLSource(std::string ip, std::string wsPort, ReportingETL& etl);
+    ETLSource(
+        std::string ip,
+        std::string wsPort,
+        ReportingETL& etl,
+        boost::asio::io_context& ioc);
 
     ETLSource(
         std::string ip,
         std::string wsPort,
         std::string grpcPort,
-        ReportingETL& etl);
+        ReportingETL& etl,
+        boost::asio::io_context& ioc);
 
     bool
     hasLedger(uint32_t sequence)
@@ -243,10 +250,18 @@ struct ETLSource
     close(bool startAgain);
 };
 
+// This class is used to manage connections to transaction processing processes
+// This class spawns a listener for each etl source, which listens to messages
+// on the ledgers stream (to keep track of which ledgers have been validated by
+// the network, and the range of ledgers each etl source has). This class also
+// allows requests for ledger data to be load balanced across all possible etl
+// sources.
 class ETLLoadBalancer
 {
 private:
     ReportingETL& etl_;
+
+    boost::asio::io_context ioc_;
 
     beast::Journal journal_;
 

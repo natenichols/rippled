@@ -61,8 +61,6 @@ private:
 
     std::thread worker_;
 
-    boost::asio::io_context ioc_;
-
     ETLLoadBalancer loadBalancer_;
 
     NetworkValidatedLedgers networkValidatedLedgers_;
@@ -192,12 +190,6 @@ public:
     getApplication()
     {
         return app_;
-    }
-
-    boost::asio::io_context&
-    getIOContext()
-    {
-        return ioc_;
     }
 
     beast::Journal&

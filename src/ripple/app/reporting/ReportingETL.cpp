@@ -20,6 +20,7 @@
 #include <ripple/app/reporting/DBHelpers.h>
 #include <ripple/app/reporting/ReportingETL.h>
 
+#include <ripple/beast/core/CurrentThreadName.h>
 #include <ripple/json/json_reader.h>
 #include <ripple/json/json_writer.h>
 #include <boost/asio/connect.hpp>
@@ -531,6 +532,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
 
     std::thread extracter{
         [this, &startSequence, &writeConflict, &transformQueue]() {
+            beast::setCurrentThreadName("rippled: ReportingETL extract");
             uint32_t currentSequence = startSequence;
 
             // there are two stopping conditions here.
@@ -569,6 +571,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                              &writeConflict,
                              &loadQueue,
                              &transformQueue]() {
+        beast::setCurrentThreadName("rippled: ReportingETL transform");
         while (!writeConflict)
         {
             std::optional<org::xrpl::rpc::v1::GetLedgerResponse> fetchResponse{
@@ -592,6 +595,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
 
     std::thread loader{
         [this, &lastPublishedSequence, &loadQueue, &writeConflict]() {
+            beast::setCurrentThreadName("rippled: ReportingETL load");
             while (!writeConflict)
             {
                 std::optional<std::pair<
@@ -780,6 +784,7 @@ void
 ReportingETL::doWork()
 {
     worker_ = std::thread([this]() {
+        beast::setCurrentThreadName("rippled: ReportingETL worker");
         if (readOnly_)
             monitorReadOnly();
         else
