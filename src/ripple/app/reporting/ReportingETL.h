@@ -112,6 +112,9 @@ private:
     void
     monitor();
 
+    void
+    monitorReadOnly();
+
     // returns true if a ledger was actually fetched
     // this will be false if the etl mechanism is shutting down
     // or the ledger was found in the database

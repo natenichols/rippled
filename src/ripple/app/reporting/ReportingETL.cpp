@@ -731,9 +731,31 @@ ReportingETL::monitor()
 }
 
 void
+ReportingETL::monitorReadOnly()
+{
+    std::optional<uint32_t> mostRecent =
+        networkValidatedLedgers_.getMostRecent();
+    if (!mostRecent)
+        return;
+    uint32_t sequence = *mostRecent;
+    bool success = true;
+    while (!stopping_ &&
+           networkValidatedLedgers_.waitUntilValidatedByNetwork(sequence))
+    {
+        success = publishLedger(sequence, success ? 30 : 1);
+        ++sequence;
+    }
+}
+
+void
 ReportingETL::doWork()
 {
-    worker_ = std::thread([this]() { monitor(); });
+    worker_ = std::thread([this]() {
+        if (readOnly_)
+            monitorReadOnly();
+        else
+            monitor();
+    });
 }
 
 void
