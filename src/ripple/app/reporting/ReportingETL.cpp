@@ -159,8 +159,7 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
     }
     auto end = std::chrono::system_clock::now();
     JLOG(journal_.debug()) << "Time to download and store ledger = "
-                           << ((end - start).count()) / 1000000000.0
-                           << " nanoseconds";
+                           << ((end - start).count()) / 1000000000.0;
     return ledger;
 }
 
@@ -174,7 +173,6 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
     auto& txHash = ledger->info().txHash;
     auto& ledgerHash = ledger->info().hash;
 
-    auto start = std::chrono::system_clock::now();
 
     ledger->setImmutable(app_.config(), false);
 
@@ -198,7 +196,6 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
 
     app_.getNodeStore().sync();
 
-    auto end = std::chrono::system_clock::now();
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Flushed " << numFlushed
@@ -207,21 +204,18 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
                            << "Flushed " << numTxFlushed
                            << " nodes to nodestore from txMap";
 
-    // TODO move these checks to another function?
-    if (numFlushed == 0 && roundMetrics.objectCount != 0)
+    if (numFlushed == 0)
     {
         JLOG(journal_.fatal()) << __func__ << " : "
-                               << "Failed to flush state map";
+                               << "Flushed 0 nodes from state map";
         assert(false);
     }
-    if (numTxFlushed == 0 && roundMetrics.txnCount == 0)
+    if (numTxFlushed == 0)
     {
-        JLOG(journal_.fatal()) << __func__ << " : "
-                               << "Failed to flush tx map";
-        assert(false);
+        JLOG(journal_.warn()) << __func__ << " : "
+                              << "Flushed 0 nodes from tx map";
     }
 
-    roundMetrics.flushTime = ((end - start).count()) / 1000000000.0;
 
     // Make sure calculated hashes are correct
     if (ledger->stateMap().getHash().as_uint256() != accountHash)
@@ -372,7 +366,6 @@ ReportingETL::buildNextLedger(
     std::shared_ptr<Ledger> next;
     JLOG(journal_.info()) << __func__ << " : "
                           << "Beginning ledger update";
-    auto start = std::chrono::system_clock::now();
 
     LedgerInfo lgrInfo = deserializeHeader(
         makeSlice(rawData.ledger_header()), true);
@@ -441,15 +434,9 @@ ReportingETL::buildNextLedger(
 
     next->updateSkipList();
 
-    // update metrics
-    auto end = std::chrono::system_clock::now();
-
-    roundMetrics.updateTime = ((end - start).count()) / 1000000000.0;
-    roundMetrics.txnCount = rawData.transactions_list().transactions().size();
-    roundMetrics.objectCount = rawData.ledger_objects().size();
-
     JLOG(journal_.debug()) << __func__ << " : "
-                           << "Finished ledger update";
+                           << "Finished ledger update. "
+                           << toString(next->info());
     return {std::move(next), std::move(accountTxData)};
 }
 
@@ -470,7 +457,6 @@ ReportingETL::writeToPostgres(
     std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
     std::shared_ptr<Pg> conn;
 
-    auto start = std::chrono::system_clock::now();
 
     executeUntilSuccess(pg, conn, "BEGIN", PGRES_COMMAND_OK, *this);
 
@@ -491,24 +477,10 @@ ReportingETL::writeToPostgres(
     PQsetnonblocking(conn->getConn(), 1);
     app_.pgPool()->checkin(conn);
 
-    auto end = std::chrono::system_clock::now();
 
-    roundMetrics.postgresTime = ((end - start).count()) / 1000000000.0;
     JLOG(journal_.info()) << __func__ << " : "
                           << "Successfully wrote to Postgres";
     return true;
-}
-
-void
-ReportingETL::outputMetrics(std::shared_ptr<Ledger>& ledger)
-{
-    roundMetrics.printMetrics(journal_, ledger->info());
-
-    totalMetrics.addMetrics(roundMetrics);
-    totalMetrics.printMetrics(journal_);
-
-    // reset round metrics
-    roundMetrics = {};
 }
 
 // Database must be populated when this starts
@@ -610,9 +582,11 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                 auto& ledger = result->first;
                 auto& accountTxData = result->second;
 
+                auto start = std::chrono::system_clock::now();
                 // write to the key-value store
                 flushLedger(ledger);
 
+                auto mid = std::chrono::system_clock::now();
                 // write to RDBMS
                 // if there is a write conflict, some other process has already
                 // written this ledger and has taken over as the ETL writer
@@ -620,10 +594,26 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                     if (!writeToPostgres(ledger->info(), accountTxData))
                         writeConflict = true;
 
+                auto end = std::chrono::system_clock::now();
+
                 // still publish even if we are relinquishing ETL control
                 publishLedger(ledger);
                 lastPublishedSequence = ledger->info().seq;
                 checkConsistency(*this);
+
+                // print some performance numbers
+                auto kvTime = ((mid - start).count()) / 1000000000.0;
+                auto relationalTime = ((end - mid).count()) / 1000000000.0;
+
+                size_t numTxns = accountTxData.size();
+                JLOG(journal_.info())
+                    << "Load phase of etl : "
+                    << "Successfully published ledger! Ledger info: "
+                    << toString(ledger->info()) << ". txn count = " << numTxns
+                    << ". key-value write time = " << kvTime
+                    << ". relational write time = " << relationalTime
+                    << ". key-value tps = " << numTxns / kvTime
+                    << ". relational tps = " << numTxns / relationalTime;
             }
         }};
 

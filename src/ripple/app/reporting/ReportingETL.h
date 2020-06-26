@@ -157,10 +157,6 @@ private:
     void
     joinWriter();
 
-    Metrics totalMetrics;
-    Metrics roundMetrics;
-    Metrics lastRoundMetrics;
-
 public:
     ReportingETL(Application& app, Stoppable& parent);
 
