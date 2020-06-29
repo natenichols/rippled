@@ -86,8 +86,6 @@ struct PgConfig
     /** DB connection parameter values. */
     std::vector<std::string> values;
 
-    /** IP type. The class requires initialization. */
-    boost::asio::ip::tcp protocol {boost::asio::ip::tcp::v4()};
 };
 
 //-----------------------------------------------------------------------------
@@ -96,13 +94,11 @@ struct PgConfig
 class Pg
     : public std::enable_shared_from_this<Pg>
 {
-    using yield_context = boost::asio::yield_context;
     PgConfig const& config_;
     beast::Journal const j_;
 
     pg_connection_type conn_ {
         nullptr, [](PGconn* conn){PQfinish(conn);}};
-    std::unique_ptr<boost::asio::ip::tcp::socket> socket_;
 
 public:
     /** Constructor for Pg class.
@@ -123,30 +119,20 @@ public:
         return conn_ != nullptr;
     }
 
-    /** Asynchronously connect to postgres.
+    /** Connect to postgres.
      *
      * Idempotently connects to postgres by first checking whether an
      * existing connection is already present. If connection is not present
      * or in an errored state, reconnects to the database.
-     *
-     * @param yield Asio coroutine state.
-     * @param strand Strand upon which to perform asynchronous operations.
      */
-    void connect(yield_context yield, boost::asio::io_context::strand& strand);
+    void
+    connect();
 
     /** Disconnect from postgres. */
     void
     disconnect()
     {
         conn_.reset();
-    }
-
-    /** Cancel asynchronous operations on underlying postgres socket. */
-    void
-    cancel()
-    {
-        if (socket_)
-            try { socket_->cancel(); } catch (...) {}
     }
 
     /** Execute postgres query.
@@ -156,52 +142,35 @@ public:
      * The API supports multiple response objects per command but this
      * implementation only returns 0 or 1 response objects.
      *
-     * @param yield Asio coroutine state.
-     * @param strand Asio strand upon which to execute asynchronous ops.
      * @param command postgres API command string.
      * @param nParams postgres API number of parameters.
      * @param values postgres API array of parameter.
      * @return Postgres API result struct if successful.
      */
     pg_variant_type
-    query(yield_context yield, boost::asio::io_context::strand& strand,
-        char const* command, std::size_t nParams, char const* const* values);
+    query(char const* command, std::size_t nParams, char const* const* values);
 
     /** Execute postgres query with no parameters.
      *
-     * @param yield Asio coroutine state.
-     * @param strand Asio strand upon which to execute asynchronous ops.
+     * @param command Query string.
      * @return Postgres API result struct.
      */
     pg_variant_type
-    query(yield_context yield, boost::asio::io_context::strand& strand,
-        char const* command)
+    query(char const* command)
     {
-        return query(yield, strand, command, 0, nullptr);
+        return query(command, 0, nullptr);
     }
 
     /** Execute postgres query with parameters.
      *
-     * @param yield Asio coroutine state.
-     * @param strand Asio strand upon which to execute asynchronous ops.
      * @param dbParams Database command and parameter values.
      * @return PostgreSQL API result struct.
      */
     pg_variant_type
-    query(yield_context yield, boost::asio::io_context::strand& strand,
-        pg_params const& dbParams);
+    query(pg_params const& dbParams);
 
-    pg_result_type
-    batchQuery(yield_context yield, boost::asio::io_context::strand& strand,
-        char const* command);
-
-    /** Handler for timeout of database activities.
-     *
-     * @param ec Asio error.
-     */
-    void timeout(boost::system::error_code const& ec);
-
-    PGconn* getConn()
+    PGconn*
+    getConn()
     {
         return conn_.get();
     }
@@ -228,7 +197,6 @@ class PgPool
 
     // TODO the asio worker threads and io context need to be external for GA.
     boost::asio::io_context io_;
-    boost::asio::steady_timer timer_ {io_};
     std::multimap<std::chrono::time_point<clock_type>,
         std::shared_ptr<Pg>> idle_;
 
@@ -238,18 +206,7 @@ public:
     std::size_t connections_ {};
     std::atomic<bool> stop_ {false};
 
-    // TODO asio needs to be external for GA.
-    std::vector<std::thread> workers_;
-    // TODO make configurable.
-    unsigned int nWorkers_ {std::thread::hardware_concurrency()};
-
     PgConfig config_;
-
-    /** Disconnect idle postgres connections.
-     *
-     * @param ec Asio error code.
-     */
-    void sweepIdle(boost::system::error_code const& ec);
 
 public:
     /** Connection pool constructor.
@@ -287,6 +244,9 @@ public:
      */
     void checkin(std::shared_ptr<Pg>& pg);
 
+    /** Disconnect idle postgres connections. */
+    void
+    idleSweeper();
 };
 
 //-----------------------------------------------------------------------------
@@ -299,13 +259,6 @@ class PgQuery
 {
 private:
     std::shared_ptr<PgPool> const& pool_;
-    std::vector<std::shared_ptr<NodeObject>> batch_;
-    std::mutex batchMutex_;
-    bool submitting_ {false};
-    std::mutex submitMutex_;
-    std::condition_variable submitCv_;
-
-    void store(std::size_t const keyBytes, bool const sync);
 
 public:
     PgQuery(std::shared_ptr<PgPool> const& pool)
@@ -320,51 +273,40 @@ public:
      * @param dbParams
      * @return PostgreSQL API result struct.
      */
+    pg_variant_type
+    queryVariant(pg_params const& dbParams, std::shared_ptr<Pg>& conn);
 
-    pg_variant_type querySyncVariant(pg_params const& dbParams,
-              std::shared_ptr<Pg>& conn);
-
-    pg_result_type querySync(pg_params const& dbParams,
-        std::shared_ptr<Pg>& conn)
+    pg_result_type
+    query(pg_params const& dbParams, std::shared_ptr<Pg>& conn)
     {
-        auto result = querySyncVariant(dbParams, conn);
+        auto result = queryVariant(dbParams, conn);
         if (std::holds_alternative<pg_result_type>(result))
             return std::move(std::get<pg_result_type>(result));
         return {nullptr, [](PGresult* result){ PQclear(result); }};
     }
 
     pg_result_type
-    querySync(pg_params const& dbParams)
+    query(pg_params const& dbParams)
     {
         std::shared_ptr<Pg> conn;
-        auto ret = querySync(dbParams, conn);
+        auto ret = query(dbParams, conn);
         pool_->checkin(conn);
         return ret;
     }
 
     pg_result_type
-    querySync(char const* command, std::shared_ptr<Pg>& conn)
+    query(char const* command, std::shared_ptr<Pg>& conn)
     {
-        return querySync(pg_params{command, {}}, conn);
+        return query(pg_params{command, {}}, conn);
     }
 
     pg_result_type
-    querySync(char const* command)
+    query(char const* command)
     {
         std::shared_ptr<Pg> conn;
-        auto ret = querySync(command, conn);
+        auto ret = query(command, conn);
         pool_->checkin(conn);
         return ret;
-    }
-
-    void store(std::shared_ptr<NodeObject> const& no, size_t const keyBytes);
-    void store(std::vector<std::shared_ptr<NodeObject>> const& nos,
-        size_t const keyBytes);
-
-    void
-    sync(std::size_t const keyBytes)
-    {
-        store(keyBytes, true);
     }
 
 };
@@ -373,22 +315,6 @@ public:
 
 std::shared_ptr<PgPool> make_PgPool(Section const& network_db_config,
     beast::Journal const j);
-
-// PgQuery should be a shared_ptr to enable shared_from_this() for async
-// calls. This function simplifies one-off calls to PgQuery->querySync().
-template <class T>
-pg_result_type
-doQuery(std::shared_ptr<PgPool> const& pgPool, T const& cmd)
-{
-    std::shared_ptr<PgQuery> pgQuery = std::make_shared<PgQuery>(pgPool);
-    return pgQuery->querySync(cmd);
-}
-
-std::optional<std::pair<std::string, std::string>>
-no2pg(std::shared_ptr<NodeObject> const& no);
-
-bool
-testNo(std::shared_ptr<NodeObject> const& no, std::size_t const keyBytes = 32);
 
 } // ripple
 

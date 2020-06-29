@@ -58,7 +58,7 @@ doTxHistoryReporting(RPC::JsonContext& context)
     std::shared_ptr<PgQuery> pg =
         std::make_shared<PgQuery>(context.app.pgPool());
 
-    auto res = pg->querySync(sql.data());
+    auto res = pg->query(sql.data());
     assert(res);
     auto result = PQresultStatus(res.get());
 

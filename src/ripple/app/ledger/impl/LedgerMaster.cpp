@@ -273,7 +273,7 @@ LedgerMaster::getValidatedLedgerAge()
 
     if (app_.config().usePostgresTx())
     {
-        auto age = doQuery(app_.pgPool(), "SELECT age()");
+        auto age = PgQuery(app_.pgPool()).query("SELECT age()");
         if (!age || PQgetisnull(age.get(), 0, 0))
         {
             JLOG(m_journal.debug()) << "No ledgers in database";
@@ -1555,7 +1555,7 @@ LedgerMaster::getValidatedLedger ()
 {
     if (app_.config().usePostgresTx())
     {
-        auto seq = doQuery(app_.pgPool(), "SELECT max_ledger()");
+        auto seq = PgQuery(app_.pgPool()).query("SELECT max_ledger()");
         if (!seq || PQgetisnull(seq.get(), 0, 0))
             return {};
         return getLedgerBySeq(std::atoi(PQgetvalue(seq.get(), 0, 0)));
@@ -1592,7 +1592,7 @@ LedgerMaster::getCompleteLedgers()
 {
     if (app_.config().usePostgresTx())
     {
-        auto range = doQuery(app_.pgPool(), "SELECT complete_ledgers()");
+        auto range = PgQuery(app_.pgPool()).query("SELECT complete_ledgers()");
         if (!range)
             return "error";
         return (PQgetvalue(range.get(), 0, 0));

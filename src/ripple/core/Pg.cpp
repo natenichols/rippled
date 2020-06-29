@@ -47,8 +47,6 @@
 
 namespace ripple {
 
-static constexpr auto idle_sweep_timeout = std::chrono::seconds(5);
-
 static void
 noticeReceiver(void* arg, PGresult const* res)
 {
@@ -62,55 +60,28 @@ noticeReceiver(void* arg, PGresult const* res)
  https://www.postgresql.org/docs/10/libpq-connect.html
  */
 void
-Pg::connect(yield_context yield, boost::asio::io_context::strand& strand)
+Pg::connect()
 {
-    std::function <PostgresPollingStatusType (PGconn*)> poller;
     if (conn_)
     {
+        // Nothing to do if we already have a good connection.
         if (PQstatus(conn_.get()) == CONNECTION_OK)
             return;
-        /* Try resetting connection, or disconnect and retry if that fails.
-           PQfinish() is synchronous so first try to asynchronously reset. */
-        if (PQresetStart(conn_.get()))
-            poller = PQresetPoll;
-        else
-            disconnect();
+        /* Try resetting connection. */
+        PQreset(conn_.get());
     }
-
-    if (!conn_)
+    else  // Make new connection.
     {
-        std::stringstream ss;
-        ss << "conn ptrs: ";
-        char** kidx = (char**)&config_.keywordsIdx[0];
-        while (*kidx != nullptr)
-        {
-            ss << (char const*)kidx << ':';
-            ++kidx;
-        }
-        char** vidx = (char**)&config_.valuesIdx[0];
-        while (*vidx != nullptr)
-        {
-            ss << (char const*)vidx << ',';
-            ++vidx;
-        }
-        std::cerr << ss.str() << '\n';
-        ss.str(std::string());
-        ss << "conn kvs (nelem " << config_.keywords.size() << "): ";
-        for (std::size_t n = 0; n < config_.keywords.size(); ++n)
-        {
-            ss << config_.keywords[n] << ':' << config_.values[n] << ',';
-        }
-        std::cerr << ss.str() << '\n';
-        conn_.reset(PQconnectStartParams(
+        conn_.reset(PQconnectdbParams(
             reinterpret_cast<char const* const*>(&config_.keywordsIdx[0]),
             reinterpret_cast<char const* const*>(&config_.valuesIdx[0]),
             0));
-        poller = PQconnectPoll;
+        if (!conn_)
+            Throw<std::runtime_error>("No db connection struct");
     }
 
-    if (!conn_)
-        Throw<std::runtime_error>("No db connection object");
-
+    /** Results from a synchronous connection attempt can only be either
+     * CONNECTION_OK or CONNECTION_BAD. */
     if (PQstatus(conn_.get()) == CONNECTION_BAD)
     {
         std::stringstream ss;
@@ -118,183 +89,40 @@ Pg::connect(yield_context yield, boost::asio::io_context::strand& strand)
             << PQerrorMessage(conn_.get());
         Throw<std::runtime_error>(ss.str());
     }
-//    noticeReceiver(const_cast<beast::Journal*>(&j_), nullptr);
-    PQsetNoticeReceiver(conn_.get(), noticeReceiver,
-        const_cast<beast::Journal*>(&j_));
 
-    /* Asynchronously connecting entails several messages between
-     * client and server. */
-    PostgresPollingStatusType poll = PGRES_POLLING_WRITING;
-    while (poll != PGRES_POLLING_OK)
-    {
-        socket_ = std::make_unique<boost::asio::ip::tcp::socket>(strand,
-            config_.protocol, PQsocket(conn_.get()));
-
-        switch (poll)
-        {
-            case PGRES_POLLING_FAILED:
-            {
-                std::stringstream ss;
-                ss << "DB connection failed" ;
-                char* err = PQerrorMessage(conn_.get());
-                if (err)
-                    ss << ":" <<  err;
-                else
-                    ss << '.';
-                Throw<std::runtime_error>(ss.str());
-            }
-
-            case PGRES_POLLING_READING:
-                socket_->async_wait(boost::asio::ip::tcp::socket::wait_read,
-                    yield);
-                break;
-
-            case PGRES_POLLING_WRITING:
-                socket_->async_wait(boost::asio::ip::tcp::socket::wait_write,
-                    yield);
-                break;
-
-            default:
-            {
-                assert(false);
-                std::stringstream ss;
-                ss << "unknown DB polling status: " << poll;
-                Throw<std::runtime_error>(ss.str());
-            }
-        }
-        poll = poller(conn_.get());
-        socket_->release();
-    }
-
-    /* Enable asynchronous writes. */
-    if (PQsetnonblocking(conn_.get(), 1) == -1)
-    {
-        std::stringstream ss;
-        char* err = PQerrorMessage(conn_.get());
-        if (err)
-            ss << "Error setting connection to non-blocking: " << err;
-        else
-            ss << "Unknown error setting connection to non-blocking";
-        Throw<std::runtime_error>(ss.str());
-    }
-
-    if (PQstatus(conn_.get()) != CONNECTION_OK)
-    {
-        std::stringstream ss;
-        ss << "bad connection" << std::to_string(PQstatus(conn_.get()));
-        char* err = PQerrorMessage(conn_.get());
-        if (err)
-            ss << ": " << err;
-        else
-            ss << '.';
-        Throw<std::runtime_error>(ss.str());
-    }
+    // Log server session console messages.
+    PQsetNoticeReceiver(
+        conn_.get(), noticeReceiver, const_cast<beast::Journal*>(&j_));
 }
 
 pg_variant_type
-Pg::query(yield_context yield, boost::asio::io_context::strand& strand,
-    char const* command, std::size_t nParams, char const* const* values)
+Pg::query(char const* command, std::size_t nParams, char const* const* values)
 {
     pg_result_type ret {nullptr, [](PGresult* result){ PQclear(result); }};
     // Connect then submit query.
     try
     {
-        connect(yield, strand);
-        if (!PQsendQueryParams(conn_.get(), command, nParams, nullptr,
-            values, nullptr, nullptr, 0))
-        {
-            std::stringstream ss;
-            ss << "Can't send query: " << PQerrorMessage(conn_.get());
-            Throw<std::runtime_error>(ss.str());
-        }
-
-        socket_ = std::make_unique<boost::asio::ip::tcp::socket>(strand,
-            config_.protocol, PQsocket(conn_.get()));
-
-        // non-blocking connection requires manually flushing write.
-        int flushed;
-        do
-        {
-            flushed = PQflush(conn_.get());
-            if (flushed == 1)
-            {
-                socket_->async_wait(
-                    boost::asio::ip::tcp::socket::wait_write, yield);
-            }
-            else if (flushed == -1)
-            {
-                std::stringstream ss;
-                ss << "error flushing query " << PQerrorMessage(conn_.get());
-                Throw<std::runtime_error>(ss.str());
-            }
-        }
-        while (flushed);
-
-        /* Only read response if query was submitted successfully.
-           Only a single response is expected, but the API requires
-           responses to be read until nullptr is returned.
-
-           It is possible for pending reads on the connection to interfere
-           with the current query. For simplicity, this implementation
-           only flushes pending writes and assumes there are no pending reads.
-           To avoid this, all pending reads from each query must be consumed,
-           and all connections with any type of error be severed. */
-        while (true)
-        {
-            if (PQisBusy(conn_.get()))
-                socket_->async_wait(boost::asio::ip::tcp::socket::wait_read,
-                    yield);
-            if (!PQconsumeInput(conn_.get()))
-            {
-                std::stringstream ss;
-                ss << "query consume input error: "
-                   << PQerrorMessage(conn_.get());
-                Throw<std::runtime_error>(ss.str());
-            }
-            if (PQisBusy(conn_.get()))
-                continue;
-            pg_result_type res{PQgetResult(conn_.get()),
-                               [](PGresult *result)
-                               { PQclear(result); }};
-            if (!res)
-                break;
-
-            if (ret)
-            {
-                Throw<std::runtime_error>("multiple results returned");
-            }
-            ret.reset(res.release());
-
-            // ret is never null in these cases, so need to break.
-            bool copyStatus = false;
-            switch (PQresultStatus(ret.get()))
-            {
-                case PGRES_COPY_IN:
-                case PGRES_COPY_OUT:
-                case PGRES_COPY_BOTH:
-                    copyStatus = true;
-                    break;
-                default:
-                    ;
-            }
-            if (copyStatus)
-                break;
-        }
-
-        socket_->release();
+        connect();
+        ret.reset(PQexecParams(
+            conn_.get(),
+            command,
+            nParams,
+            nullptr,
+            values,
+            nullptr,
+            nullptr,
+            0));
+        if (!ret)
+            Throw<std::runtime_error>("no result structure returned");
     }
     catch (std::exception const& e)
     {
         // Sever connection upon any error.
         disconnect();
-        socket_.release();
         std::stringstream ss;
-        ss << "query error: " << e.what();
+        ss << "database error: " << e.what();
         Throw<std::runtime_error>(ss.str());
     }
-
-    if (!ret)
-        Throw<std::runtime_error>("no result structure returned");
 
     // Ensure proper query execution.
     switch (PQresultStatus(ret.get()))
@@ -322,30 +150,6 @@ Pg::query(yield_context yield, boost::asio::io_context::strand& strand,
         }
     }
 
-    return ret;
-}
-
-pg_result_type
-Pg::batchQuery(yield_context yield, boost::asio::io_context::strand& strand,
-    char const* command)
-{
-    pg_result_type ret{nullptr, [](PGresult *result)
-    { PQclear(result); }};
-    // Connect then submit query.
-    try
-    {
-        connect(yield, strand);
-        ret.reset(PQexec(conn_.get(), command));
-    }
-    catch (std::exception const& e)
-    {
-        // Sever connection upon any error.
-        disconnect();
-        socket_.release();
-        std::stringstream ss;
-        ss << "batch query error: " << e.what();
-        Throw<std::runtime_error>(ss.str());
-    }
     return ret;
 }
 
@@ -383,31 +187,21 @@ formatParams(pg_params const& dbParams, beast::Journal const j)
 }
 
 pg_variant_type
-Pg::query(yield_context yield, boost::asio::io_context::strand& strand,
-    pg_params const& dbParams)
+Pg::query(pg_params const& dbParams)
 {
     char const* const& command = dbParams.first;
     auto const formattedParams = formatParams(dbParams, j_);
-    return query(yield, strand, command, formattedParams.size(),
-        formattedParams.size() ?
-            reinterpret_cast<char const* const*>(&formattedParams[0]) :
-                nullptr);
-}
-
-void
-Pg::timeout(boost::system::error_code const& ec)
-{
-    if (ec == boost::asio::error::operation_aborted)
-        return;
-    if (socket_)
-        try { socket_->cancel(); } catch (...) {}
+    return query(
+        command,
+        formattedParams.size(),
+        formattedParams.size()
+            ? reinterpret_cast<char const* const*>(&formattedParams[0])
+            : nullptr);
 }
 
 //-----------------------------------------------------------------------------
 
-PgPool::PgPool(Section const& network_db_config, beast::Journal const j)
-    : timer_ (io_)
-    , j_ (j)
+PgPool::PgPool(Section const& network_db_config, beast::Journal const j) : j_(j)
 {
     /*
     Connect to postgres to create low level connection parameters
@@ -472,7 +266,6 @@ PgPool::PgPool(Section const& network_db_config, beast::Journal const j)
         else if (addr.ss_family == AF_INET6)
         {
             hostaddr.assign(INET6_ADDRSTRLEN, '\0');
-            config_.protocol = boost::asio::ip::tcp::v6();
             struct sockaddr_in6 const &ainfo =
                 reinterpret_cast<struct sockaddr_in6 &>(addr);
             port = std::to_string(ntohs(ainfo.sin6_port));
@@ -557,10 +350,7 @@ PgPool::setup()
         std::stringstream ss;
         ss << "max_connections: " << config_.max_connections << ", "
            << "timeout: " << config_.timeout.count() << ", "
-           << "protocol: " <<
-           (config_.protocol == boost::asio::ip::tcp::v4() ?
-            "ipv4" : "ipv6")
-           << ". connection params: ";
+           << "connection params: ";
         bool first = true;
         for (std::size_t i = 0; i < config_.keywords.size(); ++i)
         {
@@ -574,71 +364,19 @@ PgPool::setup()
         }
         JLOG(j_.debug()) << ss.str();
     }
-
-    // Start async job before launching threads, or else io_ won't
-    // have anything to run.
-    timer_.expires_from_now(idle_sweep_timeout);
-    timer_.async_wait(
-        std::bind(&PgPool::sweepIdle, shared_from_this(),
-            std::placeholders::_1));
-
-    JLOG(j_.info()) << "Starting worker threads: " << nWorkers_;
-    /** Re-spawn worker threads upon exception. For example, asio spawn()
-     * can throw exceptions that aren't catchable by the caller of spawn(),
-     * but propagate up to the thread.
-     */
-    for (std::size_t n = 0; n < nWorkers_; ++n)
-    {
-        workers_.push_back(std::thread([n, this]()
-        {
-            while (true)
-            {
-                try
-                {
-                    std::stringstream ss;
-                    ss << "pgpool #" << n;
-                    beast::setCurrentThreadName(ss.str());
-                    io_.run();
-                    break;
-                }
-                catch (std::system_error const& e)
-                {
-                    JLOG(j_.error()) << "system error in worker " << n
-                        << ": " << e.what() << ", " << e.code();
-                    assert(false);
-                }
-                catch (std::exception const &e)
-                {
-                    JLOG(j_.error()) << "exception in worker " << n << ": "
-                                     << e.what();
-                    assert(false);
-                }
-                catch (...)
-                {
-                    JLOG(j_.error())
-                        << "unknown exception in worker " << n;
-                    assert(false);
-                }
-            }
-        }));
-    }
 }
 
 void
 PgPool::stop()
 {
     stop_ = true;
-    try { timer_.cancel(); } catch (...) {}
     std::lock_guard<std::mutex> lock(mutex_);
     idle_.clear();
 }
 
 void
-PgPool::sweepIdle(boost::system::error_code const& ec)
+PgPool::idleSweeper()
 {
-    if (ec == boost::asio::error::operation_aborted)
-        return;
-
     std::size_t before, after;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -657,14 +395,9 @@ PgPool::sweepIdle(boost::system::error_code const& ec)
     }
 
     JLOG(j_.info()) << "Idle sweeper. connections: " << connections_
-                         << ". checked out: " << connections_ - after
-                         << ". idle before, after sweep: "
-                         << before << ", " << after;
-
-    timer_.expires_from_now(idle_sweep_timeout);
-    timer_.async_wait(
-        std::bind(&PgPool::sweepIdle, shared_from_this(),
-            std::placeholders::_1));
+                    << ". checked out: " << connections_ - after
+                    << ". idle before, after sweep: " << before << ", "
+                    << after;
 }
 
 std::shared_ptr<Pg>
@@ -693,7 +426,6 @@ PgPool::checkin(std::shared_ptr<Pg>& pg)
 {
     if (!pg)
         return;
-    pg->cancel();
 
     std::lock_guard<std::mutex> lock(mutex_);
     if (stop_ || ! *pg)
@@ -708,11 +440,8 @@ PgPool::checkin(std::shared_ptr<Pg>& pg)
             ExecStatusType const status = PQresultStatus(res);
             if (status == PGRES_COPY_IN)
             {
-                if (PQsetnonblocking(pg->getConn(), 0) == -1
-                    || PQputCopyEnd(pg->getConn(), nullptr) == -1)
-                {
+                if (PQputCopyEnd(pg->getConn(), nullptr) == -1)
                     pg.reset();
-                }
             }
             else if (status == PGRES_COPY_OUT || status == PGRES_COPY_BOTH)
             {
@@ -720,8 +449,6 @@ PgPool::checkin(std::shared_ptr<Pg>& pg)
             }
         }
 
-        if (PQsetnonblocking(pg->getConn(), 1) == -1)
-            pg.reset();
         if (pg)
             idle_.emplace(clock_type::now(), pg);
     }
@@ -731,247 +458,11 @@ PgPool::checkin(std::shared_ptr<Pg>& pg)
 //-----------------------------------------------------------------------------
 
 pg_variant_type
-PgQuery::querySyncVariant(pg_params const& dbParams, std::shared_ptr<Pg>& conn)
+PgQuery::queryVariant(pg_params const& dbParams, std::shared_ptr<Pg>& conn)
 {
-    auto self(shared_from_this());
-    boost::asio::io_context::strand strand(pool_->io_);
-    std::mutex mtx;
-    std::condition_variable cv;
-    bool finished = false;
-    pg_variant_type result;
-    boost::asio::spawn(strand,
-        [this, self, &conn, &strand, &dbParams, &mtx, &cv, &finished, &result]
-        (boost::asio::yield_context yield)
-        {
-             try
-             {
-                 // TODO make something with a condition var instead of spinning.
-                 while (!conn)
-                     conn = pool_->checkout();
-                 result = conn->query(yield, strand, dbParams);
-             }
-             catch (std::exception const &e)
-             {
-                 JLOG(pool_->j_.error()) << "lambda query exception: "
-                                         << e.what() << ","
-                                         << dbParams.first;
-             }
-             catch (...)
-             {
-                 JLOG(pool_->j_.debug()) << "unknown lambda query "
-                                            "exception.";
-             }
-
-             try
-             {
-                 std::unique_lock<std::mutex> lambdaLock(mtx);
-                 finished = true;
-                 cv.notify_one();
-             }
-             catch (std::exception const& e)
-             {
-                 assert(false);
-             }
-        }
-    );
-
-    std::unique_lock<std::mutex> lock(mtx);
-    cv.wait(lock, [&finished]() { return finished; });
-
-    return result;
-}
-
-void
-PgQuery::store(std::size_t const keyBytes, bool const sync)
-{
-    std::unique_lock<std::mutex> lock(submitMutex_);
-    if (submitting_)
-    {
-        if (! sync)
-            return;
-        submitCv_.wait(lock, [this]() { return ! submitting_; });
-    }
-    submitting_ = true;
-    lock.unlock();
-
-    static std::atomic<std::size_t> counter = 0;
-    std::shared_ptr<PgQuery> self(shared_from_this());
-    std::shared_ptr<boost::asio::io_context::strand> strand =
-        std::make_shared<boost::asio::io_context::strand>(pool_->io_);
-    boost::asio::spawn(*strand, [this, self, strand, keyBytes]
-        (boost::asio::yield_context yield)
-        {
-            std::unique_lock<std::mutex> lock(batchMutex_);
-            while (batch_.size())
-            {
-                std::vector<std::shared_ptr<NodeObject>> batch;
-                constexpr std::size_t max_batch_size = 100000;
-                if (batch_.size() <= max_batch_size)
-                {
-                    batch.swap(batch_);
-                }
-                else
-                {
-                    batch.resize(max_batch_size);
-                    std::copy(batch_.begin(),
-                              batch_.begin() + max_batch_size,
-                              batch.begin());
-                    std::vector<std::shared_ptr<NodeObject>> replacement(
-                        batch_.size() - max_batch_size);
-                    std::copy(batch_.begin() + max_batch_size,
-                              batch_.end(),
-                              replacement.begin());
-                    batch_ = std::move(replacement);
-                }
-                lock.unlock();
-                JLOG(pool_->j_.debug()) << "store batch size " << batch.size();
-
-                std::shared_ptr<Pg> conn;
-                try
-                {
-                    // TODO make something with a condition var instead of
-                    // spinning.
-                    while (!conn)
-                        conn = pool_->checkout();
-                    PGresult* res =
-                        PQexec(conn->getConn(), "COPY objects FROM stdin");
-
-                    if (PQresultStatus(res) == PGRES_COPY_IN)
-                    {
-                        std::string copyBuffer;
-                        for (auto const& no : batch)
-                        {
-                            NodeStore::EncodedBlob e;
-                            e.prepare(no);
-                            nudb::detail::buffer bf;
-                            std::pair<void const*, std::size_t> compressed =
-                                NodeStore::nodeobject_compress(
-                                    e.getData(), e.getSize(), bf);
-
-                            copyBuffer +=
-                                ("\\\\x" +
-                                 strHex(
-                                     static_cast<char const*>(e.getKey()),
-                                     static_cast<char const*>(e.getKey()) +
-                                         keyBytes) +
-                                 '\t' + "\\\\x" +
-                                 strHex(
-                                     static_cast<char const*>(compressed.first),
-                                     static_cast<char const*>(
-                                         compressed.first) +
-                                         compressed.second) +
-                                 '\n');
-                        }
-
-                        PQsetnonblocking(conn->getConn(), 0);
-                        if (PQputCopyData(
-                                conn->getConn(),
-                                copyBuffer.c_str(),
-                                copyBuffer.size()) == 1)
-                        {
-                            if (PQputCopyEnd(conn->getConn(), nullptr) == 1)
-                            {
-                                res = PQgetResult(conn->getConn());
-                                if (PQresultStatus(res) == PGRES_COMMAND_OK)
-                                {
-                                    while (res)
-                                    {
-                                        PQclear(res);
-                                        res = nullptr;
-                                        res = PQgetResult(conn->getConn());
-                                    }
-                                    PQsetnonblocking(conn->getConn(), 1);
-                                    JLOG(pool_->j_.debug())
-                                        << "successfully executed copy in";
-                                }
-                                else
-                                {
-                                    std::string msg =
-                                        PQerrorMessage(conn->getConn());
-                                    Throw<std::runtime_error>(
-                                        "Error getting result status : " + msg);
-                                }
-                            }
-                            else
-                            {
-                                std::string msg =
-                                    PQerrorMessage(conn->getConn());
-                                Throw<std::runtime_error>(
-                                    "Error putting copy end : " + msg);
-                            }
-                        }
-                        else
-                        {
-                            std::string msg = PQerrorMessage(conn->getConn());
-                            Throw<std::runtime_error>(
-                                "Error putting copy data : " + msg);
-                        }
-                    }
-                    else
-                    {
-                        std::string msg = PQerrorMessage(conn->getConn());
-                        Throw<std::runtime_error>(
-                            "Error creating copy in : " + msg);
-                    }
-                    counter += batch.size();
-                    JLOG(pool_->j_.debug()) << "store batch counter "
-                        << counter;
-                }
-                catch (std::exception const& e)
-                {
-                    JLOG(pool_->j_.error()) << "store exception: "
-                        << e.what() << '\n';
-                    lock.lock();
-                    batch_.insert(batch_.end(), batch.begin(),
-                        batch.end());
-                    lock.unlock();
-                    try
-                    {
-                        if (conn)
-                            conn->query(yield, *strand, "ROLLBACK");
-                    }
-                    catch (...)
-                    {}
-                }
-                pool_->checkin(conn);
-                lock.lock();
-            }
-
-            {
-                std::lock_guard<std::mutex> submitLock(submitMutex_);
-                submitting_ = false;
-                submitCv_.notify_one();
-            }
-        }
-    );
-
-    if (sync)
-    {
-        lock.lock();
-        if (submitting_)
-            submitCv_.wait(lock, [this]() { return !submitting_; });
-    }
-}
-
-void
-PgQuery::store(std::shared_ptr<NodeObject> const& no, size_t const keyBytes)
-{
-    {
-        std::lock_guard<std::mutex> lock_(batchMutex_);
-        batch_.push_back(no);
-    }
-    store(keyBytes, false);
-}
-
-void
-PgQuery::store(std::vector<std::shared_ptr<NodeObject>> const& nos,
-    size_t const keyBytes)
-{
-    {
-        std::lock_guard<std::mutex> lock(batchMutex_);
-        batch_.insert(batch_.end(), nos.begin(), nos.end());
-    }
-    store(keyBytes, false);
+    while (!conn)
+        conn = pool_->checkout();
+    return conn->query(dbParams);
 }
 
 //-----------------------------------------------------------------------------
@@ -989,57 +480,6 @@ make_PgPool(Section const& network_db_config, beast::Journal const j)
         ret->setup();
         return ret;
     }
-}
-
-std::optional<std::pair<std::string, std::string>>
-no2pg(std::shared_ptr<NodeObject> const& no)
-{
-    if (!no)
-        return {};
-    std::pair<std::string, std::string> ret;
-    NodeStore::EncodedBlob e;
-    e.prepare(no);
-    ret.first = "\\x" + std::string(static_cast<const char*>(e.getKey()),
-        no->keyBytes);
-    ret.second = "\\x" + std::string(static_cast<const char*>(e.getData()),
-        e.getSize());
-    return ret;
-}
-
-bool
-testNo(std::shared_ptr<NodeObject> const& no, std::size_t const keyBytes)
-{
-    uint256 origHash = sha512Half(makeSlice(no->getData()));
-    NodeStore::EncodedBlob e;
-    e.prepare(no);
-    std::string const pgKey("\\x" + strHex(
-        static_cast<char const*>(e.getKey()),
-        static_cast<char const*>(e.getKey()) + keyBytes));
-    std::string const pgValue("\\x" + strHex(
-        static_cast<char const*>(e.getData()),
-        static_cast<char const*>(e.getData()) +
-        e.getSize()));
-
-    char const* pgValueCstr = pgValue.c_str() + 2;
-    auto pgValueBlob = strUnHex(strlen(pgValueCstr), pgValueCstr, pgValueCstr +
-        strlen(pgValueCstr));
-    NodeStore::DecodedBlob decoded(e.getKey(), &pgValueBlob.get().at(0),
-        pgValueBlob->size());
-    if (!decoded.wasOk())
-    {
-        std::cerr << "testNo !decoded.wasOk\n";
-        return false;
-    }
-    std::shared_ptr<NodeObject> resNo = decoded.createObject();
-    uint256 const resHash = sha512Half(makeSlice(resNo->getData()));
-
-    std::cerr << "testNo origkey orighash pgkey reshash "
-        << no->getHash() << " "
-        << origHash << " "
-        << pgKey << " "
-        << resHash << '\n';
-
-    return no->getHash() == origHash && origHash == resHash;
 }
 
 } // ripple

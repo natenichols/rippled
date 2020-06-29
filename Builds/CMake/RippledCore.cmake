@@ -522,7 +522,6 @@ target_sources (rippled PRIVATE
   src/ripple/nodestore/backend/MemoryFactory.cpp
   src/ripple/nodestore/backend/NuDBFactory.cpp
   src/ripple/nodestore/backend/NullFactory.cpp
-  src/ripple/nodestore/backend/PgFactory.cpp
   src/ripple/nodestore/backend/RocksDBFactory.cpp
   src/ripple/nodestore/impl/BatchWriter.cpp
   src/ripple/nodestore/impl/Database.cpp

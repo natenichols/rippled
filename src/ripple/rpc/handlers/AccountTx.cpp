@@ -448,7 +448,7 @@ doAccountTxStoredProcedure(AccountTxArgs const& args, RPC::Context& context)
         }
         else if (auto hash = std::get_if<LedgerHash>(&args.ledger.value()))
         {
-            values[5] = ("//x" + strHex(*hash));
+            values[5] = ("\\x" + strHex(*hash));
         }
         else if (
             auto sequence = std::get_if<LedgerSequence>(&args.ledger.value()))
@@ -480,7 +480,7 @@ doAccountTxStoredProcedure(AccountTxArgs const& args, RPC::Context& context)
                                 << (values[i] ? values[i].value() : "null");
     }
 
-    auto res = doQuery(context.app.pgPool(), dbParams);
+    auto res = PgQuery(context.app.pgPool()).query(dbParams);
     assert(PQntuples(res.get()) == 1);
     assert(PQnfields(res.get()) == 1);
 

@@ -47,7 +47,7 @@ writeToLedgersDB(
 
     while (!etl.isStopping())
     {
-        auto res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
+        auto res = pgQuery->queryVariant({ledgerInsert.data(), {}}, conn);
 
         // Uncomment to trigger "Ledger Ancestry error"
         //    res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
@@ -171,7 +171,7 @@ executeUntilSuccess(
         << " query = " << query << " expectedResult = " << expectedResult;
     while (!etl.isStopping())
     {
-        auto res = pg->querySyncVariant({query.data(), {}}, conn);
+        auto res = pg->queryVariant({query.data(), {}}, conn);
         if (auto result = std::get_if<pg_result_type>(&res))
         {
             auto resultStatus = PQresultStatus(result->get());
@@ -320,7 +320,7 @@ checkConsistency(ReportingETL& etl)
         "select ledger_seq, ledger_hash from ledgers left join objects on "
         "ledgers.ledger_hash = objects.key where objects.key is null;";
 
-    auto res = pgQuery->querySync(sql.data());
+    auto res = pgQuery->query(sql.data());
     auto result = PQresultStatus(res.get());
     JLOG(etl.getJournal().debug()) << __func__ << " : "
                                    << " - ledger hash result : " << result;
@@ -346,7 +346,7 @@ checkConsistency(ReportingETL& etl)
         "select ledger_seq, account_set_hash from ledgers left join objects on "
         "ledgers.account_set_hash = objects.key where objects.key is null;";
 
-    res = pgQuery->querySync(sql.data());
+    res = pgQuery->query(sql.data());
     result = PQresultStatus(res.get());
     JLOG(etl.getJournal().debug()) << __func__ << " : "
                                    << " - state map result : " << result;
@@ -372,7 +372,7 @@ checkConsistency(ReportingETL& etl)
         "select ledger_seq, trans_set_hash from ledgers left join objects on "
         "ledgers.trans_set_hash = objects.key where objects.key is null;";
 
-    res = pgQuery->querySync(sql.data());
+    res = pgQuery->query(sql.data());
     result = PQresultStatus(res.get());
     JLOG(etl.getJournal().debug()) << __func__ << " : "
                                    << " - tx map result : " << result;

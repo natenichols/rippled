@@ -134,7 +134,7 @@ Transaction::getLedgerSeq(uint256 const& id, Application& app)
     std::string txHash = "\\x" + strHex(id);
     std::string sql = boost::str(baseCmd % txHash);
 
-    auto res = doQuery(app.pgPool(), sql.data());
+    auto res = PgQuery(app.pgPool()).query(sql.data());
 
     assert(PQntuples(res.get()) == 1);
     // TODO this should be two
