@@ -308,6 +308,8 @@ writeToAccountTransactionsDB(
 bool
 checkConsistency(ReportingETL& etl)
 {
+    JLOG(etl.getJournal().debug()) << __func__ << " : "
+                                   << "checking consistency";
     bool isConsistent = true;
     assert(etl.getApplication().pgPool());
     std::shared_ptr<PgQuery> pgQuery =
@@ -400,6 +402,11 @@ checkConsistency(ReportingETL& etl)
     {
         JLOG(etl.getJournal().fatal()) << __func__ << " : "
                                        << "consistency check failed!";
+    }
+    else
+    {
+        JLOG(etl.getJournal().debug()) << __func__ << " : "
+                                       << "consistency check succeeded";
     }
 
     return isConsistent;

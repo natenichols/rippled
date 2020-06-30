@@ -599,7 +599,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                 // still publish even if we are relinquishing ETL control
                 publishLedger(ledger);
                 lastPublishedSequence = ledger->info().seq;
-                checkConsistency(*this);
+                assert(checkConsistency(*this));
 
                 // print some performance numbers
                 auto kvTime = ((mid - start).count()) / 1000000000.0;
