@@ -107,11 +107,13 @@ public:
             return;
         }
 
-        auto res = pgQuery_->querySync("CREATE TABLE IF NOT EXISTS objects ("
-                                       "    key   bytea PRIMARY KEY,"
-                                       "    value bytea NOT NULL)");
+        pgQuery_->querySync(
+            "CREATE TABLE IF NOT EXISTS objects ("
+            "    key   bytea NOT NULL,"
+            "    value bytea NOT NULL)");
+        pgQuery_->querySync(
+            "CREATE INDEX IF NOT EXISTS objects_idx ON objects (key)");
         open_ = true;
-
     }
 
     void
@@ -123,9 +125,12 @@ public:
     Status
     fetch (void const* key, std::shared_ptr<NodeObject>* pno) override
     {
-        pg_params params = {"SELECT value"
-                            "  FROM objects"
-                            " WHERE key = $1::bytea", {}};
+        pg_params params = {
+            "SELECT value"
+            "  FROM objects"
+            " WHERE key = $1::bytea"
+            " LIMIT 1",
+            {}};
         params.second.push_back("\\x" + strHex(static_cast<char const*>(key),
             static_cast<char const*>(key) + keyBytes_));
         auto res = pgQuery_->querySync(params);
