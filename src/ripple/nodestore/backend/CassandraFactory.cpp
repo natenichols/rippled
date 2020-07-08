@@ -111,7 +111,7 @@ public:
             cass_future_free(fut);
             cass_session_free(session);
         }};
-//    CassPrepared* insert_ = nullptr;
+    const CassPrepared* insert_ = nullptr;
 //    CassPrepared* select_ = nullptr;
     CassPrepared* truncate_ = nullptr;
 
@@ -193,6 +193,7 @@ public:
 
             Throw<std::runtime_error> (ss.str());
         }
+	cass_cluster_set_token_aware_routing(cluster, cass_true);
         rc = cass_cluster_set_protocol_version(cluster,
             CASS_PROTOCOL_VERSION_V4);
         if (rc != CASS_OK)
@@ -279,6 +280,7 @@ public:
             cass_ssl_free(context);
         }
 
+	/*
         rc = cass_cluster_set_consistency(cluster,
                                           CASS_CONSISTENCY_LOCAL_QUORUM);
         if (rc != CASS_OK)
@@ -289,7 +291,7 @@ public:
                << ", " << cass_error_desc(rc);
             Throw<std::runtime_error> (ss.str());
         }
-
+*/
         std::string keyspace = get<std::string>(config_, "keyspace");
         if (keyspace.empty())
         {
@@ -356,6 +358,29 @@ public:
             break;
         }
         cass_cluster_free(cluster);
+	CassFuture* prepare_future
+		  = cass_session_prepare(session_.get(), "INSERT INTO objects (hash, object) VALUES (?, ?)");
+
+	/* Wait for the statement to prepare and get the result */
+	rc = cass_future_error_code(prepare_future);
+
+	printf("Prepare result: %s\n", cass_error_desc(rc));
+
+	if (rc != CASS_OK) {
+		  /* Handle error */
+		  cass_future_free(prepare_future);
+
+                std::stringstream ss;
+                ss << "nodestore: Error preparing insert : "
+                   << rc << ", " << cass_error_desc(rc);
+                Throw<std::runtime_error>(ss.str());
+	}
+
+	/* Get the prepared object from the future */
+	insert_ = cass_future_get_prepared(prepare_future);
+
+	/* The future can be freed immediately after getting the prepared object */
+	cass_future_free(prepare_future);
 
         /*
         statement = cass_statement_new(
@@ -481,12 +506,12 @@ public:
     {
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            /*
             if (insert_)
             {
                 cass_prepared_free(insert_);
                 insert_ = nullptr;
             }
+	    /*
             if (select_)
             {
                 cass_prepared_free(select_);
@@ -646,7 +671,7 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
 //        batch_.push_back({no, nullptr});
-        JLOG(j_.debug()) << "store " << no->getHash();
+    //    JLOG(j_.debug()) << "store " << no->getHash();
         storeLocked(no);
 
 //        pgQuery_->store(no, keyBytes_);
@@ -659,7 +684,7 @@ public:
         for (auto const& no : batch)
         {
             //            batch_.push_back({no, nullptr});
-            JLOG(j_.debug()) << "storeBatch " << no->getHash();
+            //JLOG(j_.debug()) << "storeBatch " << no->getHash();
             storeLocked(no);
         }
 
@@ -694,9 +719,9 @@ public:
                         NodeStore::nodeobject_compress(e.getData(),
                             e.getSize(), bf);
 
-//                    CassStatement* statement = cass_prepared_bind(insert_);
-                    CassStatement* statement = makeStatement(
-                        "INSERT INTO objects (hash, object) VALUES (?, ?)", 2);
+                    CassStatement* statement = cass_prepared_bind(insert_);
+//                    CassStatement* statement = makeStatement(
+//                        "INSERT INTO objects (hash, object) VALUES (?, ?)", 2);
                     /*
                     CassError rc = cass_statement_set_consistency(statement,
                         CASS_CONSISTENCY_LOCAL_QUORUM);
