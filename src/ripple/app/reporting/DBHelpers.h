@@ -229,44 +229,19 @@ struct AccountTransactionsData
 };
 
 void
-writeToAccountTransactionsDB(
-    std::vector<AccountTransactionsData>& accountTxData,
+bulkWriteToTable(
     std::shared_ptr<PgQuery>& pgQuery,
     std::shared_ptr<Pg>& conn,
-    ReportingETL& etl)
+    ReportingETL& etl,
+    char const* copyQuery,
+    std::string const bufString)
 {
     JLOG(etl.getJournal().debug()) << __func__;
     while (!etl.isStopping())
     {
         // Initiate COPY operation
-        executeUntilSuccess(
-            pgQuery,
-            conn,
-            "COPY account_transactions from STDIN",
-            PGRES_COPY_IN,
-            etl);
+        executeUntilSuccess(pgQuery, conn, copyQuery, PGRES_COPY_IN, etl);
 
-        // Write data to stream
-        std::stringstream copyBuffer;
-        for (auto& data : accountTxData)
-        {
-            std::string txHash = strHex(data.txHash);
-            auto idx = data.transactionIndex;
-            auto ledgerSeq = data.ledgerSequence;
-
-            for (auto& a : data.accounts)
-            {
-                std::string acct = strHex(a);
-                copyBuffer << "\\\\x" << acct << '\t'
-                           << std::to_string(ledgerSeq) << '\t'
-                           << std::to_string(idx) << '\t' << "\\\\x" << txHash
-                           << '\n';
-            }
-        }
-
-        PQsetnonblocking(conn->getConn(), 0);
-
-        std::string bufString = copyBuffer.str();
         JLOG(etl.getJournal().trace()) << "copy buffer = " << bufString;
         executeUntilSuccess(
             [&conn, &bufString]() {

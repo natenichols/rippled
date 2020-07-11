@@ -30,13 +30,23 @@ SET default_with_oids = false;
 -- Name: account_transactions; Type: TABLE; Schema: public; Owner: -
 --
 
+CREATE TABLE public.transactions (
+    ledger_seq bigint NOT NULL,
+    transaction_index bigint NOT NULL,
+    trans_id bytea NOT NULL
+);
+
+ALTER TABLE public.transactions ADD CONSTRAINT transactions_pkey PRIMARY KEY (
+    ledger_seq, transaction_index);
+
+CREATE INDEX transactions_trans_id_idx ON public.transactions
+    USING hash (trans_id);
+
 CREATE TABLE public.account_transactions (
     account           bytea  NOT NULL,
     ledger_seq        bigint NOT NULL,
-    transaction_index bigint NOT NULL,
-    trans_id          bytea  NOT NULL
+    transaction_index bigint NOT NULL
 );
-
 
 --
 -- Name: ledgers; Type: TABLE; Schema: public; Owner: -
@@ -44,7 +54,7 @@ CREATE TABLE public.account_transactions (
 
 CREATE TABLE public.ledgers (
     ledger_seq        bigint PRIMARY KEY,
-    ledger_hash       bytea  UNIQUE NOT NULL,
+    ledger_hash       bytea  NOT NULL,
     prev_hash         bytea  NOT NULL,
     total_coins       bigint NOT NULL,
     closing_time      bigint NOT NULL,
@@ -55,6 +65,8 @@ CREATE TABLE public.ledgers (
     trans_set_hash    bytea  NOT NULL
 );
 
+CREATE INDEX ledgers_ledger_hash_idx ON public.ledgers
+    USING hash (ledger_hash);
 
 --
 -- Name: account_transactions account_transactions_pkey;
@@ -64,10 +76,6 @@ CREATE TABLE public.ledgers (
 ALTER TABLE ONLY public.account_transactions
     ADD CONSTRAINT account_transactions_pkey PRIMARY KEY (
     account, ledger_seq, transaction_index);
-
-CREATE INDEX account_transactions_trans_id ON public.account_transactions
-    USING btree (trans_id);
-
 
 --
 -- Name: ledgers ledgers_hash_unique; Type: CONSTRAINT;
@@ -90,6 +98,11 @@ CREATE INDEX account_transactions_trans_id ON public.account_transactions
 CREATE RULE ledgers_update_protect AS ON UPDATE TO
     public.ledgers DO INSTEAD NOTHING;
 
+CREATE RULE transactions_update_protect AS ON UPDATE TO
+    public.transactions DO INSTEAD NOTHING;
+
+CREATE RULE account_transactions_update_protect AS ON UPDATE TO
+    public.account_transactions DO INSTEAD NOTHING;
 
 --
 -- Name: transactions transactions_pkey; Type: CONSTRAINT;
@@ -108,7 +121,7 @@ CREATE RULE ledgers_update_protect AS ON UPDATE TO
 --
 
 CREATE INDEX fki_account_transactions_fkey ON public.account_transactions
-    USING btree (ledger_seq);
+    USING btree (ledger_seq, transaction_index);
 
 
 --
@@ -137,7 +150,14 @@ CREATE INDEX fki_account_transactions_fkey ON public.account_transactions
 -- Schema: public; Owner: -
 --
 
+ALTER TABLE ONLY public.transactions
+    ADD CONSTRAINT transactions_fkey FOREIGN KEY (ledger_seq)
+    REFERENCES public.ledgers(ledger_seq)
+    ON DELETE CASCADE;
+
 ALTER TABLE ONLY public.account_transactions
-    ADD CONSTRAINT account_transactions_fkey FOREIGN KEY (ledger_seq)
-    REFERENCES public.ledgers(ledger_seq) ON DELETE CASCADE;
+    ADD CONSTRAINT account_transactions_fkey FOREIGN KEY (
+        ledger_seq, transaction_index)
+    REFERENCES public.transactions(ledger_seq, transaction_index)
+    ON DELETE CASCADE;
 

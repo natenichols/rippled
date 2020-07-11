@@ -99,10 +99,9 @@ BEGIN
     END IF;
 
     EXECUTE 'SELECT ledger_seq
-               FROM account_transactions
+               FROM transactions
 	      WHERE trans_id = $1
                 AND ledger_seq BETWEEN $2 AND $3
-	      LIMIT 1
     ' INTO _ledger_seq USING _in_trans_id, _min_seq, _max_seq;
     IF _ledger_seq IS NULL THEN
         RETURN jsonb_build_object('min_seq', _min_seq, 'max_seq', _max_seq);
@@ -312,12 +311,17 @@ BEGIN
     END IF;
 
     _sql := format('
-	SELECT ledger_seq, transaction_index, trans_id
-	  FROM account_transactions
-	 WHERE account = $1
-	   AND ledger_seq BETWEEN $2 AND $3
-	 ORDER BY ledger_seq %s,
-	       transaction_index %s
+	SELECT transactions.ledger_seq, transactions.transaction_index,
+	       transactions.trans_id
+	  FROM transactions
+               INNER JOIN account_transactions
+                       ON transactions.ledger_seq =
+                          account_transactions.ledger_seq
+                          AND transactions.transaction_index =
+                              account_transactions.transaction_index
+	 WHERE account_transactions.account = $1
+	   AND account_transactions.ledger_seq BETWEEN $2 AND $3
+	 ORDER BY transactions.ledger_seq %s, transactions.transaction_index %s
 	', _sort_order, _sort_order);
 
     OPEN _cursor FOR EXECUTE _sql USING _in_account_id, _between_min,

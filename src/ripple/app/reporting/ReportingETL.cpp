@@ -470,7 +470,42 @@ ReportingETL::writeToPostgres(
         return false;
     }
 
-    writeToAccountTransactionsDB(accountTxData, pg, conn, *this);
+    std::stringstream transactionsCopyBuffer;
+    std::stringstream accountTransactionsCopyBuffer;
+    for (auto& data : accountTxData)
+    {
+        std::string txHash = strHex(data.txHash);
+        auto idx = data.transactionIndex;
+        auto ledgerSeq = data.ledgerSequence;
+
+        transactionsCopyBuffer << std::to_string(ledgerSeq) << '\t'
+                               << std::to_string(idx) << '\t' << "\\\\x"
+                               << txHash << '\n';
+
+        for (auto& a : data.accounts)
+        {
+            std::string acct = strHex(a);
+            accountTransactionsCopyBuffer << "\\\\x" << acct << '\t'
+                                          << std::to_string(ledgerSeq) << '\t'
+                                          << std::to_string(idx) << '\n';
+        }
+    }
+    JLOG(journal_.debug()) << "transactions: " << transactionsCopyBuffer.str();
+    JLOG(journal_.debug()) << "account_transactions: "
+                           << accountTransactionsCopyBuffer.str();
+
+    bulkWriteToTable(
+        pg,
+        conn,
+        *this,
+        "COPY transactions FROM stdin",
+        transactionsCopyBuffer.str());
+    bulkWriteToTable(
+        pg,
+        conn,
+        *this,
+        "COPY account_transactions FROM stdin",
+        accountTransactionsCopyBuffer.str());
 
     executeUntilSuccess(pg, conn, "COMMIT", PGRES_COMMAND_OK, *this);
 
