@@ -134,6 +134,7 @@ public:
             };
             {
                 auto const aliceLines = getAccountLines(alice);
+                std::cout << aliceLines << std::endl;
                 BEAST_EXPECT(aliceLines.size() == 1);
                 BEAST_EXPECT(!aliceLines[0u].isMember(jss::no_ripple));
 

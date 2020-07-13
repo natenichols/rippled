@@ -58,6 +58,7 @@ addLine(Json::Value& jsonLines, RippleState const& line)
     jPeer[jss::limit_peer] = saLimitPeer.getText();
     jPeer[jss::quality_in] = line.getQualityIn().value;
     jPeer[jss::quality_out] = line.getQualityOut().value;
+    jPeer["default_ripple"] = line.getDefaultRipple();
     if (line.getAuth())
         jPeer[jss::authorized] = true;
     if (line.getAuthPeer())
