@@ -53,8 +53,7 @@ public:
         size_t keyBytes,
         Section const& parameters,
         Scheduler& scheduler,
-        beast::Journal journal,
-        std::shared_ptr<PgPool> pool) = 0;
+        beast::Journal journal) = 0;
 
     /** Create an instance of this factory's backend.
 

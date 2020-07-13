@@ -92,6 +92,7 @@ public:
     }
 };
 
+// TODO move this to a diff folder
 template <class T>
 struct ThreadSafeQueue
 {

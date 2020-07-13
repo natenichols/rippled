@@ -51,56 +51,33 @@
 namespace ripple {
 namespace NodeStore {
 
+void
+writeCallback(CassFuture* fut, void* cbData);
+
 class CassandraBackend
     : public Backend
 {
 private:
-    void
-    storeLocked(std::shared_ptr<NodeObject> const& no)
-    {
-        if (batches_.empty() || batches_.back().size() == batchSize_)
-        {
-            batches_.push(
-                std::vector<std::pair<std::shared_ptr<NodeObject>,
-                    CassFuture*>>());
-            batches_.back().reserve(batchSize_);
-        }
-        batches_.back().push_back({no, nullptr});
-    }
-
     CassStatement*
     makeStatement(char const* query, std::size_t params)
     {
         CassStatement* ret = cass_statement_new(query, params);
-        CassError rc = cass_statement_set_consistency(ret,
-            CASS_CONSISTENCY_LOCAL_QUORUM);
+        CassError rc =
+            cass_statement_set_consistency(ret, CASS_CONSISTENCY_QUORUM);
         if (rc != CASS_OK)
         {
             std::stringstream ss;
-            ss << "nodestore: Error setting query consistency: "
-               << query << ", result: " << rc
-               << ", " << cass_error_desc(rc);
-            Throw<std::runtime_error> (ss.str());
+            ss << "nodestore: Error setting query consistency: " << query
+               << ", result: " << rc << ", " << cass_error_desc(rc);
+            Throw<std::runtime_error>(ss.str());
         }
         return ret;
     }
 
-
-public:
-    static constexpr std::size_t currentType = 1;
-    static constexpr std::size_t default_batch_size = 10000;
-
     beast::Journal const j_;
     size_t const keyBytes_;
     Section const config_;
-    std::size_t const batchSize_;
-    std::string const name_;
-    nudb::store db_;
-    std::atomic <bool> deletePath_;
-    Scheduler& scheduler_;
-    std::shared_ptr<PgPool> pool_;
     std::atomic<bool> open_ {false};
-    std::shared_ptr<PgQuery> pgQuery_ {std::make_shared<PgQuery>(pool_)};
 
     std::mutex mutex_;
     std::unique_ptr<CassSession, void(*)(CassSession*)> session_{
@@ -112,44 +89,29 @@ public:
             cass_session_free(session);
         }};
     const CassPrepared* insert_ = nullptr;
-//    CassPrepared* select_ = nullptr;
-    CassPrepared* truncate_ = nullptr;
+    const CassPrepared* select_ = nullptr;
+    boost::asio::io_context ioContext_;
+    std::optional<boost::asio::io_context::work> work_;
+    std::thread ioThread_;
+    std::atomic_uint32_t numRequestsOutstanding_ = 0;
+    static constexpr uint32_t maxRequestsOutstanding = 1000000;
 
-//    std::vector<std::pair<std::shared_ptr<NodeObject>, CassFuture*>> batch_;
-    std::queue<std::vector<
-        std::pair<std::shared_ptr<NodeObject>, CassFuture*>>> batches_;
+    std::mutex throttleMutex_;
+    std::condition_variable throttleCv_;
 
+    std::mutex syncMutex_;
+    std::condition_variable syncCv_;
+
+public:
     CassandraBackend (
         size_t keyBytes,
         Section const& keyValues,
-        Scheduler& scheduler,
-        beast::Journal journal,
-        std::shared_ptr<PgPool>& pool)
-        : j_(journal)
-        , keyBytes_ (keyBytes)
-        , config_ (keyValues)
-        , batchSize_ (get<std::size_t>(config_, "io_threads",
-                                      default_batch_size))
-        , deletePath_(false)
-        , scheduler_ (scheduler)
-        , pool_ (pool)
-    {}
-
-    CassandraBackend (
-        size_t keyBytes,
-        Section const& keyValues,
-        Scheduler& scheduler,
-        nudb::context& context,
         beast::Journal journal)
         : j_(journal)
         , keyBytes_ (keyBytes)
         , config_ (keyValues)
-        , batchSize_ (get<std::size_t>(config_, "io_threads",
-                                      default_batch_size))
-        , db_ (context)
-        , deletePath_(false)
-        , scheduler_ (scheduler)
     {}
+
 
     ~CassandraBackend () override
     {
@@ -159,7 +121,7 @@ public:
     std::string
     getName() override
     {
-        return name_;
+        return "cassandra";
     }
 
     void
@@ -239,6 +201,24 @@ public:
                << ", result: " << rc
                << ", " << cass_error_desc(rc);
             Throw<std::runtime_error> (ss.str());
+        }
+
+
+        cass_cluster_set_request_timeout(cluster, 2000);
+
+        rc = cass_cluster_set_queue_size_io(
+            cluster,
+            maxRequestsOutstanding);  // This number needs to scale w/ the
+                                      // number of request per sec
+        if (rc != CASS_OK)
+        {
+            std::stringstream ss;
+            ss << "nodestore: Error setting Cassandra max core connections per "
+                  "host"
+               << ", result: " << rc << ", " << cass_error_desc(rc);
+            std::cout << ss.str() << std::endl;
+            return;
+            ;
         }
 
         std::string certfile = get<std::string>(config_, "certfile");
@@ -382,123 +362,42 @@ public:
 	/* The future can be freed immediately after getting the prepared object */
 	cass_future_free(prepare_future);
 
-        /*
-        statement = cass_statement_new(
-            "INSERT INTO objects (hash, object) VALUES (?, ?)", 2);
-        rc = cass_statement_set_consistency(statement,
-                                            CASS_CONSISTENCY_LOCAL_QUORUM);
-        if (rc != CASS_OK)
-        {
-            std::stringstream ss;
-            ss << "nodestore: Error setting consistency for insert: "
-               << rc << ", " << cass_error_desc(rc);
-            Throw<std::runtime_error>(ss.str());
-        }
-        fut = cass_session_prepare_from_existing(session_.get(), statement);
-        rc = cass_future_error_code(fut);
-        if (rc != CASS_OK)
-        {
-            std::stringstream ss;
-            ss << "nodestore: Error preparing insert: " << rc
-               << ", " << cass_error_desc(rc);
-            Throw<std::runtime_error>(ss.str());
-        }
-        cass_future_free(fut);
-        cass_statement_free(statement);
 
-        statement = cass_statement_new(
-            "SELECT object FROM objects WHERE hash = ?", 1);
-        rc = cass_statement_set_consistency(statement,
-            CASS_CONSISTENCY_LOCAL_QUORUM);
-        if (rc != CASS_OK)
-        {
-            std::stringstream ss;
-            ss << "nodestore: Error setting consistency for select: "
-               << rc << ", " << cass_error_desc(rc);
-            Throw<std::runtime_error>(ss.str());
-        }
-        fut = cass_session_prepare_from_existing(session_.get(), statement);
-        rc = cass_future_error_code(fut);
-        if (rc != CASS_OK)
-        {
-            std::stringstream ss;
-            ss << "nodestore: Error preparing select: " << rc
-               << ", " << cass_error_desc(rc);
-            Throw<std::runtime_error>(ss.str());
-        }
-        cass_future_free(fut);
-        cass_statement_free(statement);
-         */
+	prepare_future
+		  = cass_session_prepare(session_.get(), "SELECT object FROM objects WHERE hash = ?");
 
-        /*
-        fut = cass_session_prepare(
-            session_.get(),
-            "INSERT INTO objects (hash, object) VALUES (?, ?)");
-        rc = cass_future_error_code(fut);
-        if (rc != CASS_OK)
-        {
-            std::stringstream ss;
-            ss << "nodestore: Error preparing Cassandra insert: " << rc
-               << ", " << cass_error_desc(rc);
-            Throw<std::runtime_error>(ss.str());
-        }
-        insert_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
-        cass_future_free(fut);
-         */
 
-        /*
-        fut = cass_session_prepare(
-            session_.get(), "SELECT object FROM objects WHERE hash = ?");
-        rc = cass_future_error_code(fut);
-        if (rc != CASS_OK)
-        {
-            std::stringstream ss;
-            ss << "nodestore: Error preparing Cassandra select: " << rc
-               << ", " << cass_error_desc(rc);
-            Throw<std::runtime_error>(ss.str());
-        }
-        select_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
-        cass_future_free(fut);
-         */
+	/* Wait for the statement to prepare and get the result */
+	rc = cass_future_error_code(prepare_future);
 
-        /*
-        fut = cass_session_prepare(session_.get(), "TRUNCATE TABLE objects");
-        rc = cass_future_error_code(fut);
-        if (rc != CASS_OK)
-        {
-            std::stringstream ss;
-            ss << "nodestore: Error preparing Cassandra truncate: " << rc
-               << ", " << cass_error_desc(rc);
-            Throw<std::runtime_error>(ss.str());
-        }
-        truncate_ = const_cast<CassPrepared*>(cass_future_get_prepared(fut));
-        cass_future_free(fut);
-         */
+	printf("Prepare result: %s\n", cass_error_desc(rc));
 
-        open_ = true;
+	if (rc != CASS_OK) {
+		  /* Handle error */
+		  cass_future_free(prepare_future);
+
+                std::stringstream ss;
+                ss << "nodestore: Error preparing select : "
+                   << rc << ", " << cass_error_desc(rc);
+                Throw<std::runtime_error>(ss.str());
+	}
+
+	/* Get the prepared object from the future */
+	select_ = cass_future_get_prepared(prepare_future);
+
+	/* The future can be freed immediately after getting the prepared object */
+	cass_future_free(prepare_future);
+
+    work_.emplace(ioContext_);
+    ioThread_ = std::thread{[this]() { ioContext_.run(); }};
+    open_ = true;
     }
 
+    // TODO remove this
     bool
     truncate() override
     {
         return true;
-        /*
-        CassStatement* statement = cass_prepared_bind(truncate_);
-
-        CassFuture* fut = cass_session_execute(session_.get(), statement);
-        CassError rc = cass_future_error_code(fut);
-        if (rc != CASS_OK)
-        {
-            cass_statement_free(statement);
-            cass_future_free(fut);
-            JLOG(j_.error()) << "Cassandra truncate error: " << rc;
-            return false;
-        }
-
-        cass_statement_free(statement);
-        cass_future_free(fut);
-        return true;
-         */
     }
 
     void
@@ -511,18 +410,13 @@ public:
                 cass_prepared_free(insert_);
                 insert_ = nullptr;
             }
-	    /*
             if (select_)
             {
                 cass_prepared_free(select_);
                 select_ = nullptr;
             }
-             */
-            if (truncate_)
-            {
-                cass_prepared_free(truncate_);
-                truncate_ = nullptr;
-            }
+            work_.reset();
+            ioThread_.join();
         }
         open_ = false;
     }
@@ -530,20 +424,8 @@ public:
     Status
     fetch (void const* key, std::shared_ptr<NodeObject>* pno) override
     {
-        CassStatement* statement = makeStatement(
-            "SELECT object FROM objects WHERE hash = ?", 1);
-        /*
         CassStatement* statement = cass_prepared_bind(select_);
-        CassError rc = cass_statement_set_consistency(statement,
-            CASS_CONSISTENCY_LOCAL_QUORUM);
-        if (rc != CASS_OK)
-        {
-            std::stringstream ss;
-            ss << "nodestore: Error setting consistency for select: "
-               << rc << ", " << cass_error_desc(rc);
-            Throw<std::runtime_error>(ss.str());
-        }
-         */
+        cass_statement_set_consistency(statement, CASS_CONSISTENCY_QUORUM);
         CassError rc = cass_statement_bind_bytes(
             statement, 0, static_cast<cass_byte_t const*>(key), keyBytes_);
         if (rc != CASS_OK)
@@ -610,47 +492,7 @@ public:
         *pno = decoded.createObject();
         return ok;
 
-        /*
-        pg_params params = {"SELECT value"
-                            "  FROM objects"
-                            " WHERE key = $1::bytea", {}};
-        params.second.push_back("\\x" + strHex(static_cast<char const*>(key),
-            static_cast<char const*>(key) + keyBytes_));
-        auto res = pgQuery_->querySync(params);
 
-        if (PQntuples(res.get()))
-        {
-            char const *pgValue = PQgetvalue(res.get(), 0, 0);
-            if (strlen(pgValue) < 3 || strncmp("\\x", pgValue, 2))
-            {
-                pno->reset();
-                return dataCorrupt;
-            }
-
-            char const* value = pgValue + 2;
-            auto valueBlob = strUnHex(strlen(value), value,
-                value + strlen(value));
-
-            nudb::detail::buffer bf;
-            std::pair<void const*, std::size_t> uncompressed =
-                nodeobject_decompress(&valueBlob.get().at(0),
-                    valueBlob->size(), bf);
-            DecodedBlob decoded(key, uncompressed.first, uncompressed.second);
-
-            if (!decoded.wasOk())
-            {
-                pno->reset();
-                return dataCorrupt;
-            }
-            *pno = decoded.createObject();
-            return ok;
-        }
-        else
-        {
-            pno->reset();
-            return notFound;
-        }
-         */
     }
 
     bool
@@ -666,128 +508,103 @@ public:
         return {};
     }
 
+    struct CallbackData
+    {
+        CassandraBackend* backend;
+        NodeStore::EncodedBlob e;
+        std::pair<void const*, std::size_t> compressed;
+        // The data is stored in this buffer. The void* in the above member
+        // is a pointer into the below buffer
+        nudb::detail::buffer bf;
+
+        CallbackData(CassandraBackend* f, std::shared_ptr<NodeObject> const& no)
+            : backend(f)
+        {
+            e.prepare(no);
+
+            compressed =
+                NodeStore::nodeobject_compress(e.getData(), e.getSize(), bf);
+            }
+    };
+
+    void
+    write(
+        CallbackData& data,
+        bool isRetry)
+    {
+        {
+            std::unique_lock<std::mutex> lck(throttleMutex_);
+            if (!isRetry && numRequestsOutstanding_ > maxRequestsOutstanding)
+            {
+                std::cout
+                    << "max outstanding reached. waiting for others to finish"
+                    << std::endl;
+                throttleCv_.wait(lck, [this]() {
+                    return numRequestsOutstanding_ < maxRequestsOutstanding;
+                });
+            }
+        }
+
+        CassStatement* statement = cass_prepared_bind(insert_);
+        cass_statement_set_consistency(statement, CASS_CONSISTENCY_QUORUM);
+        CassError rc = cass_statement_bind_bytes(
+            statement,
+            0,
+            static_cast<cass_byte_t const*>(data.e.getKey()),
+            keyBytes_);
+        if (rc != CASS_OK)
+        {
+            cass_statement_free(statement);
+            std::stringstream ss;
+            ss << "Binding cassandra insert hash: " << rc << ", "
+               << cass_error_desc(rc);
+            Throw<std::runtime_error>(ss.str());
+        }
+        rc = cass_statement_bind_bytes(
+            statement,
+            1,
+            static_cast<cass_byte_t const*>(data.compressed.first),
+            data.compressed.second);
+        if (rc != CASS_OK)
+        {
+            cass_statement_free(statement);
+            std::stringstream ss;
+            ss << "Binding cassandra insert object: " << rc << ", "
+               << cass_error_desc(rc);
+            Throw<std::runtime_error>(ss.str());
+        }
+        CassFuture* fut = cass_session_execute(session_.get(), statement);
+        cass_statement_free(statement);
+
+        cass_future_set_callback(fut, writeCallback, static_cast<void*>(&data));
+        cass_future_free(fut);
+    }
+
+
     void
     store (std::shared_ptr <NodeObject> const& no) override
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-//        batch_.push_back({no, nullptr});
-    //    JLOG(j_.debug()) << "store " << no->getHash();
-        storeLocked(no);
+        CallbackData* data = new CallbackData(this, no);
 
-//        pgQuery_->store(no, keyBytes_);
+        ++numRequestsOutstanding_;
+        write(*data, false);
     }
 
     void
     storeBatch (Batch const& batch) override
     {
-        std::lock_guard<std::mutex> lock(mutex_);
         for (auto const& no : batch)
         {
-            //            batch_.push_back({no, nullptr});
-            //JLOG(j_.debug()) << "storeBatch " << no->getHash();
-            storeLocked(no);
+            store(no);
         }
-
-//        pgQuery_->store(batch, keyBytes_);
     }
 
     void
     sync() override
     {
-        std::unique_lock<std::mutex> lock(mutex_);
-        while(batches_.size())
-        {
-            auto batch = std::move(batches_.front());
-            batches_.pop();
-            lock.unlock();
-            JLOG(j_.debug()) << "inserting batch size: " << batch.size();
+        std::unique_lock<std::mutex> lck(syncMutex_);
 
-            std::vector<std::pair<
-                std::shared_ptr<NodeObject>, CassFuture*>> retry;
-            // TODO This potentially never stops. If ETL is switched, then
-            // this needs to check a flag that's set by ETL.
-            while (batch.size())
-            {
-                for (auto& item : batch)
-                {
-                    auto const& no = item.first;
-                    auto& fut = item.second;
-                    NodeStore::EncodedBlob e;
-                    e.prepare(no);
-                    nudb::detail::buffer bf;
-                    std::pair<void const*, std::size_t> compressed =
-                        NodeStore::nodeobject_compress(e.getData(),
-                            e.getSize(), bf);
-
-                    CassStatement* statement = cass_prepared_bind(insert_);
-//                    CassStatement* statement = makeStatement(
-//                        "INSERT INTO objects (hash, object) VALUES (?, ?)", 2);
-                    /*
-                    CassError rc = cass_statement_set_consistency(statement,
-                        CASS_CONSISTENCY_LOCAL_QUORUM);
-                    if (rc != CASS_OK)
-                    {
-                        std::stringstream ss;
-                        ss << "nodestore: Error setting consistency for insert: "
-                           << rc << ", " << cass_error_desc(rc);
-                        Throw<std::runtime_error>(ss.str());
-                    }
-                     */
-                    CassError rc = cass_statement_bind_bytes(
-                        statement, 0, static_cast<cass_byte_t const*>(
-                                          e.getKey()), keyBytes_);
-                    if (rc != CASS_OK)
-                    {
-                        cass_statement_free(statement);
-                        std::stringstream ss;
-                        ss << "Binding cassandra insert hash: " << rc
-                           << ", " << cass_error_desc(rc);
-                        Throw<std::runtime_error>(ss.str());
-                    }
-                    rc = cass_statement_bind_bytes(
-                        statement, 1, static_cast<cass_byte_t const*>(
-                            compressed.first), compressed.second);
-                    if (rc != CASS_OK)
-                    {
-                        cass_statement_free(statement);
-                        std::stringstream ss;
-                        ss << "Binding cassandra insert object: " << rc
-                           << ", " << cass_error_desc(rc);
-                        Throw<std::runtime_error>(ss.str());
-                    }
-                    fut = cass_session_execute(session_.get(), statement);
-                    cass_statement_free(statement);
-                }
-
-                for (auto& item : batch)
-                {
-                    auto const& no = item.first;
-                    auto& fut = item.second;
-                    CassError rc = cass_future_error_code(fut);
-                    if (rc != CASS_OK)
-                    {
-                        JLOG(j_.error()) << "Cassandra insert error: " << rc
-                            << ", " << cass_error_desc(rc)
-                            << ". retrying " << no->getHash();
-                        retry.push_back(item);
-                    }
-                    cass_future_free(fut);
-                }
-                if ((retry.size() + 0.0) / batch.size() > 0.1)
-                {
-                    JLOG(j_.debug()) << "sleeping 1s before retrying batch of "
-                                     << retry.size() << " out of "
-                                     << batch.size() << " inserts";
-                    std::this_thread::sleep_for(std::chrono::seconds(1));
-                }
-                batch = std::move(retry);
-                retry = {};
-            }
-
-            lock.lock();
-        }
-
-//        pgQuery_->sync(keyBytes_);
+        syncCv_.wait(lck, [this]() { return numRequestsOutstanding_ == 0; });
     }
 
     // Iterate through entire table and execute f(). Used for import only,
@@ -809,7 +626,6 @@ public:
     void
     setDeletePath() override
     {
-        deletePath_ = true;
     }
 
     void
@@ -821,7 +637,41 @@ public:
     {
         return 0;
     }
+    friend void
+    writeCallback(CassFuture* fut, void* cbData);
 };
+
+void
+writeCallback(CassFuture* fut, void* cbData)
+{
+    CassandraBackend::CallbackData& requestParams =
+        *static_cast<CassandraBackend::CallbackData*>(cbData);
+    CassandraBackend& backend = *requestParams.backend;
+    auto rc = cass_future_error_code(fut);
+    if (rc != CASS_OK)
+    {
+        std::cout << "ERROR!!! Cassandra insert error: " << rc << ", "
+                  << cass_error_desc(rc) << ", retrying ";
+
+        std::shared_ptr<boost::asio::steady_timer> timer =
+            std::make_shared<boost::asio::steady_timer>(
+                backend.ioContext_,
+                std::chrono::steady_clock::now() + std::chrono::seconds(1));
+        timer->async_wait([timer, &requestParams, &backend](
+                              const boost::system::error_code& error) {
+            backend.write(requestParams, true);
+        });
+    }
+    else
+    {
+        --(backend.numRequestsOutstanding_);
+
+        backend.throttleCv_.notify_all();
+        if (backend.numRequestsOutstanding_ == 0)
+            backend.syncCv_.notify_all();
+        delete &requestParams;
+    }
+}
 
 //------------------------------------------------------------------------------
 
@@ -849,11 +699,10 @@ public:
         size_t keyBytes,
         Section const& keyValues,
         Scheduler& scheduler,
-        beast::Journal journal,
-        std::shared_ptr<PgPool> pool) override
+        beast::Journal journal) override
     {
         return std::make_unique <CassandraBackend> (
-            keyBytes, keyValues, scheduler, journal, pool);
+            keyBytes, keyValues, journal);
     }
 
     std::unique_ptr <Backend>
@@ -865,7 +714,7 @@ public:
         beast::Journal journal) override
     {
         return std::make_unique <CassandraBackend> (
-            keyBytes, keyValues, scheduler, context, journal);
+            keyBytes, keyValues, journal);
     }
 };
 

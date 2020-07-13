@@ -447,10 +447,8 @@ public:
         size_t keyBytes,
         Section const& keyValues,
         Scheduler& scheduler,
-        beast::Journal journal,
-        std::shared_ptr<PgPool> pool) override
+        beast::Journal journal) override
     {
-        boost::ignore_unused(pool);
         return std::make_unique <RocksDBBackend> (
             keyBytes, keyValues, scheduler, journal, &m_env);
     }

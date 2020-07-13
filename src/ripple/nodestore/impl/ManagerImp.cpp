@@ -48,8 +48,7 @@ std::unique_ptr<Backend>
 ManagerImp::make_Backend(
     Section const& parameters,
     Scheduler& scheduler,
-    beast::Journal journal,
-    std::shared_ptr<PgPool> pool)
+    beast::Journal journal)
 {
     std::string const type{get<std::string>(parameters, "type")};
     if (type.empty())
@@ -60,7 +59,7 @@ ManagerImp::make_Backend(
         missing_backend();
 
     return factory->createInstance(
-        NodeObject::keyBytes, parameters, scheduler, journal, pool);
+        NodeObject::keyBytes, parameters, scheduler, journal);
 }
 
 std::unique_ptr<Database>
@@ -71,10 +70,9 @@ ManagerImp::make_Database(
     Stoppable& parent,
     Section const& config,
     bool const reporting,
-    beast::Journal journal,
-    std::shared_ptr<PgPool> pool)
+    beast::Journal journal)
 {
-    auto backend {make_Backend(config, scheduler, journal, pool)};
+    auto backend{make_Backend(config, scheduler, journal)};
     backend->open();
     return std::make_unique<DatabaseNodeImp>(
         name,
@@ -135,8 +133,7 @@ make_Backend(
     Scheduler& scheduler,
     beast::Journal journal)
 {
-    return Manager::instance().make_Backend (
-        config, scheduler, journal, std::shared_ptr<PgPool>());
+    return Manager::instance().make_Backend(config, scheduler, journal);
 }
 
 }  // namespace NodeStore
