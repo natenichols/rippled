@@ -135,49 +135,71 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         CassCluster* cluster = cass_cluster_new();
         assert(cluster);
-        std::string contact_points =
-            get<std::string>(config_, "contact_points");
-        if (contact_points.empty())
-        {
-            Throw<std::runtime_error>(
-                "nodestore: Missing contact_points in Cassandra config");
-        }
-        CassError rc =
-            cass_cluster_set_contact_points(cluster, contact_points.c_str());
-        if (rc != CASS_OK)
-        {
-            std::stringstream ss;
-            ss << "nodestore: Error setting Cassandra contact_points: "
-               << contact_points << ", result: " << rc << ", "
-               << cass_error_desc(rc);
 
-            Throw<std::runtime_error>(ss.str());
+        std::string secureConnectBundle =
+            get<std::string>(config_, "secure_connect_bundle");
+
+        if (!secureConnectBundle.empty())
+        {
+            /* Setup driver to connect to the cloud using the secure connection
+             * bundle */
+            if (cass_cluster_set_cloud_secure_connection_bundle(
+                    cluster, secureConnectBundle.c_str()) != CASS_OK)
+            {
+                JLOG(j_.error()) << "Unable to configure cloud using the "
+                                    "secure connection bundle: "
+                                 << secureConnectBundle;
+                Throw<std::runtime_error>(
+                    "nodestore: Failed to connect using secure connection "
+                    "bundle");
+                return;
+            }
+        }
+        else
+        {
+            std::string contact_points =
+                get<std::string>(config_, "contact_points");
+            if (contact_points.empty())
+            {
+                Throw<std::runtime_error>(
+                    "nodestore: Missing contact_points in Cassandra config");
+            }
+            CassError rc = cass_cluster_set_contact_points(
+                cluster, contact_points.c_str());
+            if (rc != CASS_OK)
+            {
+                std::stringstream ss;
+                ss << "nodestore: Error setting Cassandra contact_points: "
+                   << contact_points << ", result: " << rc << ", "
+                   << cass_error_desc(rc);
+
+                Throw<std::runtime_error>(ss.str());
+            }
+
+            int port = get<int>(config_, "port");
+            if (port)
+            {
+                rc = cass_cluster_set_port(cluster, port);
+                if (rc != CASS_OK)
+                {
+                    std::stringstream ss;
+                    ss << "nodestore: Error setting Cassandra port: " << port
+                       << ", result: " << rc << ", " << cass_error_desc(rc);
+
+                    Throw<std::runtime_error>(ss.str());
+                }
+            }
         }
         cass_cluster_set_token_aware_routing(cluster, cass_true);
-        rc = cass_cluster_set_protocol_version(
+        CassError rc = cass_cluster_set_protocol_version(
             cluster, CASS_PROTOCOL_VERSION_V4);
         if (rc != CASS_OK)
         {
             std::stringstream ss;
             ss << "nodestore: Error setting cassandra protocol version: "
-               << contact_points << ", result: " << rc << ", "
-               << cass_error_desc(rc);
+               << ", result: " << rc << ", " << cass_error_desc(rc);
 
             Throw<std::runtime_error>(ss.str());
-        }
-
-        int port = get<int>(config_, "port");
-        if (port)
-        {
-            rc = cass_cluster_set_port(cluster, port);
-            if (rc != CASS_OK)
-            {
-                std::stringstream ss;
-                ss << "nodestore: Error setting Cassandra port: " << port
-                   << ", result: " << rc << ", " << cass_error_desc(rc);
-
-                Throw<std::runtime_error>(ss.str());
-            }
         }
 
         std::string username = get<std::string>(config_, "username");
@@ -280,14 +302,25 @@ public:
             session_.reset(cass_session_new());
             assert(session_);
 
-            fut = cass_session_connect_keyspace(
-                session_.get(), cluster, keyspace.c_str());
+            fut = cass_session_connect(session_.get(), cluster);
             rc = cass_future_error_code(fut);
             if (rc != CASS_OK)
             {
                 std::stringstream ss;
                 ss << "nodestore: Error connecting Cassandra session: " << rc
                    << ", " << cass_error_desc(rc);
+                Throw<std::runtime_error>(ss.str());
+            }
+            cass_future_free(fut);
+
+            fut = cass_session_connect_keyspace(
+                session_.get(), cluster, keyspace.c_str());
+            rc = cass_future_error_code(fut);
+            if (rc != CASS_OK)
+            {
+                std::stringstream ss;
+                ss << "nodestore: Error connecting Cassandra session keyspace: "
+                   << rc << ", " << cass_error_desc(rc);
                 Throw<std::runtime_error>(ss.str());
             }
             cass_future_free(fut);
