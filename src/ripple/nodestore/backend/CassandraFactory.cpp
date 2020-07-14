@@ -656,7 +656,8 @@ writeCallback(CassFuture* fut, void* cbData)
         std::shared_ptr<boost::asio::steady_timer> timer =
             std::make_shared<boost::asio::steady_timer>(
                 backend.ioContext_,
-                std::chrono::steady_clock::now() + std::chrono::seconds(1));
+                std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(100));
         timer->async_wait([timer, &requestParams, &backend](
                               const boost::system::error_code& error) {
             backend.write(requestParams, true);

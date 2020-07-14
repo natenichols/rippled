@@ -175,6 +175,7 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
 
 
     ledger->setImmutable(app_.config(), false);
+    auto start = std::chrono::system_clock::now();
 
     auto numFlushed = ledger->stateMap().flushDirty(
         hotACCOUNT_NODE, ledger->info().seq, true);
@@ -196,6 +197,7 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
 
     app_.getNodeStore().sync();
 
+    auto end = std::chrono::system_clock::now();
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Flushed " << numFlushed
@@ -203,6 +205,11 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Flushed " << numTxFlushed
                            << " nodes to nodestore from txMap";
+
+    JLOG(journal_.debug()) << __func__ << " : "
+                           << "Flush took "
+                           << (end - start).count() / 1000000000.0
+                           << " seconds";
 
     if (numFlushed == 0)
     {
@@ -603,8 +610,8 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
     std::thread loader{
         [this, &lastPublishedSequence, &loadQueue, &writeConflict]() {
             beast::setCurrentThreadName("rippled: ReportingETL load");
-	    size_t totalTransactions = 0;
-	    double totalTime = 0;
+            size_t totalTransactions = 0;
+            double totalTime = 0;
             while (!writeConflict)
             {
                 std::optional<std::pair<
@@ -636,17 +643,16 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                 // still publish even if we are relinquishing ETL control
                 publishLedger(ledger);
                 lastPublishedSequence = ledger->info().seq;
-                if(checkConsistency_)
-			assert(checkConsistency(*this));
+                if (checkConsistency_)
+                    assert(checkConsistency(*this));
 
                 // print some performance numbers
                 auto kvTime = ((mid - start).count()) / 1000000000.0;
                 auto relationalTime = ((end - mid).count()) / 1000000000.0;
 
-
                 size_t numTxns = accountTxData.size();
-		totalTime += kvTime;
-		totalTransactions += numTxns;
+                totalTime += kvTime;
+                totalTransactions += numTxns;
                 JLOG(journal_.info())
                     << "Load phase of etl : "
                     << "Successfully published ledger! Ledger info: "
@@ -655,7 +661,8 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                     << ". relational write time = " << relationalTime
                     << ". key-value tps = " << numTxns / kvTime
                     << ". relational tps = " << numTxns / relationalTime
-		    << ". total key-value tps = " << totalTransactions / totalTime;
+                    << ". total key-value tps = "
+                    << totalTransactions / totalTime;
             }
         }};
 
