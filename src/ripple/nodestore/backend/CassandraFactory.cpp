@@ -205,6 +205,9 @@ public:
         std::string username = get<std::string>(config_, "username");
         if (username.size())
         {
+            std::cout << "user = " << username.c_str() << " password = "
+                      << get<std::string>(config_, "password").c_str()
+                      << std::endl;
             cass_cluster_set_credentials(
                 cluster,
                 username.c_str(),
@@ -295,6 +298,8 @@ public:
                 "nodestore: Missing keyspace in Cassandra config");
         }
 
+        cass_cluster_set_connect_timeout(cluster, 10000);
+
         CassStatement* statement;
         CassFuture* fut;
         while (true)
@@ -312,7 +317,6 @@ public:
                 Throw<std::runtime_error>(ss.str());
             }
             cass_future_free(fut);
-
             fut = cass_session_connect_keyspace(
                 session_.get(), cluster, keyspace.c_str());
             rc = cass_future_error_code(fut);
