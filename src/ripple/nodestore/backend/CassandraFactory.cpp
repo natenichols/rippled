@@ -307,16 +307,6 @@ public:
             session_.reset(cass_session_new());
             assert(session_);
 
-            fut = cass_session_connect(session_.get(), cluster);
-            rc = cass_future_error_code(fut);
-            if (rc != CASS_OK)
-            {
-                std::stringstream ss;
-                ss << "nodestore: Error connecting Cassandra session: " << rc
-                   << ", " << cass_error_desc(rc);
-                Throw<std::runtime_error>(ss.str());
-            }
-            cass_future_free(fut);
             fut = cass_session_connect_keyspace(
                 session_.get(), cluster, keyspace.c_str());
             rc = cass_future_error_code(fut);
