@@ -161,29 +161,6 @@ SHAMapStoreImp::SHAMapStoreImp(
 {
     Config& config {app.config()};
 
-    Section& networkDbSection {config.section(ConfigSection::networkDb())};
-    if (! networkDbSection.empty())
-    {
-        std::string type = get(networkDbSection, "type",
-            "postgres");
-        std::string conninfo = get<std::string>(networkDbSection, "conninfo");
-        std::size_t max_connections = get(networkDbSection, "max_connections",
-            std::numeric_limits<std::size_t>::max());
-        std::size_t timeout = get(networkDbSection, "timeout", 600);
-        bool remember_ip = get(networkDbSection, "remember_ip", true);
-        std::cout << "network_db type " << type;
-        std::cout << " conninfo " << conninfo;
-        std::cout << " max_connections " << max_connections;
-        std::cout << " timeout " << timeout;
-        std::cout << " remember_ip " << remember_ip;
-        std::cout << std::endl;
-    }
-    else
-    {
-        std::cout << "network_db is empty\n";
-    }
-
-
     Section& section {config.section(ConfigSection::nodeDatabase())};
     if (section.empty())
     {
@@ -336,7 +313,7 @@ SHAMapStoreImp::run()
     ledgerMaster_ = &app_.getLedgerMaster();
     fullBelowCache_ = &(*app_.getNodeFamily().getFullBelowCache(0));
     treeNodeCache_ = &(*app_.getNodeFamily().getTreeNodeCache(0));
-    if (!app_.config().usePostgresTx())
+    if (!app_.config().usePostgresLedgerTx())
     {
         transactionDb_ = &app_.getTxnDB();
         ledgerDb_ = &app_.getLedgerDB();
@@ -675,7 +652,7 @@ SHAMapStoreImp::clearPrior(LedgerIndex lastRotated)
     if (health())
         return;
 
-    if (app_.config().usePostgresTx())
+    if (app_.config().usePostgresLedgerTx())
     {
         assert(app_.pgPool());
         assert(!reportingReadOnly_);

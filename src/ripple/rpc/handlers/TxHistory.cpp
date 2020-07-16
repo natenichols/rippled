@@ -36,7 +36,7 @@ namespace ripple {
 Json::Value
 doTxHistoryReporting(RPC::JsonContext& context)
 {
-    assert(context.app.config().usePostgresTx());
+    assert(context.app.config().usePostgresLedgerTx());
     context.loadType = Resource::feeMediumBurdenRPC;
 
     if (!context.params.isMember(jss::start))
@@ -48,10 +48,10 @@ doTxHistoryReporting(RPC::JsonContext& context)
         return rpcError(rpcNO_PERMISSION);
 
     std::string sql = boost::str(
-        boost::format("SELECT "
-                      "ledger_seq, trans_id from account_transactions ORDER BY "
-                      "ledger_seq DESC LIMIT "
-                      "20 OFFSET %u;") %
+        boost::format("SELECT ledger_seq, trans_id "
+                      "  FROM account_transactions"
+                      " ORDER BY ledger_seq DESC LIMIT 20 "
+                      "OFFSET %u;") %
         startIndex);
 
     assert(context.app.pgPool());
@@ -112,7 +112,10 @@ doTxHistoryReporting(RPC::JsonContext& context)
 Json::Value
 doTxHistory(RPC::JsonContext& context)
 {
-    if (context.app.config().usePostgresTx())
+    if (!context.app.config().useTxTables())
+        return rpcError(rpcNOT_ENABLED);
+
+    if (context.app.config().usePostgresLedgerTx())
         return doTxHistoryReporting(context);
     context.loadType = Resource::feeMediumBurdenRPC;
 

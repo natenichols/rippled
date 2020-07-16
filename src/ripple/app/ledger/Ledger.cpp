@@ -29,6 +29,7 @@
 #include <ripple/app/misc/HashRouter.h>
 #include <ripple/app/misc/LoadFeeTrack.h>
 #include <ripple/app/misc/NetworkOPs.h>
+#include <ripple/app/reporting/DBHelpers.h>
 #include <ripple/basics/Log.h>
 #include <ripple/basics/StringUtilities.h>
 #include <ripple/basics/contract.h>
@@ -52,6 +53,7 @@
 #include <boost/optional.hpp>
 #include <cassert>
 #include <utility>
+#include <vector>
 
 namespace ripple {
 
@@ -887,14 +889,6 @@ saveValidatedLedger(
     // TODO(tom): Fix this hard-coded SQL!
     JLOG(j.trace()) << "saveValidatedLedger " << (current ? "" : "fromAcquire ")
                     << seq;
-    static boost::format deleteLedger(
-        "DELETE FROM Ledgers WHERE LedgerSeq = %u;");
-    static boost::format deleteTrans1(
-        "DELETE FROM Transactions WHERE LedgerSeq = %u;");
-    static boost::format deleteTrans2(
-        "DELETE FROM AccountTransactions WHERE LedgerSeq = %u;");
-    static boost::format deleteAcctTrans(
-        "DELETE FROM AccountTransactions WHERE TransID = '%s';");
 
     if (!ledger->info().accountHash.isNonZero())
     {
@@ -944,124 +938,165 @@ saveValidatedLedger(
         return false;
     }
 
-    if (!app.config().usePostgresTx())
+    if (!app.config().reporting())
     {
+        if (app.config().usePostgresLedgerTx())
         {
-            auto db = app.getLedgerDB().checkoutDb();
-            *db << boost::str(deleteLedger % seq);
-        }
+            static boost::format deleteLedger(
+                "DELETE FROM ledgers WHERE ledger_seq = %u");
+            PgQuery(app.pgPool()).query(boost::str(deleteLedger % seq).c_str());
 
-        {
-            auto db = app.getTxnDB().checkoutDb();
-
-            soci::transaction tr(*db);
-
-            *db << boost::str(deleteTrans1 % seq);
-            *db << boost::str(deleteTrans2 % seq);
-
-            std::string const ledgerSeq(std::to_string(seq));
-
-            for (auto const& [_, acceptedLedgerTx] : aLedger->getMap())
+            auto const& txMap = aLedger->getMap();
+            std::vector<AccountTransactionsData> accountTxData;
+            accountTxData.reserve(txMap.size());
+            for (auto const& [_, acceptedLedgerTx] : txMap)
             {
                 (void)_;
                 uint256 transactionID = acceptedLedgerTx->getTransactionID();
-
                 app.getMasterTransaction().inLedger(transactionID, seq);
+                accountTxData.push_back(AccountTransactionsData(
+                    acceptedLedgerTx->getAffected(),
+                    seq,
+                    acceptedLedgerTx->getTxnSeq(),
+                    transactionID));
+            }
+            writeToPostgres(
+                ledger->info(),
+                accountTxData,
+                app.pgPool(),
+                app.config().useTxTables(),
+                j);
+        }
+        else
+        {
+            static boost::format deleteLedger(
+                "DELETE FROM Ledgers WHERE LedgerSeq = %u;");
+            static boost::format deleteTrans1(
+                "DELETE FROM Transactions WHERE LedgerSeq = %u;");
+            static boost::format deleteTrans2(
+                "DELETE FROM AccountTransactions WHERE LedgerSeq = %u;");
+            static boost::format deleteAcctTrans(
+                "DELETE FROM AccountTransactions WHERE TransID = '%s';");
 
-                std::string const txnId(to_string(transactionID));
-                std::string const txnSeq(
-                    std::to_string(acceptedLedgerTx->getTxnSeq()));
-
-                *db << boost::str(deleteAcctTrans % transactionID);
-
-                auto const& accts = acceptedLedgerTx->getAffected();
-
-                if (!accts.empty())
-                {
-                    std::string sql(
-                        "INSERT INTO AccountTransactions "
-                        "(TransID, Account, LedgerSeq, TxnSeq) VALUES ");
-
-                    // Try to make an educated guess on how much space we'll
-                    // need for our arguments. In argument order we have: 64 +
-                    // 34 + 10 + 10 = 118 + 10 extra = 128 bytes
-                    sql.reserve(sql.length() + (accts.size() * 128));
-
-                    bool first = true;
-                    for (auto const& account : accts)
-                    {
-                        if (!first)
-                            sql += ", ('";
-                        else
-                        {
-                            sql += "('";
-                            first = false;
-                        }
-
-                        sql += txnId;
-                        sql += "','";
-                        sql += app.accountIDCache().toBase58(account);
-                        sql += "',";
-                        sql += ledgerSeq;
-                        sql += ",";
-                        sql += txnSeq;
-                        sql += ")";
-                    }
-                    sql += ";";
-                    JLOG(j.trace()) << "ActTx: " << sql;
-                    *db << sql;
-                }
-                else
-                {
-                    JLOG(j.warn()) << "Transaction in ledger " << seq
-                                   << " affects no accounts";
-                    JLOG(j.warn()) << acceptedLedgerTx->getTxn()->getJson(
-                        JsonOptions::none);
-                }
-
-                *db
-                    << (STTx::getMetaSQLInsertReplaceHeader() +
-                        acceptedLedgerTx->getTxn()->getMetaSQL(
-                            seq, acceptedLedgerTx->getEscMeta()) +
-                        ";");
+            {
+                auto db = app.getLedgerDB().checkoutDb();
+                *db << boost::str(deleteLedger % seq);
             }
 
-            tr.commit();
-        }
+            if (app.config().useTxTables())
+            {
+                auto db = app.getTxnDB().checkoutDb();
 
-        {
-            static std::string addLedger(
-                R"sql(INSERT OR REPLACE INTO Ledgers
+                soci::transaction tr(*db);
+
+                *db << boost::str(deleteTrans1 % seq);
+                *db << boost::str(deleteTrans2 % seq);
+
+                std::string const ledgerSeq(std::to_string(seq));
+
+                for (auto const& [_, acceptedLedgerTx] : aLedger->getMap())
+                {
+                    (void)_;
+                    uint256 transactionID =
+                        acceptedLedgerTx->getTransactionID();
+
+                    app.getMasterTransaction().inLedger(transactionID, seq);
+
+                    std::string const txnId(to_string(transactionID));
+                    std::string const txnSeq(
+                        std::to_string(acceptedLedgerTx->getTxnSeq()));
+
+                    *db << boost::str(deleteAcctTrans % transactionID);
+
+                    auto const& accts = acceptedLedgerTx->getAffected();
+
+                    if (!accts.empty())
+                    {
+                        std::string sql(
+                            "INSERT INTO AccountTransactions "
+                            "(TransID, Account, LedgerSeq, TxnSeq) VALUES ");
+
+                        // Try to make an educated guess on how much space we'll
+                        // need for our arguments. In argument order we have: 64
+                        // + 34 + 10 + 10 = 118 + 10 extra = 128 bytes
+                        sql.reserve(sql.length() + (accts.size() * 128));
+
+                        bool first = true;
+                        for (auto const& account : accts)
+                        {
+                            if (!first)
+                                sql += ", ('";
+                            else
+                            {
+                                sql += "('";
+                                first = false;
+                            }
+
+                            sql += txnId;
+                            sql += "','";
+                            sql += app.accountIDCache().toBase58(account);
+                            sql += "',";
+                            sql += ledgerSeq;
+                            sql += ",";
+                            sql += txnSeq;
+                            sql += ")";
+                        }
+                        sql += ";";
+                        JLOG(j.trace()) << "ActTx: " << sql;
+                        *db << sql;
+                    }
+                    else
+                    {
+                        JLOG(j.warn()) << "Transaction in ledger " << seq
+                                       << " affects no accounts";
+                        JLOG(j.warn()) << acceptedLedgerTx->getTxn()->getJson(
+                            JsonOptions::none);
+                    }
+
+                    *db
+                        << (STTx::getMetaSQLInsertReplaceHeader() +
+                            acceptedLedgerTx->getTxn()->getMetaSQL(
+                                seq, acceptedLedgerTx->getEscMeta()) +
+                            ";");
+                }
+
+                tr.commit();
+            }
+
+            {
+                static std::string addLedger(
+                    R"sql(INSERT OR REPLACE INTO Ledgers
                 (LedgerHash,LedgerSeq,PrevHash,TotalCoins,ClosingTime,PrevClosingTime,
                 CloseTimeRes,CloseFlags,AccountSetHash,TransSetHash)
             VALUES
                 (:ledgerHash,:ledgerSeq,:prevHash,:totalCoins,:closingTime,:prevClosingTime,
                 :closeTimeRes,:closeFlags,:accountSetHash,:transSetHash);)sql");
 
-            auto db(app.getLedgerDB().checkoutDb());
+                auto db(app.getLedgerDB().checkoutDb());
 
-            soci::transaction tr(*db);
+                soci::transaction tr(*db);
 
-            auto const hash = to_string(ledger->info().hash);
-            auto const parentHash = to_string(ledger->info().parentHash);
-            auto const drops = to_string(ledger->info().drops);
-            auto const closeTime =
-                ledger->info().closeTime.time_since_epoch().count();
-            auto const parentCloseTime =
-                ledger->info().parentCloseTime.time_since_epoch().count();
-            auto const closeTimeResolution =
-                ledger->info().closeTimeResolution.count();
-            auto const closeFlags = ledger->info().closeFlags;
-            auto const accountHash = to_string(ledger->info().accountHash);
-            auto const txHash = to_string(ledger->info().txHash);
+                auto const hash = to_string(ledger->info().hash);
+                auto const parentHash = to_string(ledger->info().parentHash);
+                auto const drops = to_string(ledger->info().drops);
+                auto const closeTime =
+                    ledger->info().closeTime.time_since_epoch().count();
+                auto const parentCloseTime =
+                    ledger->info().parentCloseTime.time_since_epoch().count();
+                auto const closeTimeResolution =
+                    ledger->info().closeTimeResolution.count();
+                auto const closeFlags = ledger->info().closeFlags;
+                auto const accountHash = to_string(ledger->info().accountHash);
+                auto const txHash = to_string(ledger->info().txHash);
 
-            *db << addLedger, soci::use(hash), soci::use(seq),
-                soci::use(parentHash), soci::use(drops), soci::use(closeTime),
-                soci::use(parentCloseTime), soci::use(closeTimeResolution),
-                soci::use(closeFlags), soci::use(accountHash),
-                soci::use(txHash);
+                *db << addLedger, soci::use(hash), soci::use(seq),
+                    soci::use(parentHash), soci::use(drops),
+                    soci::use(closeTime), soci::use(parentCloseTime),
+                    soci::use(closeTimeResolution), soci::use(closeFlags),
+                    soci::use(accountHash), soci::use(txHash);
 
-            tr.commit();
+                tr.commit();
+            }
         }
     }
 
@@ -1251,7 +1286,7 @@ loadLedgerInfosPostgres(
         whichLedger,
     Application& app)
 {
-    assert(app.config().usePostgresTx());
+    assert(app.config().usePostgresLedgerTx());
     std::string sql =
         "SELECT "
         "ledger_hash, prev_hash, account_set_hash, trans_set_hash, "
@@ -1463,7 +1498,7 @@ std::shared_ptr<Ledger>
 loadByIndex (std::uint32_t ledgerIndex,
     Application& app, bool acquire)
 {
-    if (app.config().usePostgresTx())
+    if (app.config().usePostgresLedgerTx())
         return loadByIndexPostgres(ledgerIndex, app, acquire);
     std::shared_ptr<Ledger> ledger;
     {
@@ -1480,7 +1515,7 @@ loadByIndex (std::uint32_t ledgerIndex,
 std::shared_ptr<Ledger>
 loadByHash(uint256 const& ledgerHash, Application& app, bool acquire)
 {
-    if (app.config().usePostgresTx())
+    if (app.config().usePostgresLedgerTx())
         return loadByHashPostgres(ledgerHash, app, acquire);
     std::shared_ptr<Ledger> ledger;
     {
@@ -1500,7 +1535,7 @@ loadByHash(uint256 const& ledgerHash, Application& app, bool acquire)
 uint256
 getHashByIndex(std::uint32_t ledgerIndex, Application& app)
 {
-    if (app.config().usePostgresTx())
+    if (app.config().usePostgresLedgerTx())
         return getHashByIndexPostgres(ledgerIndex, app);
     uint256 ret;
 
@@ -1535,7 +1570,7 @@ getHashesByIndex(
     uint256& parentHash,
     Application& app)
 {
-    if (app.config().usePostgresTx())
+    if (app.config().usePostgresLedgerTx())
         return getHashesByIndexPostgres(
             ledgerIndex, ledgerHash, parentHash, app);
     auto db = app.getLedgerDB ().checkoutDb ();
@@ -1562,7 +1597,7 @@ getHashesByIndex(
 std::map<std::uint32_t, std::pair<uint256, uint256>>
 getHashesByIndex(std::uint32_t minSeq, std::uint32_t maxSeq, Application& app)
 {
-    if (app.config().usePostgresTx())
+    if (app.config().usePostgresLedgerTx())
         return getHashesByIndexPostgres(minSeq, maxSeq, app);
     std::map< std::uint32_t, std::pair<uint256, uint256> > ret;
 

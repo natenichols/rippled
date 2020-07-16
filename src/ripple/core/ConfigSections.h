@@ -44,11 +44,6 @@ struct ConfigSection
     {
         return "import_db";
     }
-    static std::string
-    networkDb()
-    {
-        return "network_db";
-    }
 };
 
 // VFALCO TODO Rename and replace these macros with variables.

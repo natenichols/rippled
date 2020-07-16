@@ -278,7 +278,7 @@ public:
 
         , m_txMaster(*this)
         , pgPool_(make_PgPool(
-              config_->section(ConfigSection::networkDb()),
+              config_->section("ledger_tx_tables"),
               logs_->journal("PgPool")))
 
         , m_nodeStoreScheduler(*this)
@@ -886,7 +886,7 @@ public:
     //--------------------------------------------------------------------------
 
     bool
-    initSQLiteDBs()
+    initRDBMS()
     {
         assert(mTxnDB.get() == nullptr);
         assert(mLedgerDB.get() == nullptr);
@@ -895,46 +895,48 @@ public:
         try
         {
             auto setup = setup_DatabaseCon(*config_, m_journal);
-            if (!config_->usePostgresTx())
+            if (!config_->usePostgresLedgerTx())
             {
-                // transaction database
-                mTxnDB = std::make_unique<DatabaseCon>(
-                    setup,
-                    TxDBName,
-                    TxDBPragma,
-                    TxDBInit,
-                    DatabaseCon::CheckpointerSetup{m_jobQueue.get(), &logs()});
-                mTxnDB->getSession() << boost::str(
-                    boost::format("PRAGMA cache_size=-%d;") %
-                    kilobytes(config_->getValueFor(SizedItem::txnDBCache)));
-
-                if (!setup.standAlone || setup.startUp == Config::LOAD ||
-                    setup.startUp == Config::LOAD_FILE ||
-                    setup.startUp == Config::REPLAY)
+                if (config_->useTxTables())
                 {
-                    // Check if AccountTransactions has primary key
-                    std::string cid, name, type;
-                    std::size_t notnull, dflt_value, pk;
-                    soci::indicator ind;
-                    soci::statement st =
-                        (mTxnDB->getSession().prepare
-                             << ("PRAGMA table_info(AccountTransactions);"),
-                         soci::into(cid),
-                         soci::into(name),
-                         soci::into(type),
-                         soci::into(notnull),
-                         soci::into(dflt_value, ind),
-                         soci::into(pk));
-
-                    st.execute();
-                    while (st.fetch())
+                    // transaction database
+                    mTxnDB = std::make_unique<DatabaseCon>(
+                        setup,
+                        TxDBName,
+                        TxDBPragma,
+                        TxDBInit,
+                        DatabaseCon::CheckpointerSetup{m_jobQueue.get(), &logs()});
+                    mTxnDB->getSession() << boost::str(
+                        boost::format("PRAGMA cache_size=-%d;") %
+                        kilobytes(config_->getValueFor(SizedItem::txnDBCache)));
+                    if (!setup.standAlone || setup.startUp == Config::LOAD ||
+                        setup.startUp == Config::LOAD_FILE ||
+                        setup.startUp == Config::REPLAY)
                     {
-                        if (pk == 1)
+                        // Check if AccountTransactions has primary key
+                        std::string cid, name, type;
+                        std::size_t notnull, dflt_value, pk;
+                        soci::indicator ind;
+                        soci::statement st =
+                            (mTxnDB->getSession().prepare
+                                 << ("PRAGMA table_info(AccountTransactions);"),
+                             soci::into(cid),
+                             soci::into(name),
+                             soci::into(type),
+                             soci::into(notnull),
+                             soci::into(dflt_value, ind),
+                             soci::into(pk));
+
+                        st.execute();
+                        while (st.fetch())
                         {
-                            JLOG(m_journal.fatal())
-                                << "AccountTransactions database "
-                                   "should not have a primary key";
-                            return false;
+                            if (pk == 1)
+                            {
+                                JLOG(m_journal.fatal())
+                                    << "AccountTransactions database "
+                                       "should not have a primary key";
+                                return false;
+                            }
                         }
                     }
                 }
@@ -1197,53 +1199,58 @@ public:
                 signalStop();
             }
 
-            DatabaseCon::Setup dbSetup = setup_DatabaseCon(*config_);
-            boost::filesystem::path dbPath = dbSetup.dataDir / TxDBName;
-            boost::system::error_code ec;
-            boost::optional<std::uint64_t> dbSize =
-                boost::filesystem::file_size(dbPath, ec);
-            if (ec)
+            if (!config_->usePostgresLedgerTx() && config_->useTxTables())
             {
-                JLOG(m_journal.error())
-                    << "Error checking transaction db file size: "
-                    << ec.message();
-                dbSize.reset();
-            }
+                DatabaseCon::Setup dbSetup = setup_DatabaseCon(*config_);
+                boost::filesystem::path dbPath = dbSetup.dataDir / TxDBName;
+                boost::system::error_code ec;
+                boost::optional<std::uint64_t> dbSize =
+                    boost::filesystem::file_size(dbPath, ec);
+                if (ec)
+                {
+                    JLOG(m_journal.error())
+                        << "Error checking transaction db file size: "
+                        << ec.message();
+                    dbSize.reset();
+                }
 
-            auto db = mTxnDB->checkoutDb();
-            static auto const pageSize = [&] {
-                std::uint32_t ps;
-                *db << "PRAGMA page_size;", soci::into(ps);
-                return ps;
-            }();
-            static auto const maxPages = [&] {
-                std::uint32_t mp;
-                *db << "PRAGMA max_page_count;", soci::into(mp);
-                return mp;
-            }();
-            std::uint32_t pageCount;
-            *db << "PRAGMA page_count;", soci::into(pageCount);
-            std::uint32_t freePages = maxPages - pageCount;
-            std::uint64_t freeSpace =
-                safe_cast<std::uint64_t>(freePages) * pageSize;
-            JLOG(m_journal.info())
-                << "Transaction DB pathname: " << dbPath.string()
-                << "; file size: " << dbSize.value_or(-1) << " bytes"
-                << "; SQLite page size: " << pageSize << " bytes"
-                << "; Free pages: " << freePages
-                << "; Free space: " << freeSpace << " bytes; "
-                << "Note that this does not take into account available disk "
-                   "space.";
+                auto db = mTxnDB->checkoutDb();
+                static auto const pageSize = [&] {
+                    std::uint32_t ps;
+                    *db << "PRAGMA page_size;", soci::into(ps);
+                    return ps;
+                }();
+                static auto const maxPages = [&] {
+                    std::uint32_t mp;
+                    *db << "PRAGMA max_page_count;", soci::into(mp);
+                    return mp;
+                }();
+                std::uint32_t pageCount;
+                *db << "PRAGMA page_count;", soci::into(pageCount);
+                std::uint32_t freePages = maxPages - pageCount;
+                std::uint64_t freeSpace =
+                    safe_cast<std::uint64_t>(freePages) * pageSize;
+                JLOG(m_journal.info())
+                    << "Transaction DB pathname: " << dbPath.string()
+                    << "; file size: " << dbSize.value_or(-1) << " bytes"
+                    << "; SQLite page size: " << pageSize << " bytes"
+                    << "; Free pages: " << freePages
+                    << "; Free space: " << freeSpace << " bytes; "
+                    << "Note that this does not take into account available "
+                       "disk "
+                       "space.";
 
-            if (freeSpace < megabytes(512))
-            {
-                JLOG(m_journal.fatal())
-                    << "Free SQLite space for transaction db is less than "
-                       "512MB. To fix this, rippled must be executed with the "
-                       "\"--vacuum\" parameter before restarting. "
-                       "Note that this activity can take multiple days, "
-                       "depending on database size.";
-                signalStop();
+                if (freeSpace < megabytes(512))
+                {
+                    JLOG(m_journal.fatal())
+                        << "Free SQLite space for transaction db is less than "
+                           "512MB. To fix this, rippled must be executed with "
+                           "the "
+                           "vacuum parameter before restarting. "
+                           "Note that this activity can take multiple days, "
+                           "depending on database size.";
+                    signalStop();
+                }
             }
         }
 
@@ -1265,7 +1272,7 @@ public:
         m_acceptedLedgerCache.sweep();
         cachedSLEs_.expire();
 
-        if (config().usePostgresTx())
+        if (config().usePostgresLedgerTx())
             pgPool()->idleSweeper();
 
         // Set timer to do another sweep later.
@@ -1366,7 +1373,11 @@ ApplicationImp::setup()
     if (!config_->standalone())
         timeKeeper_->run(config_->SNTP_SERVERS);
 
-    if (!initSQLiteDBs() || !initNodeStore())
+    // Configure where and whether to store transactions in RDBMS.
+    {
+    }
+
+    if (!initRDBMS() || !initNodeStore())
         return false;
 
     if (shardStore_)
@@ -1818,7 +1829,7 @@ ApplicationImp::getLastFullLedger()
 
     try
     {
-        auto const [ledger, seq, hash] = config_->usePostgresTx()
+        auto const [ledger, seq, hash] = config_->usePostgresLedgerTx()
             ? loadLedgerHelperPostgres(bool{false}, *this)
             : loadLedgerHelper("order by LedgerSeq desc limit 1", *this);
 
@@ -2263,7 +2274,7 @@ ApplicationImp::validateShards()
 void
 ApplicationImp::setMaxDisallowedLedger()
 {
-    if (config().usePostgresTx())
+    if (config().usePostgresLedgerTx())
     {
         auto seq = PgQuery(pgPool()).query("SELECT max_ledger()");
         if (seq && !PQgetisnull(seq.get(), 0, 0))

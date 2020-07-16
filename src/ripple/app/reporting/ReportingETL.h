@@ -133,11 +133,6 @@ private:
     void
     flushLedger(std::shared_ptr<Ledger>& ledger);
 
-    bool
-    writeToPostgres(
-        LedgerInfo const& info,
-        std::vector<AccountTransactionsData>& accountTxData);
-
     // returns true if publish was successful (if ledger is in db)
     bool
     publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts = 10);

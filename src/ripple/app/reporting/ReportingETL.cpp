@@ -154,8 +154,15 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
     {
         //TODO handle write conflict
         flushLedger(ledger);
-        if (app_.config().usePostgresTx())
-            writeToPostgres(ledger->info(), accountTxData);
+        if (app_.config().usePostgresLedgerTx())
+        {
+            writeToPostgres(
+                ledger->info(),
+                accountTxData,
+                app_.pgPool(),
+                app_.config().useTxTables(),
+                journal_);
+        }
     }
     auto end = std::chrono::system_clock::now();
     JLOG(journal_.debug()) << "Time to download and store ledger = "
@@ -447,84 +454,6 @@ ReportingETL::buildNextLedger(
     return {std::move(next), std::move(accountTxData)};
 }
 
-bool
-ReportingETL::writeToPostgres(
-    LedgerInfo const& info,
-    std::vector<AccountTransactionsData>& accountTxData)
-{
-    // TODO: clean this up a bit. use less auto, better error handling, etc
-    JLOG(journal_.debug()) << __func__ << " : "
-                           << "Beginning write to Postgres";
-    if (!app_.pgPool())
-    {
-        JLOG(journal_.fatal()) << __func__ << " : "
-                               << "app_.pgPool is null";
-        assert(false);
-    }
-    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app_.pgPool());
-    std::shared_ptr<Pg> conn;
-
-
-    executeUntilSuccess(pg, conn, "BEGIN", PGRES_COMMAND_OK, *this);
-
-    // Writing to the ledgers db fails if the ledger already exists in the db.
-    // In this situation, the ETL process has detected there is another writer,
-    // and falls back to only publishing
-    if (!writeToLedgersDB(info, pg, conn, *this))
-    {
-        JLOG(journal_.warn()) << __func__ << " : "
-                              << "Failed to write to ledgers database.";
-        return false;
-    }
-
-    std::stringstream transactionsCopyBuffer;
-    std::stringstream accountTransactionsCopyBuffer;
-    for (auto& data : accountTxData)
-    {
-        std::string txHash = strHex(data.txHash);
-        auto idx = data.transactionIndex;
-        auto ledgerSeq = data.ledgerSequence;
-
-        transactionsCopyBuffer << std::to_string(ledgerSeq) << '\t'
-                               << std::to_string(idx) << '\t' << "\\\\x"
-                               << txHash << '\n';
-
-        for (auto& a : data.accounts)
-        {
-            std::string acct = strHex(a);
-            accountTransactionsCopyBuffer << "\\\\x" << acct << '\t'
-                                          << std::to_string(ledgerSeq) << '\t'
-                                          << std::to_string(idx) << '\n';
-        }
-    }
-    JLOG(journal_.debug()) << "transactions: " << transactionsCopyBuffer.str();
-    JLOG(journal_.debug()) << "account_transactions: "
-                           << accountTransactionsCopyBuffer.str();
-
-    bulkWriteToTable(
-        pg,
-        conn,
-        *this,
-        "COPY transactions FROM stdin",
-        transactionsCopyBuffer.str());
-    bulkWriteToTable(
-        pg,
-        conn,
-        *this,
-        "COPY account_transactions FROM stdin",
-        accountTransactionsCopyBuffer.str());
-
-    executeUntilSuccess(pg, conn, "COMMIT", PGRES_COMMAND_OK, *this);
-
-    PQsetnonblocking(conn->getConn(), 1);
-    app_.pgPool()->checkin(conn);
-
-
-    JLOG(journal_.info()) << __func__ << " : "
-                          << "Successfully wrote to Postgres";
-    return true;
-}
-
 // Database must be populated when this starts
 std::optional<uint32_t>
 ReportingETL::runETLPipeline(uint32_t startSequence)
@@ -634,8 +563,13 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                 // write to RDBMS
                 // if there is a write conflict, some other process has already
                 // written this ledger and has taken over as the ETL writer
-                if (app_.config().usePostgresTx())
-                    if (!writeToPostgres(ledger->info(), accountTxData))
+                if (app_.config().usePostgresLedgerTx())
+                    if (!writeToPostgres(
+                            ledger->info(),
+                            accountTxData,
+                            app_.pgPool(),
+                            app_.config().useTxTables(),
+                            journal_))
                         writeConflict = true;
 
                 auto end = std::chrono::system_clock::now();
@@ -644,7 +578,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                 publishLedger(ledger);
                 lastPublishedSequence = ledger->info().seq;
                 if (checkConsistency_)
-                    assert(checkConsistency(*this));
+                    assert(checkConsistency(app_.pgPool(), journal_));
 
                 // print some performance numbers
                 auto kvTime = ((mid - start).count()) / 1000000000.0;
@@ -849,7 +783,7 @@ ReportingETL::setup()
     else if (!readOnly_)
     {
         if (checkConsistency_)
-            assert(checkConsistency(*this));
+            assert(checkConsistency(app_.pgPool(), journal_));
     }
 }
 
@@ -904,10 +838,6 @@ ReportingETL::ReportingETL(Application& app, Stoppable& parent)
                 ipPair.first, wsPortPair.first, grpcPortPair.first);
         }
 
-        std::pair<std::string, bool> pgTx = section.find("postgres_tx");
-        if (pgTx.second)
-            app_.config().setUsePostgresTx(pgTx.first == "true");
-
         // don't need to do any more work if we are in read only mode
         if (app_.config().reportingReadOnly())
             return;
@@ -943,7 +873,7 @@ ReportingETL::ReportingETL(Application& app, Stoppable& parent)
                 checkConsistency_ = false;
             // if we are not using postgres in place of SQLite, we don't
             // check for consistency
-            if (!app_.config().usePostgresTx())
+            if (!app_.config().usePostgresLedgerTx())
                 checkConsistency_ = false;
         }
     }

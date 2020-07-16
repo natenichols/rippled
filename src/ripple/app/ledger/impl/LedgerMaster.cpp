@@ -271,7 +271,7 @@ LedgerMaster::getValidatedLedgerAge()
 {
     using namespace std::chrono_literals;
 
-    if (app_.config().usePostgresTx())
+    if (app_.config().usePostgresLedgerTx())
     {
         auto age = PgQuery(app_.pgPool()).query("SELECT age()");
         if (!age || PQgetisnull(age.get(), 0, 0))
@@ -1553,7 +1553,7 @@ LedgerMaster::getCurrentLedger()
 std::shared_ptr<Ledger const>
 LedgerMaster::getValidatedLedger ()
 {
-    if (app_.config().usePostgresTx())
+    if (app_.config().usePostgresLedgerTx())
     {
         auto seq = PgQuery(app_.pgPool()).query("SELECT max_ledger()");
         if (!seq || PQgetisnull(seq.get(), 0, 0))
@@ -1590,7 +1590,7 @@ LedgerMaster::getPublishedLedger()
 std::string
 LedgerMaster::getCompleteLedgers()
 {
-    if (app_.config().usePostgresTx())
+    if (app_.config().reporting())
     {
         auto range = PgQuery(app_.pgPool()).query("SELECT complete_ledgers()");
         if (!range)

@@ -313,6 +313,34 @@ Config::setup(
 
     if (RUN_STANDALONE)
         LEDGER_HISTORY = 0;
+
+    std::string ledgerTxDbType;
+    Section ledgerTxTablesSection = section("ledger_tx_tables");
+    get_if_exists(ledgerTxTablesSection, "type", ledgerTxDbType);
+    if (ledgerTxDbType.size())
+    {
+        if (boost::iequals(ledgerTxDbType, "postgres"))
+        {
+            USE_POSTGRES_LEDGER_TX = true;
+        }
+        else if (boost::iequals(ledgerTxDbType, "sqlite"))
+        {
+            if (RUN_REPORTING)
+            {
+                Throw<std::runtime_error>(
+                    "ledger_tx_tables database type must only be postgres in "
+                    "reporting mode.");
+            }
+        }
+        else
+        {
+            Throw<std::runtime_error>(
+                "ledger_tx_tables database type must be either postgres or "
+                "sqlite.");
+        }
+    }
+
+    get_if_exists(ledgerTxTablesSection, "use_tx_tables", USE_TX_TABLES);
 }
 
 void

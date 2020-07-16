@@ -387,6 +387,7 @@ target_sources (rippled PRIVATE
   src/ripple/app/main/Main.cpp
   src/ripple/app/main/NodeIdentity.cpp
   src/ripple/app/main/NodeStoreScheduler.cpp
+  src/ripple/app/reporting/DBHelpers.cpp
   src/ripple/app/reporting/ReportingETL.cpp
   src/ripple/app/reporting/ETLSource.cpp
   src/ripple/app/reporting/TxProxy.cpp
@@ -579,7 +580,6 @@ target_sources (rippled PRIVATE
   src/ripple/rpc/handlers/AccountOffers.cpp
   src/ripple/rpc/handlers/AccountTx.cpp
   src/ripple/rpc/handlers/AccountTxOld.cpp
-  src/ripple/rpc/handlers/AccountTxSwitch.cpp
   src/ripple/rpc/handlers/BlackList.cpp
   src/ripple/rpc/handlers/BookOffers.cpp
   src/ripple/rpc/handlers/CanDelete.cpp
