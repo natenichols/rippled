@@ -145,6 +145,7 @@ enum error_code_i {
 enum warning_code_i {
     warnRPC_UNSUPPORTED_MAJORITY = 1001,
     warnRPC_AMENDMENT_BLOCKED = 1002,
+    warnRPC_REPORTING = 1003
 };
 
 //------------------------------------------------------------------------------
