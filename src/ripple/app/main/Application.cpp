@@ -1465,42 +1465,47 @@ ApplicationImp::setup()
         return false;
     }
 
+    if (!config().reporting())
     {
-        if (validatorKeys_.configInvalid())
-            return false;
-
-        if (!validatorManifests_->load(
-                getWalletDB(),
-                "ValidatorManifests",
-                validatorKeys_.manifest,
-                config().section(SECTION_VALIDATOR_KEY_REVOCATION).values()))
         {
-            JLOG(m_journal.fatal()) << "Invalid configured validator manifest.";
-            return false;
+            if (validatorKeys_.configInvalid())
+                return false;
+
+            if (!validatorManifests_->load(
+                    getWalletDB(),
+                    "ValidatorManifests",
+                    validatorKeys_.manifest,
+                    config()
+                        .section(SECTION_VALIDATOR_KEY_REVOCATION)
+                        .values()))
+            {
+                JLOG(m_journal.fatal())
+                    << "Invalid configured validator manifest.";
+                return false;
+            }
+
+            publisherManifests_->load(getWalletDB(), "PublisherManifests");
+
+            // Setup trusted validators
+            if (!validators_->load(
+                    validatorKeys_.publicKey,
+                    config().section(SECTION_VALIDATORS).values(),
+                    config().section(SECTION_VALIDATOR_LIST_KEYS).values()))
+            {
+                JLOG(m_journal.fatal())
+                    << "Invalid entry in validator configuration.";
+                return false;
+            }
         }
 
-        publisherManifests_->load(getWalletDB(), "PublisherManifests");
-
-        // Setup trusted validators
-        if (!validators_->load(
-                validatorKeys_.publicKey,
-                config().section(SECTION_VALIDATORS).values(),
-                config().section(SECTION_VALIDATOR_LIST_KEYS).values()))
+        if (!validatorSites_->load(
+                config().section(SECTION_VALIDATOR_LIST_SITES).values()))
         {
             JLOG(m_journal.fatal())
-                << "Invalid entry in validator configuration.";
+                << "Invalid entry in [" << SECTION_VALIDATOR_LIST_SITES << "]";
             return false;
         }
     }
-
-    if (!validatorSites_->load(
-            config().section(SECTION_VALIDATOR_LIST_SITES).values()))
-    {
-        JLOG(m_journal.fatal())
-            << "Invalid entry in [" << SECTION_VALIDATOR_LIST_SITES << "]";
-        return false;
-    }
-
     //----------------------------------------------------------------------
     //
     // Server
