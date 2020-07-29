@@ -278,7 +278,9 @@ public:
 
         , m_txMaster(*this)
         , pgPool_(make_PgPool(
-              config_->section("ledger_tx_tables"),
+              config_->usePostgresLedgerTx()
+                  ? config_->section("ledger_tx_tables")
+                  : Section(),
               logs_->journal("PgPool")))
 
         , m_nodeStoreScheduler(*this)
