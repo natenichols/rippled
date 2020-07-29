@@ -210,12 +210,33 @@ callMethod(
 
 }  // namespace
 
+void
+injectReportingWarning(RPC::JsonContext& context, Json::Value& result)
+{
+    if (context.app.config().reporting())
+    {
+        Json::Value warnings{Json::arrayValue};
+        Json::Value& w = warnings.append(Json::objectValue);
+        w[jss::id] = warnRPC_REPORTING;
+        w[jss::message] =
+            "This is a reporting server. "
+            " The default behavior of a reporting server is to only"
+            " return validated data. If you are looking for not yet"
+            " validated data, include \"ledger_index : current\""
+            " in your request, which will cause this server to forward"
+            " the request to a p2p node. If the forward is successful"
+            " the response will include \"forwarded\" : \"true\"";
+        result[jss::warnings] = std::move(warnings);
+    }
+}
+
 Status
 doCommand(RPC::JsonContext& context, Json::Value& result)
 {
-    if (context.app.getTxProxy().shouldForwardToTx(context))
+    if (shouldForwardToTx(context))
     {
-        result = context.app.getTxProxy().forwardToTx(context);
+        result = forwardToTx(context);
+        injectReportingWarning(context, result);
         // this return value is ignored
         return rpcSUCCESS;
     }
@@ -248,19 +269,7 @@ doCommand(RPC::JsonContext& context, Json::Value& result)
         else
         {
             auto ret = callMethod(context, method, handler->name_, result);
-            if (context.app.config().reporting())
-            {
-                Json::Value warnings{Json::arrayValue};
-                Json::Value& w = warnings.append(Json::objectValue);
-                w[jss::id] = warnRPC_REPORTING;
-                w[jss::message] =
-                    "This is a reporting server. "
-                    " The default behavior of a reporting server is to only"
-                    " return validated data. If you are looking for not yet"
-                    " validated data, include \"ledger_index : current\""
-                    " in your request";
-                result[jss::warnings] = std::move(warnings);
-            }
+            injectReportingWarning(context, result);
             return ret;
         }
     }

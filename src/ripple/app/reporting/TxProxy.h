@@ -33,44 +33,6 @@ namespace ripple {
 // TODO move forwarding functions to another file
 //
 
-class TxProxy
-{
-private:
-    std::string ip_;
-    std::string wsPort_;
-    std::string grpcPort_;
-
-    Application& app_;
-    beast::Journal journal_;
-
-    bool setup_ = false;
-
-public:
-    TxProxy(Application& app) : app_(app), journal_(app.journal("TxProxy"))
-    {
-        if (app_.config().exists("tx_proxy"))
-        {
-            Section section = app_.config().section("tx_proxy");
-            std::pair<std::string, bool> ip = section.find("ip");
-
-            std::pair<std::string, bool> wsPort = section.find("ws_port");
-            std::pair<std::string, bool> grpcPort = section.find("grpc_port");
-
-            if (ip.second && wsPort.second && grpcPort.second)
-            {
-                ip_ = ip.first;
-                wsPort_ = wsPort.first;
-                grpcPort_ = grpcPort.first;
-                setup_ = true;
-                JLOG(journal_.info()) << "Setup successfully";
-            }
-            else
-            {
-                JLOG(journal_.info()) << "Missing or incorrect config info. "
-                                      << "Will not forward any requests";
-            }
-        }
-    }
 
     Json::Value
     forwardToTx(RPC::JsonContext& context);
@@ -126,7 +88,7 @@ public:
         RPC::GRPCContext<Request>& context,
         RPC::Condition condition)
     {
-        if (!setup_)
+        if (!context.app.config().reporting())
             return false;
         if (condition == RPC::NEEDS_CURRENT_LEDGER ||
             condition == RPC::NEEDS_CLOSED_LEDGER)
@@ -137,7 +99,6 @@ public:
 
     std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>
     getForwardingStub(RPC::Context& context);
-};
 
 }  // namespace ripple
 #endif

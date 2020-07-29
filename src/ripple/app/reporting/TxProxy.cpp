@@ -17,6 +17,7 @@
 */
 //==============================================================================
 
+#include <ripple/app/reporting/ReportingETL.h>
 #include <ripple/app/reporting/TxProxy.h>
 #include <ripple/json/json_reader.h>
 #include <ripple/json/json_writer.h>
@@ -24,113 +25,25 @@
 namespace ripple {
 
 Json::Value
-TxProxy::forwardToTx(RPC::JsonContext& context)
+forwardToTx(RPC::JsonContext& context)
 {
-    JLOG(journal_.debug()) << "Attempting to forward request to tx. "
-                           << "request = " << context.params.toStyledString();
-
-    Json::Value response;
-    if (!setup_)
-    {
-        JLOG(journal_.error()) << "Attempted to proxy but TxProxy is not setup";
-        response[jss::error] = "Attmpted to proxy but TxProxy is not setup";
-        return response;
-    }
-    namespace beast = boost::beast;          // from <boost/beast.hpp>
-    namespace http = beast::http;            // from <boost/beast/http.hpp>
-    namespace websocket = beast::websocket;  // from <boost/beast/websocket.hpp>
-    namespace net = boost::asio;             // from <boost/asio.hpp>
-    using tcp = boost::asio::ip::tcp;        // from <boost/asio/ip/tcp.hpp>
-    Json::Value& request = context.params;
-    try
-    {
-        // The io_context is required for all I/O
-        net::io_context ioc;
-
-        // These objects perform our I/O
-        tcp::resolver resolver{ioc};
-
-        JLOG(journal_.debug()) << "Creating websocket";
-        auto ws = std::make_unique<websocket::stream<tcp::socket>>(ioc);
-
-        // Look up the domain name
-        auto const results = resolver.resolve(ip_, wsPort_);
-
-        JLOG(journal_.debug()) << "Connecting websocket";
-        // Make the connection on the IP address we get from a lookup
-        net::connect(ws->next_layer(), results.begin(), results.end());
-
-        // Set a decorator to change the User-Agent of the handshake
-        ws->set_option(
-            websocket::stream_base::decorator([](websocket::request_type& req) {
-                req.set(
-                    http::field::user_agent,
-                    std::string(BOOST_BEAST_VERSION_STRING) +
-                        " websocket-client-coro");
-            }));
-
-        JLOG(journal_.debug()) << "Performing websocket handshake";
-        // Perform the websocket handshake
-        ws->handshake(ip_, "/");
-
-        Json::FastWriter fastWriter;
-
-        JLOG(journal_.debug()) << "Sending request";
-        // Send the message
-        ws->write(net::buffer(fastWriter.write(request)));
-
-        beast::flat_buffer buffer;
-        ws->read(buffer);
-
-        Json::Reader reader;
-        if (!reader.parse(
-                static_cast<char const*>(buffer.data().data()), response))
-        {
-            JLOG(journal_.error()) << "Error parsing response";
-            response[jss::error] = "Error parsing response from tx";
-        }
-        JLOG(journal_.debug()) << "Successfully forward request";
-
-        response["forwarded"] = true;
-        return response;
-    }
-    catch (std::exception const& e)
-    {
-        JLOG(journal_.error()) << "Encountered exception : " << e.what();
-        response[jss::error] =
-            ("Failed to forward to tx : " + std::string{e.what()});
-        response["forwarded"] = true;
-        return response;
-    }
+    return context.app.getReportingETL().getETLLoadBalancer().forwardToTx(
+        context);
 }
 
 std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>
-TxProxy::getForwardingStub(RPC::Context& context)
+getForwardingStub(RPC::Context& context)
 {
-    if (!setup_)
-        return nullptr;
-    try
-    {
-        return org::xrpl::rpc::v1::XRPLedgerAPIService::NewStub(
-            grpc::CreateChannel(
-                beast::IP::Endpoint(
-                    boost::asio::ip::make_address(ip_), std::stoi(grpcPort_))
-                    .to_string(),
-                grpc::InsecureChannelCredentials()));
-    }
-    catch (std::exception const& e)
-    {
-        JLOG(journal_.error()) << "Failed to create grpc stub";
-        return nullptr;
-    }
+    return context.app.getReportingETL().getETLLoadBalancer().getForwardingStub(
+        context);
 }
 
 // We only forward requests where ledger_index is "current" or "closed"
 // otherwise, attempt to handle here
 bool
-TxProxy::shouldForwardToTx(RPC::JsonContext& context)
+shouldForwardToTx(RPC::JsonContext& context)
 {
-    if (!setup_)
+    if (!context.app.config().reporting())
         return false;
 
     Json::Value& params = context.params;
@@ -143,7 +56,7 @@ TxProxy::shouldForwardToTx(RPC::JsonContext& context)
     auto handler = RPC::getHandler(context.apiVersion, strCommand);
     if (!handler)
     {
-        JLOG(journal_.error())
+        JLOG(context.j.error())
             << "Error getting handler. command = " << strCommand;
         return false;
     }

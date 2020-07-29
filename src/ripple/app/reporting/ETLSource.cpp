@@ -657,6 +657,152 @@ ETLLoadBalancer::fetchLedger(
         ledgerSequence);
 }
 
+std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>
+ETLLoadBalancer::getForwardingStub(RPC::Context& context)
+{
+    if (sources_.size() == 0)
+        return nullptr;
+    srand((unsigned)time(0));
+    auto sourceIdx = rand() % sources_.size();
+    auto numAttempts = 0;
+    while (numAttempts < sources_.size())
+    {
+        auto stub = sources_[sourceIdx]->getForwardingStub(context);
+        if (!stub)
+        {
+            sourceIdx = (sourceIdx + 1) % sources_.size();
+            ++numAttempts;
+            continue;
+        }
+        return stub;
+    }
+    return nullptr;
+}
+
+Json::Value
+ETLLoadBalancer::forwardToTx(RPC::JsonContext& context)
+{
+    Json::Value res;
+    if (sources_.size() == 0)
+        return res;
+    srand((unsigned)time(0));
+    auto sourceIdx = rand() % sources_.size();
+    auto numAttempts = 0;
+    while (numAttempts < sources_.size())
+    {
+        res = sources_[sourceIdx]->forwardToTx(context);
+        if (!res.isMember("forwarded") || res["forwarded"] != true)
+        {
+            sourceIdx = (sourceIdx + 1) % sources_.size();
+            ++numAttempts;
+            continue;
+        }
+        return res;
+    }
+    RPC::Status err = {rpcFAILED_TO_FORWARD};
+    err.inject(res);
+    return res;
+}
+
+std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>
+ETLSource::getForwardingStub(RPC::Context& context)
+{
+    if (!connected)
+        return nullptr;
+    try
+    {
+        return org::xrpl::rpc::v1::XRPLedgerAPIService::NewStub(
+            grpc::CreateChannel(
+                beast::IP::Endpoint(
+                    boost::asio::ip::make_address(ip_), std::stoi(grpcPort_))
+                    .to_string(),
+                grpc::InsecureChannelCredentials()));
+    }
+    catch (std::exception const& e)
+    {
+        JLOG(journal_.error()) << "Failed to create grpc stub";
+        return nullptr;
+    }
+}
+
+Json::Value
+ETLSource::forwardToTx(RPC::JsonContext& context)
+{
+    JLOG(journal_.debug()) << "Attempting to forward request to tx. "
+                           << "request = " << context.params.toStyledString();
+
+    Json::Value response;
+    if (!connected)
+    {
+        JLOG(journal_.error())
+            << "Attempted to proxy but failed to connect to tx";
+        return response;
+    }
+    namespace beast = boost::beast;          // from <boost/beast.hpp>
+    namespace http = beast::http;            // from <boost/beast/http.hpp>
+    namespace websocket = beast::websocket;  // from <boost/beast/websocket.hpp>
+    namespace net = boost::asio;             // from <boost/asio.hpp>
+    using tcp = boost::asio::ip::tcp;        // from <boost/asio/ip/tcp.hpp>
+    Json::Value& request = context.params;
+    try
+    {
+        // The io_context is required for all I/O
+        net::io_context ioc;
+
+        // These objects perform our I/O
+        tcp::resolver resolver{ioc};
+
+        JLOG(journal_.debug()) << "Creating websocket";
+        auto ws = std::make_unique<websocket::stream<tcp::socket>>(ioc);
+
+        // Look up the domain name
+        auto const results = resolver.resolve(ip_, wsPort_);
+
+        JLOG(journal_.debug()) << "Connecting websocket";
+        // Make the connection on the IP address we get from a lookup
+        net::connect(ws->next_layer(), results.begin(), results.end());
+
+        // Set a decorator to change the User-Agent of the handshake
+        ws->set_option(
+            websocket::stream_base::decorator([](websocket::request_type& req) {
+                req.set(
+                    http::field::user_agent,
+                    std::string(BOOST_BEAST_VERSION_STRING) +
+                        " websocket-client-coro");
+            }));
+
+        JLOG(journal_.debug()) << "Performing websocket handshake";
+        // Perform the websocket handshake
+        ws->handshake(ip_, "/");
+
+        Json::FastWriter fastWriter;
+
+        JLOG(journal_.debug()) << "Sending request";
+        // Send the message
+        ws->write(net::buffer(fastWriter.write(request)));
+
+        beast::flat_buffer buffer;
+        ws->read(buffer);
+
+        Json::Reader reader;
+        if (!reader.parse(
+                static_cast<char const*>(buffer.data().data()), response))
+        {
+            JLOG(journal_.error()) << "Error parsing response";
+            response[jss::error] = "Error parsing response from tx";
+        }
+        JLOG(journal_.debug()) << "Successfully forward request";
+
+        response["forwarded"] = true;
+        return response;
+    }
+    catch (std::exception const& e)
+    {
+        JLOG(journal_.error()) << "Encountered exception : " << e.what();
+        return response;
+    }
+}
+
 template <class Func>
 bool
 ETLLoadBalancer::execute(Func f, uint32_t ledgerSequence)

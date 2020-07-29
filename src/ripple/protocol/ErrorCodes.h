@@ -134,8 +134,11 @@ enum error_code_i {
     rpcDB_DESERIALIZATION = 77,
     rpcEXCESSIVE_LGR_RANGE = 78,
     rpcINVALID_LGR_RANGE = 79,
+
+    // Reporting
+    rpcFAILED_TO_FORWARD = 90,
     rpcLAST =
-        rpcINVALID_LGR_RANGE  // rpcLAST should always equal the last code.=
+        rpcFAILED_TO_FORWARD  // rpcLAST should always equal the last code.=
 };
 
 /** Codes returned in the `warnings` array of certain RPC commands.

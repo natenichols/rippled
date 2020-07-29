@@ -239,6 +239,12 @@ public:
         stopped();
     }
 
+    ETLLoadBalancer&
+    getETLLoadBalancer()
+    {
+        return loadBalancer_;
+    }
+
 private:
     void
     doWork();

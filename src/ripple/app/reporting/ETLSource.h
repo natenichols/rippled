@@ -22,6 +22,7 @@
 #include <ripple/app/main/Application.h>
 #include <ripple/app/reporting/ETLHelpers.h>
 #include <ripple/protocol/STLedgerEntry.h>
+#include <ripple/rpc/Context.h>
 
 #include <boost/algorithm/string.hpp>
 #include <boost/beast/core.hpp>
@@ -248,6 +249,12 @@ struct ETLSource
 
     void
     close(bool startAgain);
+
+    std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>
+    getForwardingStub(RPC::Context& context);
+
+    Json::Value
+    forwardToTx(RPC::JsonContext& context);
 };
 
 // This class is used to manage connections to transaction processing processes
@@ -305,6 +312,12 @@ public:
         }
         return ret;
     }
+
+    std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>
+    getForwardingStub(RPC::Context& context);
+
+    Json::Value
+    forwardToTx(RPC::JsonContext& context);
 
 private:
     template <class Func>

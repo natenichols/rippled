@@ -149,10 +149,9 @@ GRPCServerImpl::CallData<Request, Response>::process(
                                                InfoSub::pointer(),
                                                apiVersion},
                                               request_};
-            if (app_.getTxProxy().shouldForwardToTx(
-                    context, requiredCondition_))
+            if (shouldForwardToTx(context, requiredCondition_))
             {
-                auto stub = app_.getTxProxy().getForwardingStub(context);
+                auto stub = getForwardingStub(context);
                 if (stub)
                 {
                     grpc::ClientContext clientContext;

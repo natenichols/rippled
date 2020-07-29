@@ -44,7 +44,6 @@
 #include <ripple/app/misc/ValidatorSite.h>
 #include <ripple/app/paths/PathRequests.h>
 #include <ripple/app/reporting/ReportingETL.h>
-#include <ripple/app/reporting/TxProxy.h>
 #include <ripple/app/tx/apply.h>
 #include <ripple/basics/ByteUtilities.h>
 #include <ripple/basics/PerfLog.h>
@@ -232,7 +231,6 @@ public:
 
     std::unique_ptr<GRPCServer> grpcServer_;
     std::unique_ptr<ReportingETL> reportingETL_;
-    std::unique_ptr<TxProxy> txProxy_;
 
     //--------------------------------------------------------------------------
 
@@ -453,7 +451,6 @@ public:
               get_io_service())
         , grpcServer_(std::make_unique<GRPCServer>(*this))
         , reportingETL_(std::make_unique<ReportingETL>(*this, *m_ledgerMaster))
-        , txProxy_(std::make_unique<TxProxy>(*this))
     {
         add(m_resourceManager.get());
 
@@ -864,13 +861,6 @@ public:
     {
         assert(mWalletDB.get() != nullptr);
         return *mWalletDB;
-    }
-
-    TxProxy&
-    getTxProxy() override
-    {
-        assert(txProxy_.get() != nullptr);
-        return *txProxy_;
     }
 
     ReportingETL&

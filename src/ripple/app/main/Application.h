@@ -90,7 +90,6 @@ class DatabaseCon;
 class SHAMapStore;
 
 class ReportingETL;
-class TxProxy;
 
 using NodeCache     = TaggedCache <SHAMapHash, Blob>;
 
@@ -244,8 +243,6 @@ public:
     virtual std::chrono::milliseconds
     getIOLatency() = 0;
 
-    virtual TxProxy&
-    getTxProxy() = 0;
     virtual ReportingETL&
     getReportingETL() = 0;
 
