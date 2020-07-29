@@ -94,7 +94,7 @@ private:
     std::optional<boost::asio::io_context::work> work_;
     std::thread ioThread_;
     std::atomic_uint32_t numRequestsOutstanding_ = 0;
-    static constexpr uint32_t maxRequestsOutstanding = 1000000;
+    uint32_t maxRequestsOutstanding = 1000000;
 
     std::mutex throttleMutex_;
     std::condition_variable throttleCv_;
@@ -415,6 +415,12 @@ public:
         work_.emplace(ioContext_);
         ioThread_ = std::thread{[this]() { ioContext_.run(); }};
         open_ = true;
+
+        if (config_.exists("max_requests_outstanding"))
+        {
+            maxRequestsOutstanding =
+                get<int>(config_, "max_requests_outstanding");
+        }
     }
 
     // TODO remove this
