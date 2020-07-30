@@ -35,6 +35,8 @@ message GetLedgerResponse
     bool validated = 4;
 
     repeated LedgerState ledger_objects = 5;
+
+    bool skiplist_included = 6;
 }
 
 message TransactionHashList

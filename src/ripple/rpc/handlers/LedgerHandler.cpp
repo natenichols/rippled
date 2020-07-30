@@ -28,8 +28,8 @@
 #include <ripple/rpc/handlers/LedgerHandler.h>
 #include <ripple/rpc/impl/RPCHelpers.h>
 
-#include <ripple/rpc/impl/GRPCHelpers.h>
 #include <ripple/rpc/GRPCHandlers.h>
+#include <ripple/rpc/impl/GRPCHelpers.h>
 
 namespace ripple {
 namespace RPC {
@@ -45,7 +45,7 @@ LedgerHandler::check()
     bool needsLedger = params.isMember(jss::ledger) ||
         params.isMember(jss::ledger_hash) ||
         params.isMember(jss::ledger_index) || context_.app.config().reporting();
-    if (! needsLedger)
+    if (!needsLedger)
         return Status::OK;
 
     if (auto s = lookupLedger(ledger_, context_, result_))
@@ -101,13 +101,10 @@ LedgerHandler::check()
     return Status::OK;
 }
 
-
-} // RPC
-
+}  // namespace RPC
 
 std::pair<org::xrpl::rpc::v1::GetLedgerResponse, grpc::Status>
-doLedgerGrpc(
-    RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
+doLedgerGrpc(RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
 {
     org::xrpl::rpc::v1::GetLedgerRequest& request = context.params;
     org::xrpl::rpc::v1::GetLedgerResponse response;
@@ -123,7 +120,6 @@ doLedgerGrpc(
 
     Serializer s;
     addRaw(ledger->info(), s, true);
-    std::cout << "serialized ledger header" << std::endl;
 
     response.set_ledger_header(s.peekData().data(), s.getLength());
 
@@ -140,36 +136,6 @@ doLedgerGrpc(
                 txn->set_transaction_blob(sTxn.data(), sTxn.getLength());
                 if (i.second)
                 {
-                    if (request.get_objects())
-                    {
-                        std::set<uint256> indices;
-                        TxMeta meta{i.first->getTransactionID(),
-                                    ledger->info().seq,
-                                    *i.second};
-                        STArray& nodes = meta.getNodes();
-                        for (auto it = nodes.begin(); it != nodes.end(); ++it)
-                        {
-                            indices.insert(it->getFieldH256(sfLedgerIndex));
-                        }
-
-                        for (auto& k : indices)
-                        {
-                            auto obj = response.add_ledger_objects();
-                            auto const sle = ledger->read(keylet::unchecked(k));
-                            if (!sle)
-                            {
-                                obj->set_index(k.data(), k.size());
-                            }
-                            else
-                            {
-                                Serializer s;
-                                sle->add(s);
-                                obj->set_index(k.data(), k.size());
-                                obj->set_data(
-                                    s.peekData().data(), s.getLength());
-                            }
-                        }
-                    }
                     Serializer sMeta = i.second->getSerializer();
                     txn->set_metadata_blob(sMeta.data(), sMeta.getLength());
                 }
@@ -182,11 +148,63 @@ doLedgerGrpc(
             }
         }
     }
-    std::cout << "processed transactions" << std::endl;
+
+    if (request.get_objects())
+    {
+        std::shared_ptr<ReadView const> parent =
+            context.app.getLedgerMaster().getLedgerBySeq(ledger->seq() - 1);
+
+        std::shared_ptr<Ledger const> base =
+            std::dynamic_pointer_cast<Ledger const>(parent);
+        if (!base)
+        {
+            grpc::Status errorStatus{grpc::StatusCode::NOT_FOUND,
+                                     "parent ledger not validated"};
+            return {response, errorStatus};
+        }
+
+        std::shared_ptr<Ledger const> desired =
+            std::dynamic_pointer_cast<Ledger const>(ledger);
+        if (!desired)
+        {
+            grpc::Status errorStatus{grpc::StatusCode::NOT_FOUND,
+                                     "ledger not validated"};
+            return {response, errorStatus};
+        }
+        SHAMap::Delta differences;
+
+        int maxDifferences = std::numeric_limits<int>::max();
+
+        bool res = base->stateMap().compare(
+            desired->stateMap(), differences, maxDifferences);
+        if (!res)
+        {
+            grpc::Status errorStatus{
+                grpc::StatusCode::RESOURCE_EXHAUSTED,
+                "too many differences between specified ledgers"};
+            return {response, errorStatus};
+        }
+
+        for (auto& [k, v] : differences)
+        {
+            auto obj = response.add_ledger_objects();
+            auto inBase = v.first;
+            auto inDesired = v.second;
+
+            obj->set_index(k.data(), k.size());
+            if (inDesired)
+            {
+                assert(inDesired->size() > 0);
+                obj->set_data(inDesired->data(), inDesired->size());
+            }
+        }
+    }
+
+    response.set_skiplist_included(true);
 
     response.set_validated(
         RPC::isValidated(context.ledgerMaster, *ledger, context.app));
 
     return {response, status};
 }
-} // ripple
+}  // namespace ripple

@@ -447,7 +447,16 @@ ReportingETL::buildNextLedger(
         << "Inserted/modified/deleted all objects. Number of objects = "
         << rawData.ledger_objects_size();
 
-    next->updateSkipList();
+    if(!rawData.skiplist_included())
+    {
+        next->updateSkipList();
+        JLOG(journal_.warn())
+            << __func__ << " : "
+            << "tx process is not sending skiplist. This indicates that the tx "
+               "process is parsing metadata instead of doing a SHAMap diff. "
+               "Make sure tx process is running the same code as reporting to "
+               "use SHAMap diff instead of parsing metadata";
+    }
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Finished ledger update. "
