@@ -458,6 +458,26 @@ ReportingETL::buildNextLedger(
 std::optional<uint32_t>
 ReportingETL::runETLPipeline(uint32_t startSequence)
 {
+    /*
+     * Behold, mortals! This function spawns three separate threads, which talk
+     * to each other via 2 different thread safe queues and 1 atomic variable.
+     * All threads and queues are function local. This function returns when all
+     * of the threads exit. There are two termination conditions: the first is
+     * if the load thread encounters a write conflict. In this case, the load
+     * thread sets writeConflict, an atomic bool, to true, which signals the
+     * other threads to stop. The second termination condition is when the
+     * entire server is shutting down, which is detected in one of two ways:
+     * either the networkValidatedLedgers_.waitUntilValidatedByNetwork returns
+     * false, signaling the wait was aborted. Or fetchLedgerDataAndDiff returns
+     * an empty optional, signaling the fetch was aborted. In both cases, the
+     * extract thread detects this condition, and pushes an empty optional onto
+     * the transform queue. The transform thread, upon popping an empty
+     * optional, pushes an empty optional onto the load queue, and then returns.
+     * The load thread, upon popping an empty optional, returns. Note however,
+     * each thread will first process any data pushed prior to the empty
+     * optional before returning.
+     */
+
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Starting etl pipeline";
     writing_ = true;
@@ -487,8 +507,18 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                        currentSequence) &&
                    !writeConflict)
             {
+                auto start = std::chrono::system_clock::now();
                 std::optional<org::xrpl::rpc::v1::GetLedgerResponse>
                     fetchResponse{fetchLedgerDataAndDiff(currentSequence)};
+                auto end = std::chrono::system_clock::now();
+
+                auto time = ((end - start).count()) / 1000000000.0;
+                auto tps =
+                    fetchResponse->transactions_list().transactions_size() /
+                    time;
+
+                JLOG(journal_.debug()) << "Extract phase time = " << time
+                                       << " . Extract phase tps = " << tps;
                 // if the fetch is unsuccessful, stop. fetchLedger only returns
                 // false if the server is shutting down, or if the ledger was
                 // found in the database. otherwise, fetchLedger will continue
