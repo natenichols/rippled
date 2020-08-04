@@ -787,13 +787,21 @@ ETLSource::forwardToTx(RPC::JsonContext& context)
         net::connect(ws->next_layer(), results.begin(), results.end());
 
         // Set a decorator to change the User-Agent of the handshake
+        // and to tell rippled to charge the client IP for RPC
+        // resources. See "secure_gateway" in
+        // https://github.com/ripple/rippled/blob/develop/cfg/rippled-example.cfg
         ws->set_option(
-            websocket::stream_base::decorator([](websocket::request_type& req) {
+            websocket::stream_base::decorator(
+                [&context](websocket::request_type& req) {
                 req.set(
                     http::field::user_agent,
                     std::string(BOOST_BEAST_VERSION_STRING) +
                         " websocket-client-coro");
+                req.set(
+                    http::field::forwarded,
+                    "for=" + context.consumer.to_string());
             }));
+        JLOG(journal_.debug()) << "client ip: " << context.consumer.to_string();
 
         JLOG(journal_.debug()) << "Performing websocket handshake";
         // Perform the websocket handshake
