@@ -302,22 +302,25 @@ public:
 
         CassStatement* statement;
         CassFuture* fut;
-        while (true)
+        bool setupSessionAndTable = false;
+        while (!setupSessionAndTable)
         {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
             session_.reset(cass_session_new());
             assert(session_);
 
             fut = cass_session_connect_keyspace(
                 session_.get(), cluster, keyspace.c_str());
             rc = cass_future_error_code(fut);
+            cass_future_free(fut);
             if (rc != CASS_OK)
             {
                 std::stringstream ss;
                 ss << "nodestore: Error connecting Cassandra session keyspace: "
                    << rc << ", " << cass_error_desc(rc);
-                Throw<std::runtime_error>(ss.str());
+                JLOG(j_.error()) << ss.str();
+                continue;
             }
-            cass_future_free(fut);
 
             statement = makeStatement(
                 "CREATE TABLE IF NOT EXISTS objects ("
@@ -326,91 +329,104 @@ public:
                 0);
             fut = cass_session_execute(session_.get(), statement);
             rc = cass_future_error_code(fut);
+            cass_future_free(fut);
+            cass_statement_free(statement);
             if (rc != CASS_OK && rc != CASS_ERROR_SERVER_INVALID_QUERY)
             {
                 std::stringstream ss;
                 ss << "nodestore: Error creating Cassandra objects table: "
                    << rc << ", " << cass_error_desc(rc);
-                Throw<std::runtime_error>(ss.str());
+                JLOG(j_.error()) << ss.str();
+                continue;
             }
-            cass_future_free(fut);
-            cass_statement_free(statement);
 
             statement = makeStatement("SELECT * FROM objects LIMIT 1", 0);
             fut = cass_session_execute(session_.get(), statement);
             rc = cass_future_error_code(fut);
+            cass_future_free(fut);
+            cass_statement_free(statement);
             if (rc != CASS_OK)
             {
                 if (rc == CASS_ERROR_SERVER_INVALID_QUERY)
                 {
-                    cass_future_free(fut);
-                    cass_statement_free(statement);
-                    std::cerr << "objects table not here yet, sleeping 1s to "
-                                 "see if table creation propagates\n";
-                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    JLOG(j_.warn())
+                        << "objects table not here yet, sleeping 1s to "
+                           "see if table creation propagates";
                     continue;
                 }
-                std::stringstream ss;
-                ss << "nodestore: Error checking for objects table: " << rc
-                   << ", " << cass_error_desc(rc);
-                Throw<std::runtime_error>(ss.str());
+                else
+                {
+                    std::stringstream ss;
+                    ss << "nodestore: Error checking for objects table: " << rc
+                       << ", " << cass_error_desc(rc);
+                    JLOG(j_.error()) << ss.str();
+                    continue;
+                }
             }
-            cass_future_free(fut);
-            cass_statement_free(statement);
-            break;
+
+            setupSessionAndTable = true;
         }
+
         cass_cluster_free(cluster);
-        CassFuture* prepare_future = cass_session_prepare(
-            session_.get(), "INSERT INTO objects (hash, object) VALUES (?, ?)");
 
-        /* Wait for the statement to prepare and get the result */
-        rc = cass_future_error_code(prepare_future);
-
-        printf("Prepare result: %s\n", cass_error_desc(rc));
-
-        if (rc != CASS_OK)
+        bool setupPreparedStatements = false;
+        while (!setupPreparedStatements)
         {
-            /* Handle error */
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            CassFuture* prepare_future = cass_session_prepare(
+                session_.get(),
+                "INSERT INTO objects (hash, object) VALUES (?, ?)");
+
+            /* Wait for the statement to prepare and get the result */
+            rc = cass_future_error_code(prepare_future);
+
+            if (rc != CASS_OK)
+            {
+                /* Handle error */
+                cass_future_free(prepare_future);
+
+                std::stringstream ss;
+                ss << "nodestore: Error preparing insert : " << rc << ", "
+                   << cass_error_desc(rc);
+                JLOG(j_.error()) << ss.str();
+                continue;
+            }
+
+            /* Get the prepared object from the future */
+            insert_ = cass_future_get_prepared(prepare_future);
+
+            /* The future can be freed immediately after getting the prepared
+             * object
+             */
             cass_future_free(prepare_future);
 
-            std::stringstream ss;
-            ss << "nodestore: Error preparing insert : " << rc << ", "
-               << cass_error_desc(rc);
-            Throw<std::runtime_error>(ss.str());
-        }
+            prepare_future = cass_session_prepare(
+                session_.get(), "SELECT object FROM objects WHERE hash = ?");
 
-        /* Get the prepared object from the future */
-        insert_ = cass_future_get_prepared(prepare_future);
+            /* Wait for the statement to prepare and get the result */
+            rc = cass_future_error_code(prepare_future);
 
-        /* The future can be freed immediately after getting the prepared object
-         */
-        cass_future_free(prepare_future);
+            if (rc != CASS_OK)
+            {
+                /* Handle error */
+                cass_future_free(prepare_future);
 
-        prepare_future = cass_session_prepare(
-            session_.get(), "SELECT object FROM objects WHERE hash = ?");
+                std::stringstream ss;
+                ss << "nodestore: Error preparing select : " << rc << ", "
+                   << cass_error_desc(rc);
+                JLOG(j_.error()) << ss.str();
+                continue;
+            }
 
-        /* Wait for the statement to prepare and get the result */
-        rc = cass_future_error_code(prepare_future);
+            /* Get the prepared object from the future */
+            select_ = cass_future_get_prepared(prepare_future);
 
-        printf("Prepare result: %s\n", cass_error_desc(rc));
-
-        if (rc != CASS_OK)
-        {
-            /* Handle error */
+            /* The future can be freed immediately after getting the prepared
+             * object
+             */
             cass_future_free(prepare_future);
-
-            std::stringstream ss;
-            ss << "nodestore: Error preparing select : " << rc << ", "
-               << cass_error_desc(rc);
-            Throw<std::runtime_error>(ss.str());
+            setupPreparedStatements = true;
         }
-
-        /* Get the prepared object from the future */
-        select_ = cass_future_get_prepared(prepare_future);
-
-        /* The future can be freed immediately after getting the prepared object
-         */
-        cass_future_free(prepare_future);
 
         work_.emplace(ioContext_);
         ioThread_ = std::thread{[this]() { ioContext_.run(); }};
@@ -451,6 +467,7 @@ public:
         open_ = false;
     }
 
+    // TODO : retry logic?
     Status
     fetch(void const* key, std::shared_ptr<NodeObject>* pno) override
     {
