@@ -1324,9 +1324,12 @@ loadLedgerInfosPostgres(
         << "loadLedgerHelperPostgres - sql : " << sql;
 
     assert(app.pgPool());
-    auto res = doQuery(app.pgPool(), sql.data());
+    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app.pgPool());
+    std::shared_ptr<Pg> conn;
+    auto res = pg->query(sql.data(), conn);
     assert(res);
     auto result = PQresultStatus(res.get());
+    app.pgPool()->checkin(conn);
 
     JLOG(app.journal("Ledger").debug())
         << "loadLedgerHelperPostgres - result: " << result;
