@@ -71,9 +71,11 @@ struct ETLSource
 
     size_t numFailures = 0;
 
-    bool closing = false;
+    std::atomic_bool closing = false;
 
-    bool connected = false;
+    std::atomic_bool connected = false;
+
+    std::atomic_bool forwardingStream = false;
 
     std::chrono::time_point<std::chrono::system_clock> lastMsgTime;
     std::mutex lastMsgTimeMtx_;
@@ -202,7 +204,7 @@ struct ETLSource
     toJson()
     {
         Json::Value result(Json::objectValue);
-        result["connected"] = connected;
+        result["connected"] = connected.load();
         result["validated_ledgers_range"] = getValidatedRange();
         result["ip"] = ip_;
         result["websocket_port"] = wsPort_;
@@ -301,6 +303,23 @@ public:
 
     void
     stop();
+
+    bool
+    shouldPropagateTxnStream(ETLSource* in)
+    {
+        for (auto& src : sources_)
+        {
+            assert(src);
+            if (src->connected.load())
+            {
+                if (src.get() == in)
+                    return true;
+                else
+                    return false;
+            }
+        }
+        assert(false);
+    }
 
     Json::Value
     toJson()

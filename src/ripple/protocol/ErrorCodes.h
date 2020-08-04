@@ -137,8 +137,9 @@ enum error_code_i {
 
     // Reporting
     rpcFAILED_TO_FORWARD = 90,
+    rpcREPORTING_UNSUPPORTED = 91,
     rpcLAST =
-        rpcFAILED_TO_FORWARD  // rpcLAST should always equal the last code.=
+        rpcREPORTING_UNSUPPORTED  // rpcLAST should always equal the last code.=
 };
 
 /** Codes returned in the `warnings` array of certain RPC commands.

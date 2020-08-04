@@ -58,6 +58,7 @@
 #include <ripple/overlay/predicates.h>
 #include <ripple/protocol/BuildInfo.h>
 #include <ripple/protocol/Feature.h>
+#include <ripple/protocol/STParsedJSON.h>
 #include <ripple/resource/ResourceManager.h>
 #include <ripple/rpc/DeliveredAmount.h>
 #include <boost/asio/ip/host_name.hpp>
@@ -553,6 +554,11 @@ public:
         TER terResult) override;
     void
     pubValidation(std::shared_ptr<STValidation> const& val) override;
+
+    void
+    forwardProposedTransaction(Json::Value const& jvObj) override;
+    void
+    forwardProposedAccountTransaction(Json::Value const& jvObj) override;
 
     //--------------------------------------------------------------------------
     //
@@ -1297,8 +1303,8 @@ NetworkOPsImp::apply(std::unique_lock<std::mutex>& batchLock)
         std::unique_lock masterLock{app_.getMasterMutex(), std::defer_lock};
         bool changed = false;
         {
-            std::unique_lock ledgerLock{
-                m_ledgerMaster.peekMutex(), std::defer_lock};
+            std::unique_lock ledgerLock{m_ledgerMaster.peekMutex(),
+                                        std::defer_lock};
             std::lock(masterLock, ledgerLock);
 
             app_.openLedger().modify([&](OpenView& view, beast::Journal j) {
@@ -2868,8 +2874,125 @@ NetworkOPsImp::pubProposedTransaction(
     pubAccountTransaction(lpCurrent, alt, false);
 }
 
-void NetworkOPsImp::pubLedger (
-    std::shared_ptr<ReadView const> const& lpAccepted)
+void
+NetworkOPsImp::forwardProposedTransaction(Json::Value const& jvObj)
+{
+    // reporting does not forward validated transactions
+    // validated transactions will be published to the proper streams when the
+    // etl process writes a validated ledger
+    if (jvObj[jss::validated].asBool())
+        return;
+    {
+        std::lock_guard sl(mSubLock);
+
+        auto it = mStreamMaps[sRTTransactions].begin();
+        while (it != mStreamMaps[sRTTransactions].end())
+        {
+            InfoSub::pointer p = it->second.lock();
+
+            if (p)
+            {
+                p->send(jvObj, true);
+                ++it;
+            }
+            else
+            {
+                it = mStreamMaps[sRTTransactions].erase(it);
+            }
+        }
+    }
+
+    forwardProposedAccountTransaction(jvObj);
+}
+
+void
+getAccounts(Json::Value const& jvObj, std::vector<AccountID>& accounts)
+{
+    for (auto& jv : jvObj)
+    {
+        if (jv.isObject())
+        {
+            getAccounts(jv, accounts);
+        }
+        else if (jv.isString())
+        {
+            auto account = RPC::accountFromStringStrict(jv.asString());
+            if (account)
+                accounts.push_back(*account);
+        }
+    }
+}
+
+void
+NetworkOPsImp::forwardProposedAccountTransaction(Json::Value const& jvObj)
+{
+    hash_set<InfoSub::pointer> notify;
+    int iProposed = 0;
+    // check if there are any subscribers before attempting to parse the JSON
+    {
+        std::lock_guard sl(mSubLock);
+
+        if (mSubRTAccount.empty())
+            return;
+    }
+
+    // parse the JSON outside of the lock
+    std::vector<AccountID> accounts;
+    if (jvObj.isMember(jss::transaction))
+    {
+        try
+        {
+            getAccounts(jvObj[jss::transaction], accounts);
+        }
+        catch (...)
+        {
+            JLOG(m_journal.debug())
+                << __func__ << " : "
+                << "error parsing json for accounts affected";
+            return;
+        }
+    }
+    {
+        std::lock_guard sl(mSubLock);
+
+        if (!mSubRTAccount.empty())
+        {
+            for (auto const& affectedAccount : accounts)
+            {
+                auto simiIt = mSubRTAccount.find(affectedAccount);
+                if (simiIt != mSubRTAccount.end())
+                {
+                    auto it = simiIt->second.begin();
+
+                    while (it != simiIt->second.end())
+                    {
+                        InfoSub::pointer p = it->second.lock();
+
+                        if (p)
+                        {
+                            notify.insert(p);
+                            ++it;
+                            ++iProposed;
+                        }
+                        else
+                            it = simiIt->second.erase(it);
+                    }
+                }
+            }
+        }
+    }
+    JLOG(m_journal.trace()) << "forwardProposedAccountTransaction:"
+                            << " iProposed=" << iProposed;
+
+    if (!notify.empty())
+    {
+        for (InfoSub::ref isrListener : notify)
+            isrListener->send(jvObj, true);
+    }
+}
+
+void
+NetworkOPsImp::pubLedger(std::shared_ptr<ReadView const> const& lpAccepted)
 {
     // Ledgers are published only when they acquire sufficient validations
     // Holes are filled across connection loss or other catastrophe
@@ -2887,7 +3010,7 @@ void NetworkOPsImp::pubLedger (
     {
         JLOG(m_journal.debug())
             << "Publishing ledger = " << lpAccepted->info().seq;
-        std::lock_guard sl (mSubLock);
+        std::lock_guard sl(mSubLock);
 
         if (!mStreamMaps[sLedger].empty())
         {
@@ -2924,7 +3047,7 @@ void NetworkOPsImp::pubLedger (
                         << "Publishing ledger = " << lpAccepted->info().seq
                         << " : consumer = " << p->getConsumer()
                         << " : obj = " << jvObj;
-                    p->send (jvObj, true);
+                    p->send(jvObj, true);
                     ++it;
                 }
                 else
@@ -2942,15 +3065,14 @@ void NetworkOPsImp::pubLedger (
     }
 }
 
-
 void
 NetworkOPsImp::reportFeeChange()
 {
     if (app_.config().reporting())
         return;
     ServerFeeSummary f{app_.openLedger().current()->fees().base,
-        app_.getTxQ().getMetrics(*app_.openLedger().current()),
-        app_.getFeeTrack()};
+                       app_.getTxQ().getMetrics(*app_.openLedger().current()),
+                       app_.getFeeTrack()};
 
     // only schedule the job if something has changed
     if (f != mLastFeeSummary)

@@ -118,7 +118,7 @@ ETLSource::reconnect(boost::beast::error_code ec)
     timer_.expires_after(boost::asio::chrono::seconds(waitTime));
     timer_.async_wait([this](auto ec) {
         bool startAgain = (ec != boost::asio::error::operation_aborted);
-        JLOG(journal_.debug()) << __func__ << " async_wait : ec = " << ec;
+        JLOG(journal_.trace()) << __func__ << " async_wait : ec = " << ec;
         close(startAgain);
     });
 }
@@ -161,7 +161,7 @@ ETLSource::close(bool startAgain)
 void
 ETLSource::start()
 {
-    JLOG(journal_.debug()) << __func__ << " : " << toString();
+    JLOG(journal_.trace()) << __func__ << " : " << toString();
 
     auto const host = ip_;
     auto const port = wsPort_;
@@ -175,7 +175,7 @@ ETLSource::onResolve(
     boost::beast::error_code ec,
     boost::asio::ip::tcp::resolver::results_type results)
 {
-    JLOG(journal_.debug()) << __func__ << " : ec = " << ec << " - "
+    JLOG(journal_.trace()) << __func__ << " : ec = " << ec << " - "
                            << toString();
     if (ec)
     {
@@ -196,7 +196,7 @@ ETLSource::onConnect(
     boost::beast::error_code ec,
     boost::asio::ip::tcp::resolver::results_type::endpoint_type endpoint)
 {
-    JLOG(journal_.debug()) << __func__ << " : ec = " << ec << " - "
+    JLOG(journal_.trace()) << __func__ << " : ec = " << ec << " - "
                            << toString();
     if (ec)
     {
@@ -236,7 +236,7 @@ ETLSource::onConnect(
 void
 ETLSource::onHandshake(boost::beast::error_code ec)
 {
-    JLOG(journal_.debug()) << __func__ << " : ec = " << ec << " - "
+    JLOG(journal_.trace()) << __func__ << " : ec = " << ec << " - "
                            << toString();
     if (ec)
     {
@@ -249,11 +249,13 @@ ETLSource::onHandshake(boost::beast::error_code ec)
         jv["command"] = "subscribe";
 
         jv["streams"] = Json::arrayValue;
-        Json::Value stream("ledger");
-        jv["streams"].append(stream);
+        Json::Value ledgerStream("ledger");
+        jv["streams"].append(ledgerStream);
+        Json::Value txnStream("transactions_proposed");
+        jv["streams"].append(txnStream);
         Json::FastWriter fastWriter;
 
-        JLOG(journal_.debug()) << "Sending subscribe stream message";
+        JLOG(journal_.trace()) << "Sending subscribe stream message";
         // Send the message
         ws_->async_write(
             boost::asio::buffer(fastWriter.write(jv)),
@@ -264,7 +266,7 @@ ETLSource::onHandshake(boost::beast::error_code ec)
 void
 ETLSource::onWrite(boost::beast::error_code ec, size_t bytesWritten)
 {
-    JLOG(journal_.debug()) << __func__ << " : ec = " << ec << " - "
+    JLOG(journal_.trace()) << __func__ << " : ec = " << ec << " - "
                            << toString();
     if (ec)
     {
@@ -281,19 +283,20 @@ ETLSource::onWrite(boost::beast::error_code ec, size_t bytesWritten)
 void
 ETLSource::onRead(boost::beast::error_code ec, size_t size)
 {
-    JLOG(journal_.debug()) << __func__ << " : ec = " << ec << " - "
+    JLOG(journal_.trace()) << __func__ << " : ec = " << ec << " - "
                            << toString();
     // if error or error reading message, start over
-    if (ec || !handleMessage())
+    if (ec)
     {
         reconnect(ec);
     }
     else
     {
+        handleMessage();
         boost::beast::flat_buffer buffer;
         swap(readBuffer_, buffer);
 
-        JLOG(journal_.debug())
+        JLOG(journal_.trace())
             << __func__ << " : calling async_read - " << toString();
         ws_->async_read(
             readBuffer_, [this](auto ec, size_t size) { onRead(ec, size); });
@@ -303,7 +306,7 @@ ETLSource::onRead(boost::beast::error_code ec, size_t size)
 bool
 ETLSource::handleMessage()
 {
-    JLOG(journal_.debug()) << __func__ << " : " << toString();
+    JLOG(journal_.trace()) << __func__ << " : " << toString();
 
     setLastMsgTime();
     connected = true;
@@ -320,11 +323,6 @@ ETLSource::handleMessage()
                 << " Message = " << readBuffer_.data().data();
             return false;
         }
-        JLOG(journal_.debug())
-            << __func__ << " : "
-            << "Received a message on ledger "
-            << " subscription stream. Message : " << response.toStyledString()
-            << " - " << toString();
 
         uint32_t ledgerIndex = 0;
         // TODO is this index always validated?
@@ -334,23 +332,49 @@ ETLSource::handleMessage()
             {
                 ledgerIndex = response["result"][jss::ledger_index].asUInt();
             }
+            if (response[jss::result].isMember(jss::validated_ledgers))
+            {
+                setValidatedRange(
+                    response[jss::result][jss::validated_ledgers].asString());
+            }
+            JLOG(journal_.debug())
+                << __func__ << " : "
+                << "Received a message on ledger "
+                << " subscription stream. Message : "
+                << response.toStyledString() << " - " << toString();
         }
-        else if (response.isMember(jss::ledger_index))
+        else
         {
-            ledgerIndex = response[jss::ledger_index].asUInt();
-        }
-        if (response.isMember(jss::validated_ledgers))
-        {
-            setValidatedRange(response[jss::validated_ledgers].asString());
+            if (response.isMember(jss::transaction))
+            {
+                if (etl_.getLoadBalancer().shouldPropagateTxnStream(this))
+                {
+                    etl_.getApplication().getOPs().forwardProposedTransaction(
+                        response);
+                }
+            }
+            else
+            {
+                JLOG(journal_.debug())
+                    << __func__ << " : "
+                    << "Received a message on ledger "
+                    << " subscription stream. Message : "
+                    << response.toStyledString() << " - " << toString();
+                if (response.isMember(jss::ledger_index))
+                {
+                    ledgerIndex = response[jss::ledger_index].asUInt();
+                }
+                if (response.isMember(jss::validated_ledgers))
+                {
+                    setValidatedRange(
+                        response[jss::validated_ledgers].asString());
+                }
+            }
         }
 
-        if (response.isMember(jss::result) &&
-            response[jss::result].isMember(jss::validated_ledgers))
-            setValidatedRange(
-                response[jss::result][jss::validated_ledgers].asString());
         if (ledgerIndex != 0)
         {
-            JLOG(journal_.debug())
+            JLOG(journal_.trace())
                 << __func__ << " : "
                 << "Pushing ledger sequence = " << ledgerIndex << " - "
                 << toString();

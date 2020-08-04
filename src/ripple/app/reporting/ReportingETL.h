@@ -189,6 +189,12 @@ public:
         return journal_;
     }
 
+    ETLLoadBalancer&
+    getLoadBalancer()
+    {
+        return loadBalancer_;
+    }
+
     Json::Value
     getInfo()
     {
