@@ -417,6 +417,12 @@ public:
     {
         return fdRequired_;
     }
+
+    std::uint64_t
+    storeDurationUs() const override
+    {
+        return 0;
+    }
 };
 
 //------------------------------------------------------------------------------

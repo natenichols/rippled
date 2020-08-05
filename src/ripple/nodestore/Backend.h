@@ -126,6 +126,9 @@ public:
     virtual int
     fdRequired() const = 0;
 
+    virtual std::uint64_t
+    storeDurationUs() const = 0;
+
     /** Returns true if the backend uses permanent storage. */
     bool
     backed() const

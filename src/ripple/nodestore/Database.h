@@ -191,35 +191,8 @@ public:
 
         @return The total read and written bytes.
      */
-    std::uint32_t
-    getStoreCount() const
-    {
-        return storeCount_;
-    }
 
-    std::uint32_t
-    getFetchTotalCount() const
-    {
-        return fetchTotalCount_;
-    }
-
-    std::uint32_t
-    getFetchHitCount() const
-    {
-        return fetchHitCount_;
-    }
-
-    std::uint32_t
-    getStoreSize() const
-    {
-        return storeSz_;
-    }
-
-    std::uint32_t
-    getFetchSize() const
-    {
-        return fetchSz_;
-    }
+    Json::Value getCountsJson();
 
     /** Returns the number of file descriptors the database expects to need */
     int
@@ -291,11 +264,13 @@ protected:
         std::shared_ptr<Ledger const> next);
 
 private:
-    std::atomic<std::uint32_t> storeCount_{0};
-    std::atomic<std::uint32_t> fetchTotalCount_{0};
-    std::atomic<std::uint32_t> fetchHitCount_{0};
-    std::atomic<std::uint32_t> storeSz_{0};
-    std::atomic<std::uint32_t> fetchSz_{0};
+    std::atomic<std::uint64_t> storeCount_{0};
+    std::atomic<std::uint64_t> fetchTotalCount_{0};
+    std::atomic<std::uint64_t> fetchHitCount_{0};
+    std::atomic<std::uint64_t> storeSz_{0};
+    std::atomic<std::uint64_t> fetchSz_{0};
+    std::atomic<std::uint64_t> fetchDurationUs_{0};
+    std::atomic<std::uint64_t> storeDurationUs_{0};
 
     std::mutex readLock_;
     std::condition_variable readCondVar_;

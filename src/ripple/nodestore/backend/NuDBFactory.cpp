@@ -302,6 +302,12 @@ public:
     {
         return 3;
     }
+
+    std::uint64_t
+    storeDurationUs() const override
+    {
+        return 0;
+    }
 };
 
 //------------------------------------------------------------------------------

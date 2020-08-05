@@ -2618,6 +2618,8 @@ NetworkOPsImp::getServerInfo(bool human, bool admin, bool counters)
     if (counters)
     {
         info[jss::counters] = app_.getPerfLog().countersJson();
+        info[jss::counters][jss::nodestore] =
+            app_.getNodeStore().getCountsJson();
         info[jss::current_activities] = app_.getPerfLog().currentJson();
     }
 

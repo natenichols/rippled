@@ -101,6 +101,7 @@ private:
 
     std::mutex syncMutex_;
     std::condition_variable syncCv_;
+    std::atomic<std::uint64_t> storeDurationUs_ {0};
 
 public:
     CassandraBackend(
@@ -556,14 +557,21 @@ public:
     struct CallbackData
     {
         CassandraBackend* backend;
+        // The shared pointer to the node object must exist until it's
+        // confirmed persisted. Otherwise, it can become deleted
+        // prematurely if other copies are removed from caches.
+        std::shared_ptr<NodeObject> no;
         NodeStore::EncodedBlob e;
         std::pair<void const*, std::size_t> compressed;
+        std::chrono::steady_clock::time_point begin;
         // The data is stored in this buffer. The void* in the above member
         // is a pointer into the below buffer
         nudb::detail::buffer bf;
 
-        CallbackData(CassandraBackend* f, std::shared_ptr<NodeObject> const& no)
+        CallbackData(CassandraBackend* f,
+                     std::shared_ptr<NodeObject> const& nobj)
             : backend(f)
+            , no(nobj)
         {
             e.prepare(no);
 
@@ -618,6 +626,7 @@ public:
             JLOG(j_.error()) << __func__ << " : " << ss.str();
             Throw<std::runtime_error>(ss.str());
         }
+        data.begin = std::chrono::steady_clock::now();
         CassFuture* fut = cass_session_execute(session_.get(), statement);
         cass_statement_free(statement);
 
@@ -682,6 +691,13 @@ public:
     {
         return 0;
     }
+
+    std::uint64_t
+    storeDurationUs() const override
+    {
+        return storeDurationUs_;
+    }
+
     friend void
     writeCallback(CassFuture* fut, void* cbData);
 };
@@ -711,6 +727,9 @@ writeCallback(CassFuture* fut, void* cbData)
     }
     else
     {
+        backend.storeDurationUs_ += std::chrono::duration_cast<
+            std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - requestParams.begin).count();
         --(backend.numRequestsOutstanding_);
 
         backend.throttleCv_.notify_all();
