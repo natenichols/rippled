@@ -100,28 +100,31 @@ Pg::query(char const* command, std::size_t nParams, char const* const* values)
 {
     pg_result_type ret {nullptr, [](PGresult* result){ PQclear(result); }};
     // Connect then submit query.
-    try
+    while (true)
     {
-        connect();
-        ret.reset(PQexecParams(
-            conn_.get(),
-            command,
-            nParams,
-            nullptr,
-            values,
-            nullptr,
-            nullptr,
-            0));
-        if (!ret)
-            Throw<std::runtime_error>("no result structure returned");
-    }
-    catch (std::exception const& e)
-    {
-        // Sever connection upon any error.
-        disconnect();
-        std::stringstream ss;
-        ss << "database error: " << e.what();
-        Throw<std::runtime_error>(ss.str());
+        try
+        {
+            connect();
+            ret.reset(PQexecParams(
+                conn_.get(),
+                command,
+                nParams,
+                nullptr,
+                values,
+                nullptr,
+                nullptr,
+                0));
+            if (!ret)
+                Throw<std::runtime_error>("no result structure returned");
+            break;
+        }
+        catch (std::exception const& e)
+        {
+            // Sever connection and retry until successful.
+            disconnect();
+            JLOG(j_.error()) << "database error, retrying: " << e.what();
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
     }
 
     // Ensure proper query execution.
@@ -145,6 +148,7 @@ Pg::query(char const* command, std::size_t nParams, char const* const* values)
                << ", number of fields: "
                << PQnfields(ret.get());
             JLOG(j_.error()) << ss.str();
+            disconnect();
             return pg_error_type{
                 PQresultStatus(ret.get()), PQerrorMessage(conn_.get())};
         }
