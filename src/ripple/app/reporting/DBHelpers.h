@@ -33,64 +33,6 @@ writeToLedgersDB(
     std::shared_ptr<Pg>& conn,
     beast::Journal& j);
 
-template <class Func>
-void
-executeUntilSuccess(
-    Func f,
-    std::shared_ptr<Pg>& conn,
-    ExecStatusType expectedResult,
-    beast::Journal& j)
-{
-    JLOG(j.trace()) << __func__ << " : "
-                    << " expectedResult = " << expectedResult;
-    //    while (!etl.isStopping())
-    while (true)
-    {
-        auto resCode = f();
-
-        if (resCode == -1)
-        {
-            JLOG(j.error()) << __func__ << " : "
-                            << "resCode is -1. error msg = "
-                            << PQerrorMessage(conn->getConn()) << ". Retrying";
-            continue;
-        }
-        else if (resCode == 0)
-        {
-            JLOG(j.error()) << __func__ << " : "
-                            << "resCode is 0. Retrying";
-            continue;
-        }
-
-        auto pqResult = PQgetResult(conn->getConn());
-        auto pqResultStatus = PQresultStatus(pqResult);
-
-        if (pqResultStatus == expectedResult)
-        {
-            JLOG(j.trace()) << __func__ << " : "
-                            << "Successfully executed query";
-            break;
-        }
-        else
-        {
-            JLOG(j.error())
-                << __func__ << " : "
-                << "pqResultStatus does not equal "
-                << "expectedResult. pqResultStatus = " << pqResultStatus
-                << " expectedResult = " << expectedResult;
-            continue;
-        }
-    }
-}
-
-void
-executeUntilSuccess(
-    std::shared_ptr<PgQuery>& pg,
-    std::shared_ptr<Pg>& conn,
-    std::string const& query,
-    ExecStatusType expectedResult,
-    beast::Journal& j);
-
 struct AccountTransactionsData
 {
     boost::container::flat_set<AccountID> accounts;

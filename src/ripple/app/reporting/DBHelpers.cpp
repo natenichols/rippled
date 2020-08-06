@@ -45,120 +45,9 @@ writeToLedgersDB(
                     << " : "
                     << "query string = " << ledgerInsert;
 
-    //    while (!etl.isStopping())
-    while (true)
-    {
-        auto res = pgQuery->queryVariant({ledgerInsert.data(), {}}, conn);
+    auto res = pgQuery->queryVariant({ledgerInsert.data(), {}}, conn);
 
-        // Uncomment to trigger "Ledger Ancestry error"
-        //    res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
-
-        // Uncomment to trigger "duplicate key"
-        //    static int z = 0;
-        //    if (++z < 10)
-        //        return;
-        //    res = pgQuery->querySyncVariant({ledgerInsert.data(), {}}, conn);
-
-        if (std::holds_alternative<pg_error_type>(res))
-        {
-            pg_error_type const& err = std::get<pg_error_type>(res);
-            auto resStatus = PQresStatus(err.first);
-            if (err.first == PGRES_FATAL_ERROR &&
-                ((err.second.find("ERROR:  duplicate key") !=
-                  err.second.npos) ||
-                 (err.second.find("ERROR:  Ledger Ancestry error") !=
-                  err.second.npos)))
-            {
-                JLOG(j.error()) << __func__ << " : "
-                                << "Insert into ledger DB error: " << resStatus
-                                << ", " << err.second << ". Stopping ETL";
-                return false;
-            }
-            else
-            {
-                JLOG(j.error()) << __func__ << " : "
-                                << "Insert into ledger DB error: " << resStatus
-                                << ", " << err.second << ". Retrying";
-                continue;
-            }
-        }
-
-        auto const& queryResult = std::get<pg_result_type>(res);
-        if (!queryResult)
-        {
-            JLOG(j.error()) << __func__ << " : "
-                            << " queryResult is null. Retrying";
-        }
-        else if (PQresultStatus(queryResult.get()) != PGRES_COMMAND_OK)
-        {
-            JLOG(j.error())
-                << __func__ << " : "
-                << " resultStatus != PGRES_COMMAND_OK"
-                << "result status = " << PQresultStatus(queryResult.get())
-                << ". Retrying";
-        }
-        else
-        {
-            JLOG(j.debug()) << __func__ << " : "
-                            << "Succesfully wrote to ledgers db";
-            break;
-        }
-    }
-
-    return true;
-    //    return !etl.isStopping();
-}
-
-void
-executeUntilSuccess(
-    std::shared_ptr<PgQuery>& pg,
-    std::shared_ptr<Pg>& conn,
-    std::string const& query,
-    ExecStatusType expectedResult,
-    beast::Journal& j)
-{
-    JLOG(j.trace()) << __func__ << " : "
-                    << " query = " << query
-                    << " expectedResult = " << expectedResult;
-    //    while (!etl.isStopping())
-    while (true)
-    {
-        auto res = pg->queryVariant({query.data(), {}}, conn);
-        if (auto result = std::get_if<pg_result_type>(&res))
-        {
-            auto resultStatus = PQresultStatus(result->get());
-            if (resultStatus == expectedResult)
-            {
-                JLOG(j.trace()) << __func__ << " : "
-                                << "Successfully executed query. "
-                                << "query = " << query
-                                << "result status = " << resultStatus;
-                return;
-            }
-            else
-            {
-                JLOG(j.error())
-                    << __func__ << " : "
-                    << "result status does not match expected. "
-                    << "result status = " << resultStatus
-                    << " expected = " << expectedResult << "query = " << query;
-            }
-        }
-        else if (auto result = std::get_if<pg_error_type>(&res))
-        {
-            auto errorStatus = PQresStatus(result->first);
-            JLOG(j.error())
-                << __func__ << " : "
-                << "error executing query = " << query
-                << ". errorStatus = " << errorStatus
-                << ". error message = " << result->second << ". Retrying";
-        }
-        else
-        {
-            JLOG(j.error()) << __func__ << " : "
-                            << "empty variant. Retrying";
-        }
-    }
+    return !std::holds_alternative<pg_error_type>(res);
 }
 
 void
@@ -171,46 +60,37 @@ bulkWriteToTable(
 {
     JLOG(j.debug()) << __func__;
     //    while (!etl.isStopping())
+        // Initiate COPY operation
+
+    auto res = pgQuery->queryVariant({copyQuery, {}}, conn);
+    assert(std::holds_alternative<pg_result_type>(res));
+    assert(
+        PQresultStatus(std::get<pg_result_type>(res).get()) == PGRES_COPY_IN);
+
+    auto rawRes =
+        PQputCopyData(conn->getConn(), bufString.c_str(), bufString.size());
+    assert(rawRes != 0 && rawRes != -1);
+    auto pqResult = PQgetResult(conn->getConn());
+    auto pqResultStatus = PQresultStatus(pqResult);
+    assert(pqResultStatus == PGRES_COPY_IN);
+
+    PQclear(pqResult);
+
+    rawRes = PQputCopyEnd(conn->getConn(), nullptr);
+    assert(rawRes != 0 && rawRes != -1);
+    pqResult = PQgetResult(conn->getConn());
+    pqResultStatus = PQresultStatus(pqResult);
+    assert(pqResultStatus == PGRES_COMMAND_OK);
+    PQclear(pqResult);
+    //        while (!etl.isStopping())
     while (true)
     {
-        // Initiate COPY operation
-        executeUntilSuccess(pgQuery, conn, copyQuery, PGRES_COPY_IN, j);
-
-        JLOG(j.trace()) << "copy buffer = " << bufString;
-        executeUntilSuccess(
-            [&conn, &bufString]() {
-                return PQputCopyData(
-                    conn->getConn(), bufString.c_str(), bufString.size());
-            },
-            conn,
-            PGRES_COPY_IN,
-            j);
-
-        executeUntilSuccess(
-            [&conn]() { return PQputCopyEnd(conn->getConn(), nullptr); },
-            conn,
-            PGRES_COMMAND_OK,
-            j);
-        auto pqResultStatus = PGRES_COMMAND_OK;
-        //        while (!etl.isStopping())
-        while (true)
-        {
-            auto pqResult = PQgetResult(conn->getConn());
-            if (!pqResult)
-                break;
-            pqResultStatus = PQresultStatus(pqResult);
-        }
-        if (pqResultStatus != PGRES_COMMAND_OK)
-        {
-            JLOG(j.error()) << __func__ << " : "
-                            << "Result of PQputCopyEnd is not PGRES_COMMAND_OK."
-                            << " Result = " << pqResultStatus << ". Retrying";
-            continue;
-        }
-        JLOG(j.debug()) << __func__ << " : "
-                        << "Successfully wrote to account_transactions db";
-        break;
+        pqResult = PQgetResult(conn->getConn());
+        if (!pqResult)
+            break;
+        pqResultStatus = PQresultStatus(pqResult);
     }
+    assert(pqResultStatus == PGRES_COMMAND_OK);
 }
 
 bool
@@ -339,7 +219,11 @@ writeToPostgres(
     std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(pgPool);
     std::shared_ptr<Pg> conn;
 
-    executeUntilSuccess(pg, conn, "BEGIN", PGRES_COMMAND_OK, j);
+    auto res = pg->queryVariant({"BEGIN", {}}, conn);
+    assert(std::holds_alternative<pg_result_type>(res));
+    assert(
+        PQresultStatus(std::get<pg_result_type>(res).get()) ==
+        PGRES_COMMAND_OK);
 
     // Writing to the ledgers db fails if the ledger already exists in the db.
     // In this situation, the ETL process has detected there is another writer,
@@ -393,7 +277,11 @@ writeToPostgres(
             j);
     }
 
-    executeUntilSuccess(pg, conn, "COMMIT", PGRES_COMMAND_OK, j);
+    res = pg->queryVariant({"COMMIT", {}}, conn);
+    assert(std::holds_alternative<pg_result_type>(res));
+    assert(
+        PQresultStatus(std::get<pg_result_type>(res).get()) ==
+        PGRES_COMMAND_OK);
 
     pgPool->checkin(conn);
 
