@@ -140,7 +140,6 @@ Database::fetchInternal(uint256 const& hash, std::shared_ptr<Backend> backend)
     switch (status)
     {
         case ok:
-            ++fetchHitCount_;
             if (nObj)
                 fetchSz_ += nObj->getData().size();
             break;
@@ -200,6 +199,7 @@ Database::doFetch(
 
     // See if the object already exists in the cache
     auto nObj = pCache.fetch(hash);
+    ++fetchTotalCount_;
     if (!nObj && !nCache.touch_if_exists(hash))
     {
         // Try the database(s)
@@ -207,7 +207,6 @@ Database::doFetch(
         nObj = fetchFrom(hash, seq);
         fetchDurationUs_ += std::chrono::duration_cast<
             std::chrono::microseconds>(steady_clock::now() - before).count();
-        ++fetchTotalCount_;
         if (!nObj)
         {
             // Just in case a write occurred
@@ -224,6 +223,11 @@ Database::doFetch(
             // Since this was a 'hard' fetch, we will log it.
             JLOG(j_.trace()) << "HOS: " << hash << " fetch: in db";
         }
+    }
+    else
+    {
+        // It was in the cache.
+        ++fetchHitCount_;
     }
     report.wasFound = static_cast<bool>(nObj);
     report.elapsed = duration_cast<milliseconds>(steady_clock::now() - before);
