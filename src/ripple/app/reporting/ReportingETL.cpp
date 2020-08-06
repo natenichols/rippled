@@ -329,7 +329,9 @@ ReportingETL::publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts)
             }
             continue;
         }
-        app_.getOPs().pubLedger(ledger);
+
+        publishStrand_.post(
+            [this, ledger]() { app_.getOPs().pubLedger(ledger); });
         lastPublish_ = std::chrono::system_clock::now();
         JLOG(journal_.info())
             << __func__ << " : "
@@ -821,6 +823,7 @@ ReportingETL::ReportingETL(Application& app, Stoppable& parent)
     : Stoppable("ReportingETL", parent)
     , app_(app)
     , journal_(app.journal("ReportingETL"))
+    , publishStrand_(app_.getIOService())
     , loadBalancer_(*this)
 {
     // if present, get endpoint from config

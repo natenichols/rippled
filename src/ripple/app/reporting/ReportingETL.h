@@ -61,6 +61,8 @@ private:
 
     std::thread worker_;
 
+    boost::asio::io_context::strand publishStrand_;
+
     ETLLoadBalancer loadBalancer_;
 
     NetworkValidatedLedgers networkValidatedLedgers_;
