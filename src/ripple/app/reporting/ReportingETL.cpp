@@ -507,7 +507,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
             // waitUntilValidatedByNetwork() is going to return false.
             while (networkValidatedLedgers_.waitUntilValidatedByNetwork(
                        currentSequence) &&
-                   !writeConflict)
+                   !writeConflict && !isStopping())
             {
                 auto start = std::chrono::system_clock::now();
                 std::optional<org::xrpl::rpc::v1::GetLedgerResponse>
@@ -557,6 +557,8 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
             {
                 break;
             }
+            if (isStopping())
+                continue;
 
             auto [next, accountTxData] =
                 buildNextLedger(parent, *fetchResponse);
@@ -583,6 +585,8 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                 // stopped and the loader should stop as well
                 if (!result)
                     break;
+                if (isStopping())
+                    continue;
 
                 auto& ledger = result->first;
                 auto& accountTxData = result->second;
