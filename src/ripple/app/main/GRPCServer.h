@@ -238,6 +238,7 @@ private:
         getRole();
 
         // register endpoint with ResourceManager and return usage
+
         Resource::Consumer
         getUsage();
 

@@ -13,6 +13,7 @@ message GetLedgerEntryRequest
 
     LedgerSpecifier ledger = 2;
     
+    string client_ip = 3;
 }
 
 message GetLedgerEntryResponse

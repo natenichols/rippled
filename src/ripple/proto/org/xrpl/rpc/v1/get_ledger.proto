@@ -17,6 +17,8 @@ message GetLedgerRequest
     bool expand = 3;
 
     bool get_objects = 4;
+
+    string client_ip = 5;
 }
 
 message GetLedgerResponse

@@ -151,6 +151,22 @@ GRPCServerImpl::CallData<Request, Response>::process(
                                               request_};
             if (shouldForwardToTx(context, requiredCondition_))
             {
+                auto descriptor =
+                    Request::GetDescriptor()->FindFieldByName("client_ip");
+                assert(descriptor);
+                if (descriptor)
+                {
+                    Request::GetReflection()->SetString(
+                        &request_, descriptor, getEndpoint(ctx_.peer()));
+                    JLOG(app_.journal("gRPCServer").debug())
+                        << "Set client_ip to " << ctx_.peer();
+                }
+                else
+                {
+                    Throw<std::runtime_error>(
+                        "Attempting to forward but no client_ip field in "
+                        "protobuf message");
+                }
                 auto stub = getForwardingStub(context);
                 if (stub)
                 {
@@ -226,6 +242,19 @@ Resource::Consumer
 GRPCServerImpl::CallData<Request, Response>::getUsage()
 {
     std::string peer = getEndpoint(ctx_.peer());
+    auto descriptor = Request::GetDescriptor()->FindFieldByName("client_ip");
+    if(descriptor)
+    {
+        std::string clientIp = Request::GetReflection()->GetString(request_, descriptor);
+        if(!clientIp.empty())
+        {
+            JLOG(app_.journal("gRPCServer").debug())
+                << "Got client_ip from request : "
+                << clientIp
+                << " original peer : " << peer;
+            peer = clientIp;
+        }
+    }
     boost::optional<beast::IP::Endpoint> endpoint =
         beast::IP::Endpoint::from_string_checked(peer);
     return app_.getResourceManager().newInboundEndpoint(endpoint.get());
