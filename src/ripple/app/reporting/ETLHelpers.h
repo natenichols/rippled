@@ -123,6 +123,17 @@ struct ThreadSafeQueue
         cv_.notify_all();
     }
 
+    void
+    push(T&& elt)
+    {
+        std::unique_lock<std::mutex> lck(m_);
+        // if queue has a max size, wait until not full
+        if (maxSize_)
+            cv_.wait(lck, [this]() { return queue_.size() <= *maxSize_; });
+        queue_.push(std::move(elt));
+        cv_.notify_all();
+    }
+
     // @returns element popped from queue
     T
     pop()
@@ -130,12 +141,12 @@ struct ThreadSafeQueue
         std::unique_lock<std::mutex> lck(m_);
         // TODO: is this able to be aborted?
         cv_.wait(lck, [this]() { return !queue_.empty(); });
-        auto ret = queue_.front();
+        T ret = std::move(queue_.front());
         queue_.pop();
         // if queue has a max size, unblock any possible pushers
         if (maxSize_)
             cv_.notify_all();
-        return ret;
+        return std::move(ret);
     }
 };
 
