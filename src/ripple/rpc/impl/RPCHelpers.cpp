@@ -235,13 +235,14 @@ ledgerFromRequest(T& ledger, JsonContext& context)
     else
     {
         auto const index = indexValue.asString ();
-        if (index.empty() || index == "validated")
+        if ((index.empty() && context.app.config().reporting()) ||
+            index == "validated")
         {
             return getLedger(ledger, LedgerShortcut::VALIDATED, context);
         }
         else
         {
-            if (index == "current")
+            if (index == "current" || index.empty())
                 return getLedger(ledger, LedgerShortcut::CURRENT, context);
             else if (index == "closed")
                 return getLedger(ledger, LedgerShortcut::CLOSED, context);
