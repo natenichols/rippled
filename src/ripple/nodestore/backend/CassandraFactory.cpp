@@ -489,6 +489,11 @@ public:
         {
             fut = cass_session_execute(session_.get(), statement);
             rc = cass_future_error_code(fut);
+            if (rc != CASS_OK)
+            {
+                JLOG(j_.warn()) << "Cassandra fetch error : " << rc << ", "
+                                << cass_error_desc(rc);
+            }
         } while (rc == CASS_ERROR_LIB_REQUEST_TIMED_OUT);
 
         if (rc != CASS_OK)
