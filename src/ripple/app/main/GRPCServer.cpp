@@ -151,42 +151,7 @@ GRPCServerImpl::CallData<Request, Response>::process(
                                               request_};
             if (shouldForwardToTx(context, requiredCondition_))
             {
-                auto descriptor =
-                    Request::GetDescriptor()->FindFieldByName("client_ip");
-                assert(descriptor);
-                if (descriptor)
-                {
-                    Request::GetReflection()->SetString(
-                        &request_, descriptor, getEndpoint(ctx_.peer()));
-                    JLOG(app_.journal("gRPCServer").debug())
-                        << "Set client_ip to " << ctx_.peer();
-                }
-                else
-                {
-                    Throw<std::runtime_error>(
-                        "Attempting to forward but no client_ip field in "
-                        "protobuf message");
-                }
-                auto stub = getForwardingStub(context);
-                if (stub)
-                {
-                    grpc::ClientContext clientContext;
-                    Response response;
-                    auto status = forward_(
-                        stub.get(), &clientContext, request_, &response);
-                    responder_.Finish(response, status, this);
-                    JLOG(app_.journal("gRPCServer").debug())
-                        << "Forwarded request to tx";
-                }
-                else
-                {
-                    JLOG(app_.journal("gRPCServer").error())
-                        << "Failed to forward request to tx";
-                    grpc::Status status{grpc::StatusCode::INTERNAL,
-                                        "Attempted to act as proxy but failed "
-                                        "to create forwarding stub"};
-                    responder_.FinishWithError(status, this);
-                }
+                forwardToTx(context);
                 return;
             }
 
@@ -204,14 +169,63 @@ GRPCServerImpl::CallData<Request, Response>::process(
             }
             else
             {
-                std::pair<Response, grpc::Status> result = handler_(context);
-                responder_.Finish(result.first, result.second, this);
+                try
+                {
+                    std::pair<Response, grpc::Status> result =
+                        handler_(context);
+                    responder_.Finish(result.first, result.second, this);
+                }
+                catch (ReportingShouldProxy& e)
+                {
+                    forwardToTx(context);
+                    return;
+                }
             }
         }
     }
     catch (std::exception const& ex)
     {
         grpc::Status status{grpc::StatusCode::INTERNAL, ex.what()};
+        responder_.FinishWithError(status, this);
+    }
+}
+
+template <class Request, class Response>
+void
+GRPCServerImpl::CallData<Request, Response>::forwardToTx(
+    RPC::GRPCContext<Request>& context)
+{
+    auto descriptor = Request::GetDescriptor()->FindFieldByName("client_ip");
+    assert(descriptor);
+    if (descriptor)
+    {
+        Request::GetReflection()->SetString(
+            &request_, descriptor, getEndpoint(ctx_.peer()));
+        JLOG(app_.journal("gRPCServer").debug())
+            << "Set client_ip to " << ctx_.peer();
+    }
+    else
+    {
+        Throw<std::runtime_error>(
+            "Attempting to forward but no client_ip field in "
+            "protobuf message");
+    }
+    auto stub = getForwardingStub(context);
+    if (stub)
+    {
+        grpc::ClientContext clientContext;
+        Response response;
+        auto status = forward_(stub.get(), &clientContext, request_, &response);
+        responder_.Finish(response, status, this);
+        JLOG(app_.journal("gRPCServer").debug()) << "Forwarded request to tx";
+    }
+    else
+    {
+        JLOG(app_.journal("gRPCServer").error())
+            << "Failed to forward request to tx";
+        grpc::Status status{grpc::StatusCode::INTERNAL,
+                            "Attempted to act as proxy but failed "
+                            "to create forwarding stub"};
         responder_.FinishWithError(status, this);
     }
 }

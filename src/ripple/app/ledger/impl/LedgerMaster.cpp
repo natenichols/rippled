@@ -1547,6 +1547,10 @@ LedgerMaster::peekMutex()
 std::shared_ptr<ReadView const>
 LedgerMaster::getCurrentLedger()
 {
+    if (app_.config().reporting())
+    {
+        Throw<ReportingShouldProxy>();
+    }
     return app_.openLedger().current();
 }
 

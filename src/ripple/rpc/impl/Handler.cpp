@@ -95,7 +95,7 @@ Handler const handlerArray[]{
      byRef(&doLedgerCleaner),
      Role::ADMIN,
      NEEDS_NETWORK_CONNECTION},
-    {"ledger_closed", byRef(&doLedgerClosed), Role::USER, NO_CONDITION},
+    {"ledger_closed", byRef(&doLedgerClosed), Role::USER, NEEDS_CLOSED_LEDGER},
     {"ledger_current",
      byRef(&doLedgerCurrent),
      Role::USER,

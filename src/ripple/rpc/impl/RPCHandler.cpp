@@ -195,6 +195,11 @@ callMethod(
         perfLog.rpcFinish(name, curId);
         return ret;
     }
+    catch (ReportingShouldProxy& e)
+    {
+        result = forwardToTx(context);
+        return rpcSUCCESS;
+    }
     catch (std::exception& e)
     {
         perfLog.rpcError(name, curId);

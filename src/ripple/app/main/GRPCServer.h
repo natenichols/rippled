@@ -238,9 +238,12 @@ private:
         getRole();
 
         // register endpoint with ResourceManager and return usage
-
         Resource::Consumer
         getUsage();
+
+        // forward request to a p2p node
+        void
+        forwardToTx(RPC::GRPCContext<Request>& context);
 
     };  // CallData
 
