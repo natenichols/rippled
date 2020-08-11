@@ -319,18 +319,23 @@ ledgerFromSpecifier(
         case LedgerCase::LEDGER_NOT_SET:
         {
             auto const shortcut = specifier.shortcut();
-            // note, unspecified defaults to validated
+            // note, unspecified defaults to validated in reporting mode
             if (shortcut ==
                     org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED ||
-                shortcut ==
-                    org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_UNSPECIFIED)
+                (shortcut ==
+                     org::xrpl::rpc::v1::LedgerSpecifier::
+                         SHORTCUT_UNSPECIFIED &&
+                 context.app.config().reporting()))
             {
                 return getLedger(ledger, LedgerShortcut::VALIDATED, context);
             }
             else
             {
                 if (shortcut ==
-                    org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT)
+                        org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT ||
+                    shortcut ==
+                        org::xrpl::rpc::v1::LedgerSpecifier::
+                            SHORTCUT_UNSPECIFIED)
                 {
                     return getLedger(ledger, LedgerShortcut::CURRENT, context);
                 }
