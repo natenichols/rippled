@@ -200,10 +200,11 @@ public:
         return 0;
     }
 
-    std::uint64_t
-    storeDurationUs() const override
+    Counters const&
+    counters() const override
     {
-        return 0;
+        static Counters counters;
+        return counters;
     }
 };
 

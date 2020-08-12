@@ -379,13 +379,17 @@ JSS(node);                       // out: LedgerEntry
 JSS(node_binary);                // out: LedgerEntry
 JSS(node_hit_rate);              // out: GetCounts
 JSS(node_read_bytes);            // out: GetCounts
+JSS(node_read_errors);           // out: GetCounts
+JSS(node_read_retries);          // out: GetCounts
 JSS(node_reads_hit);             // out: GetCounts
 JSS(node_reads_total);           // out: GetCounts
 JSS(node_reads_duration_us);     // out: GetCounts
 JSS(nodestore);                  // out: GetCounts
 JSS(node_writes);                // out: GetCounts
 JSS(node_written_bytes);         // out: GetCounts
-JSS(node_writes_duration_us);     // out: GetCounts
+JSS(node_writes_duration_us);    // out: GetCounts
+JSS(node_write_retries);         // out: GetCounts
+JSS(node_writes_delayed);        // out::GetCounts
 JSS(obligations);                // out: GatewayBalances
 JSS(offer);                      // in: LedgerEntry
 JSS(offers);                     // out: NetworkOPs, AccountOffers, Subscribe

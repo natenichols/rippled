@@ -24,13 +24,14 @@
 #include <ripple/basics/StringUtilities.h>
 #include <ripple/basics/contract.h>
 #include <ripple/basics/strHex.h>
-#include <ripple/core/Pg.h>
+#include <ripple/nodestore/Backend.h>
 #include <ripple/nodestore/Factory.h>
 #include <ripple/nodestore/Manager.h>
 #include <ripple/nodestore/impl/DecodedBlob.h>
 #include <ripple/nodestore/impl/EncodedBlob.h>
 #include <ripple/nodestore/impl/codec.h>
 #include <ripple/protocol/digest.h>
+#include <boost/asio/steady_timer.hpp>
 #include <boost/filesystem.hpp>
 #include <atomic>
 #include <cassert>
@@ -46,6 +47,7 @@
 #include <queue>
 #include <sstream>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace ripple {
@@ -101,7 +103,7 @@ private:
 
     std::mutex syncMutex_;
     std::condition_variable syncCv_;
-    std::atomic<std::uint64_t> storeDurationUs_ {0};
+    Counters counters_;
 
 public:
     CassandraBackend(
@@ -491,8 +493,15 @@ public:
             rc = cass_future_error_code(fut);
             if (rc != CASS_OK)
             {
-                JLOG(j_.warn()) << "Cassandra fetch error : " << rc << ", "
-                                << cass_error_desc(rc);
+                std::stringstream ss;
+                ss << "Cassandra fetch error";
+                if (rc == CASS_ERROR_LIB_REQUEST_TIMED_OUT)
+                {
+                    ss << ", retrying";
+                    ++counters_.readRetries;
+                }
+                ss << ": " << cass_error_desc(rc);
+                JLOG(j_.warn()) << ss.str();
             }
         } while (rc == CASS_ERROR_LIB_REQUEST_TIMED_OUT);
 
@@ -503,6 +512,7 @@ public:
             JLOG(j_.error()) << "Cassandra fetch error: " << rc << ", "
                              << cass_error_desc(rc);
             pno->reset();
+            ++counters_.readErrors;
             return backendError;
         }
 
@@ -526,6 +536,7 @@ public:
             pno->reset();
             JLOG(j_.error()) << "Cassandra fetch result error: " << rc << ", "
                              << cass_error_desc(rc);
+            ++counters_.readErrors;
             return backendError;
         }
 
@@ -540,6 +551,7 @@ public:
             pno->reset();
             JLOG(j_.error()) << "Cassandra error decoding result: " << rc
                              << ", " << cass_error_desc(rc);
+            ++counters_.readErrors;
             return dataCorrupt;
         }
         *pno = decoded.createObject();
@@ -572,11 +584,14 @@ public:
         // The data is stored in this buffer. The void* in the above member
         // is a pointer into the below buffer
         nudb::detail::buffer bf;
+        std::atomic<std::uint64_t>& writeRetries;
 
         CallbackData(CassandraBackend* f,
-                     std::shared_ptr<NodeObject> const& nobj)
+                     std::shared_ptr<NodeObject> const& nobj,
+                     std::atomic<std::uint64_t>& retries)
             : backend(f)
             , no(nobj)
+            , writeRetries(retries)
         {
             e.prepare(no);
 
@@ -595,6 +610,7 @@ public:
                 JLOG(j_.warn()) << __func__ << " : "
                                 << "Max outstanding requests reached. "
                                 << "Waiting for other requests to finish";
+                ++counters_.writesDelayed;
                 throttleCv_.wait(lck, [this]() {
                     return numRequestsOutstanding_ < maxRequestsOutstanding;
                 });
@@ -642,7 +658,7 @@ public:
     void
     store(std::shared_ptr<NodeObject> const& no) override
     {
-        CallbackData* data = new CallbackData(this, no);
+        CallbackData* data = new CallbackData(this, no, counters_.writeRetries);
 
         ++numRequestsOutstanding_;
         write(*data, false);
@@ -697,10 +713,10 @@ public:
         return 0;
     }
 
-    std::uint64_t
-    storeDurationUs() const override
+    Counters const&
+    counters() const override
     {
-        return storeDurationUs_;
+        return counters_;
     }
 
     friend void
@@ -719,7 +735,7 @@ writeCallback(CassFuture* fut, void* cbData)
         JLOG(backend.j_.error())
             << "ERROR!!! Cassandra insert error: " << rc << ", "
             << cass_error_desc(rc) << ", retrying ";
-
+        ++requestParams.writeRetries;
         std::shared_ptr<boost::asio::steady_timer> timer =
             std::make_shared<boost::asio::steady_timer>(
                 backend.ioContext_,
@@ -732,7 +748,7 @@ writeCallback(CassFuture* fut, void* cbData)
     }
     else
     {
-        backend.storeDurationUs_ += std::chrono::duration_cast<
+        backend.counters_.writeDurationUs += std::chrono::duration_cast<
             std::chrono::microseconds>(
             std::chrono::steady_clock::now() - requestParams.begin).count();
         --(backend.numRequestsOutstanding_);

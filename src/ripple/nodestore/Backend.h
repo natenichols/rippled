@@ -21,6 +21,8 @@
 #define RIPPLE_NODESTORE_BACKEND_H_INCLUDED
 
 #include <ripple/nodestore/Types.h>
+#include <atomic>
+#include <cstdint>
 
 namespace ripple {
 namespace NodeStore {
@@ -37,6 +39,15 @@ namespace NodeStore {
 class Backend
 {
 public:
+    struct Counters
+    {
+        std::atomic<std::uint64_t> writeDurationUs{0};
+        std::atomic<std::uint64_t> writeRetries {0};
+        std::atomic<std::uint64_t> writesDelayed {0};
+        std::atomic<std::uint64_t> readRetries {0};
+        std::atomic<std::uint64_t> readErrors {0};
+    };
+
     /** Destroy the backend.
 
         All open files are closed and flushed. If there are batched writes
@@ -126,8 +137,8 @@ public:
     virtual int
     fdRequired() const = 0;
 
-    virtual std::uint64_t
-    storeDurationUs() const = 0;
+    virtual Counters const&
+    counters() const = 0;
 
     /** Returns true if the backend uses permanent storage. */
     bool
