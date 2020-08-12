@@ -355,6 +355,9 @@ run(int argc, char** argv)
         "nodetoshard", "Import node store into shards")(
         "replay", "Replay a ledger close.")(
         "start", "Start from a fresh Ledger.")(
+        "startReporting",
+        po::value<std::string>(),
+        "Start reporting from a fresh Ledger.")(
         "vacuum", "VACUUM the transaction db.")(
         "valid", "Consider the initial ledger a valid network ledger.")(
         "validateShards", shardsText.c_str());
@@ -572,7 +575,15 @@ run(int argc, char** argv)
     }
 
     if (vm.count("start"))
+    {
         config->START_UP = Config::FRESH;
+    }
+
+    if (vm.count("startReporting"))
+    {
+        config->START_UP = Config::FRESH;
+        config->START_LEDGER = vm["startReporting"].as<std::string>();
+    }
 
     if (vm.count("import"))
         config->doImport = true;

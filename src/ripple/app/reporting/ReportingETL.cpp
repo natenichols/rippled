@@ -700,6 +700,12 @@ ReportingETL::monitor()
     }
     else
     {
+        if (app_.config().START_UP == Config::FRESH)
+        {
+            Throw<std::runtime_error>(
+                "--startReporting passed via command line but db is already "
+                "populated");
+        }
         JLOG(journal_.info()) << __func__ << " : "
             << "Database already populated. Picking up from the tip of history";
     }
@@ -802,15 +808,7 @@ ReportingETL::setup()
 {
     if (app_.config().START_UP == Config::StartUpType::FRESH && !readOnly_)
     {
-        assert(app_.config().exists("reporting"));
-        Section section = app_.config().section("reporting");
-        std::pair<std::string, bool> startIndexPair =
-            section.find("start_index");
-
-        if (startIndexPair.second)
-        {
-            startSequence_ = std::stoi(startIndexPair.first);
-        }
+        startSequence_ = std::stol(app_.config().START_LEDGER);
     }
     else if (!readOnly_)
     {
