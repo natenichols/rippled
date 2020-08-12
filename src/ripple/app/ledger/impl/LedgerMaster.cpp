@@ -629,6 +629,32 @@ LedgerMaster::getFullValidatedRange(
 bool
 LedgerMaster::getValidatedRange(std::uint32_t& minVal, std::uint32_t& maxVal)
 {
+    if (app_.config().reporting())
+    {
+        std::string res = getCompleteLedgers();
+        try
+        {
+            if (res == "empty" || res == "error" || res.empty())
+                return false;
+            else if (size_t delim = res.find('-'); delim != std::string::npos)
+            {
+                minVal = std::stol(res.substr(0, delim));
+                maxVal = std::stol(res.substr(delim));
+            }
+            else
+            {
+                minVal = maxVal = std::stol(res);
+            }
+            return true;
+        }
+        catch (std::exception& e)
+        {
+            JLOG(m_journal.error())
+                << __func__ << " : "
+                << "Error parsing result of getCompleteLedgers()";
+            return false;
+        }
+    }
     if (!getFullValidatedRange(minVal, maxVal))
         return false;
 
