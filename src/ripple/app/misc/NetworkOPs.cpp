@@ -2743,7 +2743,7 @@ NetworkOPsImp::getServerInfo(bool human, bool admin, bool counters)
 
     if (lpClosed)
         valid = true;
-    else
+    else if (!app_.config().reporting())
         lpClosed = m_ledgerMaster.getClosedLedger();
 
     if (lpClosed)
