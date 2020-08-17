@@ -240,6 +240,7 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
             << "Expected hash = " << strHex(accountHash) << "Actual hash = "
             << strHex(ledger->stateMap().getHash().as_uint256());
         assert(false);
+        throw std::runtime_error("state map hash mismatch");
     }
 
     if (ledger->txMap().getHash().as_uint256() != txHash)
@@ -250,6 +251,7 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
             << "Expected hash = " << strHex(txHash) << "Actual hash = "
             << strHex(ledger->txMap().getHash().as_uint256());
         assert(false);
+        throw std::runtime_error("tx map hash mismatch");
     }
 
     if (ledger->info().hash != ledgerHash)
@@ -260,6 +262,7 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
             << "Expected hash = " << strHex(ledgerHash)
             << "Actual hash = " << strHex(ledger->info().hash);
         assert(false);
+        throw std::runtime_error("ledger hash mismatch");
     }
 
     JLOG(journal_.info()) << __func__ << " : "
@@ -376,10 +379,9 @@ ReportingETL::fetchLedgerDataAndDiff(uint32_t idx)
 
 std::pair<std::shared_ptr<Ledger>, std::vector<AccountTransactionsData>>
 ReportingETL::buildNextLedger(
-    std::shared_ptr<Ledger>& parent,
+    std::shared_ptr<Ledger>& next,
     org::xrpl::rpc::v1::GetLedgerResponse& rawData)
 {
-    std::shared_ptr<Ledger> next;
     JLOG(journal_.info()) << __func__ << " : "
                           << "Beginning ledger update";
 
@@ -390,10 +392,7 @@ ReportingETL::buildNextLedger(
                            << "Deserialized ledger header. "
                            << toString(lgrInfo);
 
-    assert(parent);
-    next = std::make_shared<Ledger>(*parent, NetClock::time_point{});
     next->setLedgerInfo(lgrInfo);
-    assert(next->info().seq == parent->info().seq + 1);
 
     next->stateMap().clearSynching();
     next->txMap().clearSynching();
@@ -547,6 +546,9 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                              &loadQueue,
                              &transformQueue]() {
         beast::setCurrentThreadName("rippled: ReportingETL transform");
+
+        assert(parent);
+        parent = std::make_shared<Ledger>(*parent, NetClock::time_point{});
         while (!writeConflict)
         {
             std::optional<org::xrpl::rpc::v1::GetLedgerResponse> fetchResponse{
@@ -562,7 +564,10 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
 
             auto [next, accountTxData] =
                 buildNextLedger(parent, *fetchResponse);
-            parent = next;
+            // The below line needs to execute before pushing to the queue, in
+            // order to prevent this thread and the loader thread from accessing
+            // the same SHAMap concurrently
+            parent = std::make_shared<Ledger>(*next, NetClock::time_point{});
             loadQueue.push(
                 std::make_pair(std::move(next), std::move(accountTxData)));
         }
