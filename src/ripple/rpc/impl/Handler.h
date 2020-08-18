@@ -77,6 +77,21 @@ template <class T>
 error_code_i
 conditionMet(Condition condition_required, T& context)
 {
+    if(context.app.config().reporting())
+    {
+        if(condition_required == NEEDS_CURRENT_LEDGER)
+        {
+            return rpcNO_CURRENT;
+        }
+        else if(condition_required == NEEDS_CLOSED_LEDGER)
+        {
+            return rpcNO_CLOSED;
+        }
+        else
+        {
+            return rpcSUCCESS;
+        }
+    }
     if ((condition_required & NEEDS_NETWORK_CONNECTION) &&
         (context.netOps.getOperatingMode() < OperatingMode::SYNCING))
     {
@@ -121,8 +136,7 @@ conditionMet(Condition condition_required, T& context)
     }
 
     if ((condition_required & NEEDS_CLOSED_LEDGER) &&
-        !context.ledgerMaster.getClosedLedger() &&
-        !context.app.config().reporting())
+        !context.ledgerMaster.getClosedLedger())
     {
         if (context.apiVersion == 1)
             return rpcNO_CLOSED;
