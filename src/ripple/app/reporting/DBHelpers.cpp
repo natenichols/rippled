@@ -244,12 +244,15 @@ writeToPostgres(
         for (auto& data : accountTxData)
         {
             std::string txHash = strHex(data.txHash);
+            std::string nodestoreHash = strHex(data.nodestoreHash);
             auto idx = data.transactionIndex;
             auto ledgerSeq = data.ledgerSequence;
 
             transactionsCopyBuffer << std::to_string(ledgerSeq) << '\t'
                                    << std::to_string(idx) << '\t' << "\\\\x"
-                                   << txHash << '\n';
+                                   << txHash 
+                                   <<'\t' << "\\\\x" << nodestoreHash
+                                   << '\n';
 
             for (auto& a : data.accounts)
             {

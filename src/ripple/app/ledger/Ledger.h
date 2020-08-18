@@ -249,7 +249,7 @@ public:
     // TxsRawView
     //
 
-    void
+    uint256
     rawTxInsert(
         uint256 const& key,
         std::shared_ptr<Serializer const> const& txn,

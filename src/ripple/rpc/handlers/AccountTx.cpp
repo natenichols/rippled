@@ -301,62 +301,82 @@ processAccountTxStoredProcedureResult(
                 {
                     std::string idHex = t["trans_id"].asString();
                     idHex.erase(0, 2);
+                    std::string nodestoreHashHex =
+                        t["nodestore_hash"].asString();
+                    nodestoreHashHex.erase(0, 2);
                     uint32_t ledgerSequence = t["ledger_seq"].asUInt();
                     if (RPC::isHexTxID(idHex))
                     {
                         // TODO handle binary
                         auto txID = from_hex_text<uint256>(idHex);
-                        auto ledger =
-                            context.ledgerMaster.getLedgerBySeq(ledgerSequence);
-                        if (!ledger)
+                        auto nodestoreHash =
+                            from_hex_text<uint256>(nodestoreHashHex);
+
+                        if (auto obj = context.app.getNodeFamily().db().fetch(
+                                nodestoreHash, ledgerSequence))
                         {
-                            JLOG(context.j.error())
-                                << "doAccountTxStoredProcedure - "
-                                << "could not find ledger with sequence = "
-                                << ledgerSequence;
-                            continue;
-                        }
-                        if (args.binary)
-                        {
-                            auto const item = ledger->txMap().peekItem(txID);
-                            JLOG(context.j.debug())
-                                << "doAccountTxStoredProcedure - "
-                                << "id = " << strHex(txID);
-                            if (item)
-                            {
-                                SerialIter it(item->slice());
-                                Blob txnBlob = it.getVL();
-                                Blob metaBlob = it.getVL();
-                                blobs.push_back(std::make_tuple(
-                                    txnBlob, metaBlob, ledgerSequence));
-                            }
-                            else
+                            auto node = SHAMapAbstractNode::makeFromPrefix(
+                                makeSlice(obj->getData()),
+                                SHAMapHash{nodestoreHash});
+                            auto item =
+                                (static_cast<SHAMapTreeNode*>(node.get()))
+                                    ->peekItem();
+                            if (args.binary)
                             {
                                 JLOG(context.j.debug())
                                     << "doAccountTxStoredProcedure - "
-                                    << "item is null: hash = " << strHex(txID);
+                                    << "id = " << strHex(txID);
+                                if (item)
+                                {
+                                    SerialIter it(item->slice());
+                                    Blob txnBlob = it.getVL();
+                                    Blob metaBlob = it.getVL();
+                                    blobs.push_back(std::make_tuple(
+                                        txnBlob, metaBlob, ledgerSequence));
+                                }
+                                else
+                                {
+                                    JLOG(context.j.debug())
+                                        << "doAccountTxStoredProcedure - "
+                                        << "item is null: hash = "
+                                        << strHex(txID);
+                                }
+                            }
+                            else
+                            {
+                                auto result = deserializeTxPlusMeta(*item);
+
+                                std::pair<
+                                    std::shared_ptr<STTx const>,
+                                    std::shared_ptr<STObject const>>
+                                    pair = {std::move(result.first),
+                                            std::move(result.second)};
+                                auto [txn, meta] = pair;
+                                if (!txn || !meta)
+                                {
+                                    JLOG(context.j.error())
+                                        << "doAccountTxStoredProcedure - "
+                                        << "could not find txn in ledger. id = "
+                                        << strHex(txID)
+                                        << " . ledger sequence = "
+                                        << ledgerSequence;
+                                    continue;
+                                }
+
+                                std::string reason;
+                                auto txnRet = std::make_shared<Transaction>(
+                                    txn, reason, context.app);
+                                auto txMeta = std::make_shared<TxMeta>(
+                                    txID, ledgerSequence, *meta);
+                                transactions.push_back(
+                                    std::make_pair(txnRet, txMeta));
                             }
                         }
                         else
                         {
-                            auto [txn, meta] = ledger->txRead(txID);
-                            if (!txn || !meta)
-                            {
-                                JLOG(context.j.error())
-                                    << "doAccountTxStoredProcedure - "
-                                    << "could not find txn in ledger. id = "
-                                    << strHex(txID) << " . ledger sequence = "
-                                    << ledgerSequence;
-                                continue;
-                            }
-
-                            std::string reason;
-                            auto txnRet = std::make_shared<Transaction>(
-                                txn, reason, context.app);
-                            auto txMeta = std::make_shared<TxMeta>(
-                                txID, ledgerSequence, *meta);
-                            transactions.push_back(
-                                std::make_pair(txnRet, txMeta));
+                            JLOG(context.j.debug())
+                                << __func__ << " : "
+                                << "failed to fetch transaction from db";
                         }
                     }
                     else

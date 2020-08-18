@@ -527,7 +527,7 @@ Ledger::rawReplace(std::shared_ptr<SLE> const& sle)
         LogicError("Ledger::rawReplace: key not found");
 }
 
-void
+uint256
 Ledger::rawTxInsert(
     uint256 const& key,
     std::shared_ptr<Serializer const> const& txn,
@@ -540,8 +540,12 @@ Ledger::rawTxInsert(
     s.addVL(txn->peekData());
     s.addVL(metaData->peekData());
     auto item = std::make_shared<SHAMapItem const>(key, std::move(s));
+    auto hash = sha512Half(
+        HashPrefix::txNode, makeSlice(item->peekData()), item->key());
     if (!txMap().addGiveItem(std::move(item), true, true))
         LogicError("duplicate_tx: " + to_string(key));
+
+    return hash;
 }
 
 bool

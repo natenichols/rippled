@@ -33,7 +33,8 @@ SET default_with_oids = false;
 CREATE TABLE public.transactions (
     ledger_seq bigint NOT NULL,
     transaction_index bigint NOT NULL,
-    trans_id bytea NOT NULL
+    trans_id bytea NOT NULL,
+    nodestore_hash bytea NOT NULL
 );
 
 ALTER TABLE public.transactions ADD CONSTRAINT transactions_pkey PRIMARY KEY (

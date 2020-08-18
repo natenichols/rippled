@@ -39,12 +39,14 @@ struct AccountTransactionsData
     uint32_t ledgerSequence;
     uint32_t transactionIndex;
     uint256 txHash;
+    uint256 nodestoreHash;
 
-    AccountTransactionsData(TxMeta& meta, beast::Journal& j)
+    AccountTransactionsData(TxMeta& meta, uint256 nodestoreHash, beast::Journal& j)
         : accounts(meta.getAffectedAccounts(j))
         , ledgerSequence(meta.getLgrSeq())
         , transactionIndex(meta.getIndex())
         , txHash(meta.getTxID())
+        , nodestoreHash(nodestoreHash)
     {
     }
 

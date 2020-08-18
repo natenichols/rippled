@@ -303,6 +303,9 @@ public:
     static std::variant<uint32_t, std::pair<uint32_t, uint32_t>>
     getLedgerSeq(uint256 const& id, Application& app);
 
+    static std::variant<std::pair<uint256,uint32_t>, std::pair<uint32_t, uint32_t>>
+    getNodestoreHash(uint256 const& id, Application& app);
+
     static pointer
     load(uint256 const& id, Application& app, error_code_i& ec);
 

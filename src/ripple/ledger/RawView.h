@@ -103,7 +103,7 @@ public:
         Closed ledgers must have metadata,
         while open ledgers omit metadata.
     */
-    virtual void
+    virtual uint256
     rawTxInsert(
         ReadView::key_type const& key,
         std::shared_ptr<Serializer const> const& txn,

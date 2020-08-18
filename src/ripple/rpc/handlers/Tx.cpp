@@ -104,13 +104,18 @@ doTxReporting(RPC::Context& context, TxArgs const& args)
     assert(context.app.config().usePostgresLedgerTx());
     TxResult res;
     res.searchedAll = SearchedAll::unknown;
-    auto where = Transaction::getLedgerSeq(args.hash, context.app);
-    uint32_t ledgerSequence = 0;
-    if (auto seq = std::get_if<uint32_t>(&where))
+
+    JLOG(context.j.debug()) << "Fetching from postgres";
+    std::cout << "fetching from postgres" << std::endl;
+    auto where = Transaction::getNodestoreHash(args.hash, context.app);
+    uint256 nodestoreHash;
+    uint32_t ledgerSequence;
+    if (auto dbRes = std::get_if<std::pair<uint256,uint32_t>>(&where))
     {
-        if (seq == 0)
+        if (dbRes->first.isZero())
             return {res, rpcINTERNAL};
-        ledgerSequence = *seq;
+        nodestoreHash = dbRes->first;
+        ledgerSequence = dbRes->second;
     }
     else
     {
@@ -130,23 +135,60 @@ doTxReporting(RPC::Context& context, TxArgs const& args)
         }
         return {res, rpcTXN_NOT_FOUND};
     }
-    auto ledger = context.ledgerMaster.getLedgerBySeq(ledgerSequence);
-    if (!ledger)
-        return {res,
-                {rpcLGR_NOT_FOUND,
-                 "The ledger containing the transaction was not found"}};
 
-    auto [sttx, meta] = ledger->txRead(args.hash);
+    JLOG(context.j.debug())
+        << "Fetching from nodestore. hash = " << strHex(nodestoreHash);
+    bool flatFetch = true;
+    std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>
+        pair;
+    if (flatFetch)
+    {
+        auto start = std::chrono::system_clock::now();
+        if (auto obj = context.app.getNodeFamily().db().fetch(
+                nodestoreHash, ledgerSequence))
+        {
+            auto node = SHAMapAbstractNode::makeFromPrefix(
+                makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
+            auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
+
+            auto result = deserializeTxPlusMeta(*item);
+            pair = {std::move(result.first), std::move(result.second)};
+            JLOG(context.j.debug()) << "Successfully fetched from db";
+        }
+        else
+        {
+            JLOG(context.j.error()) << "Failed to fetch from db";
+        }
+        auto end = std::chrono::system_clock::now();
+        JLOG(context.j.debug()) << "Flat fetch time : " << ((end - start).count() / 1000000000.0);
+    }
+    else
+    {
+
+        auto start = std::chrono::system_clock::now();
+        auto ledger = context.ledgerMaster.getLedgerBySeq(ledgerSequence);
+        if (!ledger)
+            return {res,
+                    {rpcLGR_NOT_FOUND,
+                     "The ledger containing the transaction was not found"}};
+
+        pair = ledger->txRead(args.hash);
+        auto end = std::chrono::system_clock::now();
+        JLOG(context.j.debug()) << "traverse fetch time : " << ((end - start).count() / 1000000000.0);
+    }
+
+    JLOG(context.j.debug()) << "Deserializing data";
+    auto [sttx, meta] = pair;
     if (!sttx || !meta)
     {
         return {res,
                 {rpcTXN_NOT_FOUND,
                  "Transaction was present in account_transactions, but "
-                 "was not found in the ledger"}};
+                 "was not found in the database"}};
     }
     std::string reason;
     res.txn = std::make_shared<Transaction>(sttx, reason, context.app);
-    res.txn->setLedger(ledgerSequence);
+    res.txn->setLedger(0);
     if (args.binary)
     {
         // TODO this is not the most efficient
