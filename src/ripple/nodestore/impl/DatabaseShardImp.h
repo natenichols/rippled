@@ -151,6 +151,20 @@ public:
     std::shared_ptr<NodeObject>
     fetch(uint256 const& hash, std::uint32_t seq) override;
 
+    std::vector<std::shared_ptr<NodeObject>>
+    fetchBatch(std::vector<uint256> const& hashes) override
+    {
+        Throw<std::runtime_error>("pure virtual called");
+        return {};
+    }
+
+    std::vector<std::shared_ptr<NodeObject>>
+    fetchBatch(std::size_t n, void const* const* keys) override
+    {
+        Throw<std::runtime_error>("pure virtual called");
+        return {};
+    }
+
     bool
     asyncFetch(
         uint256 const& hash,

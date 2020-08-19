@@ -128,6 +128,19 @@ public:
     virtual std::shared_ptr<NodeObject>
     fetch(uint256 const& hash, std::uint32_t seq) = 0;
 
+    /** Fetch multiple objects
+        If an object is known to be not in the database, isn't found in the
+        database during the fetch, or failed to load correctly during the fetch,
+        `nullptr` is returned for that object
+
+        @note This can be called concurrently.
+        @param hash The key of the object to retrieve.
+        @param seq The sequence of the ledger where the object is stored.
+        @return The object, or nullptr if it couldn't be retrieved.
+    */
+    virtual std::vector<std::shared_ptr<NodeObject>>
+    fetchBatch(std::vector<uint256> const& hashes) = 0;
+
     /** Fetch an object without waiting.
         If I/O is required to determine whether or not the object is present,
         `false` is returned. Otherwise, `true` is returned and `object` is set
@@ -254,6 +267,12 @@ protected:
         KeyCache<uint256>& nCache,
         bool isAsync);
 
+    std::vector<std::shared_ptr<NodeObject>>
+    doFetchBatch(
+        std::vector<uint256> const& hashes,
+        TaggedCache<uint256, NodeObject>& pCache,
+        KeyCache<uint256>& nCache);
+
     // Called by the public storeLedger function
     bool
     storeLedger(
@@ -300,6 +319,9 @@ private:
 
     virtual std::shared_ptr<NodeObject>
     fetchFrom(uint256 const& hash, std::uint32_t seq) = 0;
+
+    virtual std::vector<std::shared_ptr<NodeObject>>
+    fetchBatch(std::size_t n, void const* const* keys) = 0;
 
     /** Visit every object in the database
         This is usually called during import.

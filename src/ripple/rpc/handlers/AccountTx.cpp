@@ -291,6 +291,10 @@ processAccountTxStoredProcedureResult(
         transactions;
     std::vector<std::tuple<Blob, Blob, uint32_t>> blobs;
 
+    std::vector<uint256> nodestoreHashes;
+    std::vector<uint256> txIDs;
+    std::vector<uint32_t> ledgerSequences;
+
     try
     {
         if (result.isMember("transactions"))
@@ -311,73 +315,9 @@ processAccountTxStoredProcedureResult(
                         auto txID = from_hex_text<uint256>(idHex);
                         auto nodestoreHash =
                             from_hex_text<uint256>(nodestoreHashHex);
-
-                        if (auto obj = context.app.getNodeFamily().db().fetch(
-                                nodestoreHash, ledgerSequence))
-                        {
-                            auto node = SHAMapAbstractNode::makeFromPrefix(
-                                makeSlice(obj->getData()),
-                                SHAMapHash{nodestoreHash});
-                            auto item =
-                                (static_cast<SHAMapTreeNode*>(node.get()))
-                                    ->peekItem();
-                            if (args.binary)
-                            {
-                                JLOG(context.j.debug())
-                                    << "doAccountTxStoredProcedure - "
-                                    << "id = " << strHex(txID);
-                                if (item)
-                                {
-                                    SerialIter it(item->slice());
-                                    Blob txnBlob = it.getVL();
-                                    Blob metaBlob = it.getVL();
-                                    blobs.push_back(std::make_tuple(
-                                        txnBlob, metaBlob, ledgerSequence));
-                                }
-                                else
-                                {
-                                    JLOG(context.j.debug())
-                                        << "doAccountTxStoredProcedure - "
-                                        << "item is null: hash = "
-                                        << strHex(txID);
-                                }
-                            }
-                            else
-                            {
-                                auto result = deserializeTxPlusMeta(*item);
-
-                                std::pair<
-                                    std::shared_ptr<STTx const>,
-                                    std::shared_ptr<STObject const>>
-                                    pair = {std::move(result.first),
-                                            std::move(result.second)};
-                                auto [txn, meta] = pair;
-                                if (!txn || !meta)
-                                {
-                                    JLOG(context.j.error())
-                                        << "doAccountTxStoredProcedure - "
-                                        << "could not find txn in ledger. id = "
-                                        << strHex(txID)
-                                        << " . ledger sequence = "
-                                        << ledgerSequence;
-                                    continue;
-                                }
-
-                                std::string reason;
-                                auto txnRet = std::make_shared<Transaction>(
-                                    txn, reason, context.app);
-                                auto txMeta = std::make_shared<TxMeta>(
-                                    txID, ledgerSequence, *meta);
-                                transactions.push_back(
-                                    std::make_pair(txnRet, txMeta));
-                            }
-                        }
-                        else
-                        {
-                            JLOG(context.j.debug())
-                                << __func__ << " : "
-                                << "failed to fetch transaction from db";
-                        }
+                        nodestoreHashes.push_back(nodestoreHash);
+                        txIDs.push_back(txID);
+                        ledgerSequences.push_back(ledgerSequence);
                     }
                     else
                     {
@@ -389,6 +329,85 @@ processAccountTxStoredProcedureResult(
                 {
                     JLOG(context.j.debug()) << "doAccountTxStoredProcedure"
                                             << "Missing trans_id or ledger_seq";
+                }
+            }
+
+            std::cout << "fetching from nodestore" << std::endl;
+
+            auto start = std::chrono::system_clock::now();
+            auto objs =
+                context.app.getNodeFamily().db().fetchBatch(nodestoreHashes);
+
+            auto end = std::chrono::system_clock::now();
+            JLOG(context.j.debug()) << "account_tx Flat fetch time : "
+                                    << ((end - start).count() / 1000000000.0);
+            assert(objs.size() == nodestoreHashes.size());
+            std::cout << "fetched from nodestore" << std::endl;
+            for (size_t i = 0; i < objs.size(); ++i)
+            {
+                auto& obj = objs[i];
+                auto& txID = txIDs[i];
+                auto ledgerSequence = ledgerSequences[i];
+                auto& nodestoreHash = nodestoreHashes[i];
+                if (obj)
+                {
+                    auto node = SHAMapAbstractNode::makeFromPrefix(
+                        makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
+                    auto item =
+                        (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
+                    if (args.binary)
+                    {
+                        JLOG(context.j.debug())
+                            << "doAccountTxStoredProcedure - "
+                            << "id = " << strHex(txID);
+                        if (item)
+                        {
+                            SerialIter it(item->slice());
+                            Blob txnBlob = it.getVL();
+                            Blob metaBlob = it.getVL();
+                            blobs.push_back(std::make_tuple(
+                                txnBlob, metaBlob, ledgerSequence));
+                        }
+                        else
+                        {
+                            JLOG(context.j.debug())
+                                << "doAccountTxStoredProcedure - "
+                                << "item is null: hash = " << strHex(txID);
+                        }
+                    }
+                    else
+                    {
+                        auto result = deserializeTxPlusMeta(*item);
+
+                        std::pair<
+                            std::shared_ptr<STTx const>,
+                            std::shared_ptr<STObject const>>
+                            pair = {std::move(result.first),
+                                    std::move(result.second)};
+                        auto [txn, meta] = pair;
+                        if (!txn || !meta)
+                        {
+                            JLOG(context.j.error())
+                                << "doAccountTxStoredProcedure - "
+                                << "could not find txn in ledger. id = "
+                                << strHex(txID)
+                                << " . ledger sequence = " << ledgerSequence;
+                            continue;
+                        }
+
+                        std::string reason;
+                        auto txnRet = std::make_shared<Transaction>(
+                            txn, reason, context.app);
+                        auto txMeta = std::make_shared<TxMeta>(
+                            txID, ledgerSequence, *meta);
+                        transactions.push_back(std::make_pair(txnRet, txMeta));
+                    }
+                }
+                else
+                {
+                    JLOG(context.j.debug())
+                        << __func__ << " : "
+                        << "failed to fetch transaction from db";
                 }
             }
 

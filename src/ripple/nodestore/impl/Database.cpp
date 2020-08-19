@@ -235,6 +235,84 @@ Database::doFetch(
     return nObj;
 }
 
+// Perform a fetch and report the time it took
+std::vector<std::shared_ptr<NodeObject>>
+Database::doFetchBatch(
+    std::vector<uint256> const& hashes,
+    TaggedCache<uint256, NodeObject>& pCache,
+    KeyCache<uint256>& nCache)
+{
+    std::vector<std::shared_ptr<NodeObject>> results{hashes.size()};
+    /*
+    FetchReport report;
+    report.isAsync = isAsync;
+    report.wentToDisk = false;
+
+*/
+    using namespace std::chrono;
+    auto const before = steady_clock::now();
+    std::unordered_map<void const*, size_t> indexMap;
+    std::vector<void const*> cacheMisses;
+    for (size_t i = 0; i < hashes.size(); ++i)
+    {
+        auto& hash = hashes[i];
+        // See if the object already exists in the cache
+        auto nObj = pCache.fetch(hash);
+        ++fetchTotalCount_;
+        if (!nObj && !nCache.touch_if_exists(hash))
+        {
+            void const* data = static_cast<void const*>(hash.data());
+            // Try the database(s)
+            // report.wentToDisk = true;
+            indexMap[data] = i;
+            cacheMisses.push_back(data);
+        }
+        else
+        {
+            results[i] = nObj;
+            // It was in the cache.
+            ++fetchHitCount_;
+        }
+    }
+
+    auto dbResults = fetchBatch(cacheMisses.size(), cacheMisses.data());
+
+    for (size_t i = 0; i < dbResults.size(); ++i)
+    {
+        auto nObj = dbResults[i];
+        size_t index = indexMap[cacheMisses[i]];
+        results[index] = nObj;
+        auto& hash = hashes[index];
+
+        if (!nObj)
+        {
+            // Just in case a write occurred
+            nObj = pCache.fetch(hash);
+            if (!nObj)
+                // We give up
+                nCache.insert(hash);
+        }
+        else
+        {
+            // Ensure all threads get the same object
+            pCache.canonicalize_replace_client(hash, nObj);
+
+            // Since this was a 'hard' fetch, we will log it.
+            JLOG(j_.trace()) << "HOS: " << hash << " fetch: in db";
+        }
+    }
+
+    fetchDurationUs_ += std::chrono::duration_cast<std::chrono::microseconds>(
+                            steady_clock::now() - before)
+                            .count();
+    /*
+report.wasFound = static_cast<bool>(nObj);
+report.elapsed = duration_cast<milliseconds>(steady_clock::now() - before);
+scheduler_.onFetch(report);
+*/
+    return results;
+}
+
 bool
 Database::storeLedger(
     Ledger const& srcLedger,
