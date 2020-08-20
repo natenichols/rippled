@@ -377,14 +377,8 @@ processAccountTxStoredProcedureResult(
                     }
                     else
                     {
-                        auto result = deserializeTxPlusMeta(*item);
+                        auto [txn, meta] = deserializeTxPlusMeta(*item);
 
-                        std::pair<
-                            std::shared_ptr<STTx const>,
-                            std::shared_ptr<STObject const>>
-                            pair = {std::move(result.first),
-                                    std::move(result.second)};
-                        auto [txn, meta] = pair;
                         if (!txn || !meta)
                         {
                             JLOG(context.j.error())

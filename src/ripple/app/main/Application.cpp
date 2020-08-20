@@ -1843,7 +1843,7 @@ ApplicationImp::getLastFullLedger()
         {
             stream << "Failed on ledger";
             Json::Value p;
-            addJson(p, {*ledger, LedgerFill::full});
+            addJson(p, {*ledger, nullptr, LedgerFill::full});
             stream << p;
         }
 

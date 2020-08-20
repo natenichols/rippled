@@ -780,7 +780,7 @@ Ledger::assertSane(beast::Journal ledgerJ) const
         return true;
     }
 
-    Json::Value j = getJson(*this);
+    Json::Value j = getJson({*this, {}});
 
     j[jss::accountTreeHash] = to_string(info_.accountHash);
     j[jss::transTreeHash] = to_string(info_.txHash);
@@ -896,7 +896,7 @@ saveValidatedLedger(
 
     if (!ledger->info().accountHash.isNonZero())
     {
-        JLOG(j.fatal()) << "AH is zero: " << getJson(*ledger);
+        JLOG(j.fatal()) << "AH is zero: " << getJson({*ledger, {}});
         assert(false);
     }
 

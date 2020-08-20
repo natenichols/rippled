@@ -103,7 +103,8 @@ doLedgerRequest(RPC::JsonContext& context)
                     Json::Value jvResult = RPC::make_error(
                         rpcLGR_NOT_FOUND,
                         "acquiring ledger containing requested index");
-                    jvResult[jss::acquiring] = getJson(LedgerFill(*il));
+                    jvResult[jss::acquiring] =
+                        getJson(LedgerFill(*il, &context));
                     return jvResult;
                 }
 
@@ -140,7 +141,7 @@ doLedgerRequest(RPC::JsonContext& context)
         // We already had the entire ledger verified/acquired
         Json::Value jvResult;
         jvResult[jss::ledger_index] = ledger->info().seq;
-        addJson(jvResult, {*ledger, 0});
+        addJson(jvResult, {*ledger, &context, 0});
         return jvResult;
     }
 

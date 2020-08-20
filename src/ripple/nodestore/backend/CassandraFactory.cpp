@@ -816,6 +816,10 @@ readCallback(CassFuture* fut, void* cbData)
     }
     else
     {
+        auto finish = [&requestParams]() {
+            ++(requestParams.numFinished);
+            requestParams.cv.notify_all();
+        };
         std::cout << "rc ok" << std::endl;
         CassResult const* res = cass_future_get_result(fut);
 
@@ -823,6 +827,10 @@ readCallback(CassFuture* fut, void* cbData)
         if (!row)
         {
             cass_result_free(res);
+            JLOG(requestParams.backend.j_.error())
+                << "Cassandra fetch get row error : " << rc << ", "
+                << cass_error_desc(rc);
+            finish();
             return;
         }
         cass_byte_t const* buf;
@@ -832,12 +840,12 @@ readCallback(CassFuture* fut, void* cbData)
         {
             cass_result_free(res);
             JLOG(requestParams.backend.j_.error())
-                << "Cassandra fetch result error: " << rc << ", "
+                << "Cassandra fetch get bytes error : " << rc << ", "
                 << cass_error_desc(rc);
             ++requestParams.backend.counters_.readErrors;
+            finish();
             return;
         }
-
         nudb::detail::buffer bf;
         std::pair<void const*, std::size_t> uncompressed =
             nodeobject_decompress(buf, bufSize, bf);
@@ -848,14 +856,14 @@ readCallback(CassFuture* fut, void* cbData)
         if (!decoded.wasOk())
         {
             JLOG(requestParams.backend.j_.error())
-                << "Cassandra error decoding result: " << rc << ", "
+                << "Cassandra fetch error decoding result: " << rc << ", "
                 << cass_error_desc(rc);
             ++requestParams.backend.counters_.readErrors;
+            finish();
             return;
         }
         requestParams.results[requestParams.index] = decoded.createObject();
-        ++(requestParams.numFinished);
-        requestParams.cv.notify_all();
+        finish();
     }
     std::cout << "leaving callback" << std::endl;
 }
