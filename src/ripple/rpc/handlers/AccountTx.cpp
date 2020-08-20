@@ -404,6 +404,7 @@ processAccountTxStoredProcedureResult(
                         << "failed to fetch transaction from db";
                 }
             }
+            JLOG(context.j.debug()) << __func__ << " : processed db results";
 
             if (result.isMember("marker"))
             {
@@ -531,7 +532,7 @@ doAccountTxStoredProcedure(AccountTxArgs const& args, RPC::Context& context)
 
     char const* resultStr = PQgetvalue(res.get(), 0, 0);
 
-    JLOG(context.j.debug()) << "doAccountTxStoredProcedure - "
+    JLOG(context.j.trace()) << "doAccountTxStoredProcedure - "
                             << "postgres result = " << resultStr;
 
     // TODO this is probably not the most efficient way to do this
@@ -592,6 +593,7 @@ doAccountTxHelp(RPC::Context& context, AccountTxArgs const& args)
     }
 
     result.limit = args.limit;
+    JLOG(context.j.debug()) << __func__ << " : finished";
 
     return {result, rpcSUCCESS};
 }
@@ -790,6 +792,8 @@ populateJsonResponse(
         if (result.usedPostgres)
             response["used_postgres"] = true;
     }
+
+    JLOG(context.j.debug()) << __func__ << " : finished";
     return response;
 }
 
@@ -856,6 +860,7 @@ doAccountTxJson(RPC::JsonContext& context)
     }
 
     auto res = doAccountTxHelp(context, args);
+    JLOG(context.j.debug()) << __func__ << " populating response";
     return populateJsonResponse(res, args, context);
 }
 

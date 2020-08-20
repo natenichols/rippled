@@ -601,7 +601,7 @@ public:
     std::vector<std::shared_ptr<NodeObject>>
     fetchBatch(std::size_t n, void const* const* keys) override
     {
-        std::cout << "fetching " << n << " records";
+        JLOG(j_.debug()) << "Fetching " << n << " records from Cassandra";
         std::atomic_uint32_t numFinished = 0;
         std::condition_variable cv;
         std::mutex mtx;
@@ -617,7 +617,8 @@ public:
 
         std::unique_lock<std::mutex> lck(mtx);
         cv.wait(lck, [&numFinished, &n]() { return numFinished == n; });
-        std::cout << "returned from wait" << std::endl;
+
+        JLOG(j_.debug()) << "Fetched " << n << " records from Cassandra";
         return results;
     }
 
@@ -802,7 +803,6 @@ public:
 void
 readCallback(CassFuture* fut, void* cbData)
 {
-    std::cout << "in read callback" << std::endl;
 
     CassandraBackend::ReadCallbackData& requestParams =
         *static_cast<CassandraBackend::ReadCallbackData*>(cbData);
@@ -811,7 +811,6 @@ readCallback(CassFuture* fut, void* cbData)
 
     if (rc != CASS_OK)
     {
-        std::cout << "rc not ok" << std::endl;
         requestParams.backend.read(requestParams);
     }
     else
@@ -820,7 +819,6 @@ readCallback(CassFuture* fut, void* cbData)
             ++(requestParams.numFinished);
             requestParams.cv.notify_all();
         };
-        std::cout << "rc ok" << std::endl;
         CassResult const* res = cass_future_get_result(fut);
 
         CassRow const* row = cass_result_first_row(res);
@@ -865,7 +863,6 @@ readCallback(CassFuture* fut, void* cbData)
         requestParams.results[requestParams.index] = decoded.createObject();
         finish();
     }
-    std::cout << "leaving callback" << std::endl;
 }
 void
 writeCallback(CassFuture* fut, void* cbData)
