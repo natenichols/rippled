@@ -191,7 +191,13 @@ callMethod(
         auto v =
             context.app.getJobQueue().makeLoadEvent(jtGENERIC, "cmd:" + name);
 
+        auto start = std::chrono::system_clock::now();
         auto ret = method(context, result);
+        auto end = std::chrono::system_clock::now();
+
+        JLOG(context.j.debug())
+            << "RPC call " << name << " completed in "
+            << ((end - start).count() / 1000000000.0) << "seconds";
         perfLog.rpcFinish(name, curId);
         return ret;
     }
