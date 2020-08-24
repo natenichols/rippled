@@ -849,13 +849,6 @@ ReportingETL::ReportingETL(Application& app, Stoppable& parent)
 
         JLOG(journal_.debug()) << "Parsing config info";
 
-        std::pair<std::string, bool> ro = section.find("read_only");
-        if (ro.second)
-        {
-            readOnly_ = ro.first == "true";
-            app_.config().setReportingReadOnly(readOnly_);
-        }
-
         auto& vals = section.values();
         for (auto& v : vals)
         {
@@ -887,8 +880,10 @@ ReportingETL::ReportingETL(Application& app, Stoppable& parent)
                 ipPair.first, wsPortPair.first, grpcPortPair.first);
         }
 
+        readOnly_ = app_.config().reportingReadOnly();
+
         // don't need to do any more work if we are in read only mode
-        if (app_.config().reportingReadOnly())
+        if (readOnly_)
             return;
 
         std::pair<std::string, bool> flushInterval =

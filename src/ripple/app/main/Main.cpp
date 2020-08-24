@@ -338,6 +338,7 @@ run(int argc, char** argv)
         po::value<std::size_t>(),
         "Override the minimum validation quorum.")(
         "reporting,r", "Run in reporting mode")(
+        "reportingReadOnly", "Run in read-only reporting mode")(
         "silent", "No output to the console after startup.")(
         "standalone,a", "Run with no peers.")("verbose,v", "Verbose logging.")(
         "version", "Display the build version.");
@@ -583,6 +584,11 @@ run(int argc, char** argv)
     {
         config->START_UP = Config::FRESH;
         config->START_LEDGER = vm["startReporting"].as<std::string>();
+    }
+
+    if (vm.count("reportingReadOnly"))
+    {
+        config->setReportingReadOnly(true);
     }
 
     if (vm.count("import"))
