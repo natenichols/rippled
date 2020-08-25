@@ -63,24 +63,59 @@ bulkWriteToTable(
         // Initiate COPY operation
 
     auto res = pgQuery->queryVariant({copyQuery, {}}, conn);
-    assert(std::holds_alternative<pg_result_type>(res));
-    assert(
-        PQresultStatus(std::get<pg_result_type>(res).get()) == PGRES_COPY_IN);
+    if (!std::holds_alternative<pg_result_type>(res) ||
+        PQresultStatus(std::get<pg_result_type>(res).get()) != PGRES_COPY_IN)
+    {
+        std::stringstream msg;
+        msg << "bulkWriteToTable : Postgres insert error: ";
+        msg << PQerrorMessage(conn->getConn());
+        Throw<std::runtime_error>(msg.str());
+    }
 
     auto rawRes =
         PQputCopyData(conn->getConn(), bufString.c_str(), bufString.size());
-    assert(rawRes != 0 && rawRes != -1);
+    if(rawRes == 0 || rawRes == -1)
+    {
+        std::stringstream msg;
+        msg << "bulkWriteToTable : Postgres insert error: ";
+        msg << PQerrorMessage(conn->getConn());
+        msg << " : rawRes = " << rawRes;
+        Throw<std::runtime_error>(msg.str());
+    }
     auto pqResult = PQgetResult(conn->getConn());
     auto pqResultStatus = PQresultStatus(pqResult);
-    assert(pqResultStatus == PGRES_COPY_IN);
+   
+    if(pqResultStatus != PGRES_COPY_IN)
+    {
+        std::stringstream msg;
+        msg << "bulkWriteToTable : Postgres insert error: ";
+        msg << PQerrorMessage(conn->getConn());
+        msg << " : result status = ";
+        msg << pqResultStatus;
+        Throw<std::runtime_error>(msg.str());
+    }
 
     PQclear(pqResult);
 
     rawRes = PQputCopyEnd(conn->getConn(), nullptr);
-    assert(rawRes != 0 && rawRes != -1);
+    if(rawRes == 0 || rawRes == -1)
+    {
+        std::stringstream msg;
+        msg << "bulkWriteToTable : Postgres insert error: ";
+        msg << PQerrorMessage(conn->getConn());
+        msg << " : rawRes = " << rawRes;
+        Throw<std::runtime_error>(msg.str());
+    }
     pqResult = PQgetResult(conn->getConn());
     pqResultStatus = PQresultStatus(pqResult);
-    assert(pqResultStatus == PGRES_COMMAND_OK);
+    if(pqResultStatus != PGRES_COMMAND_OK)
+    {
+        std::stringstream msg;
+        msg << "bulkWriteToTable : Postgres insert error: ";
+        msg << PQerrorMessage(conn->getConn());
+        msg << " : result status = " << pqResultStatus;
+        Throw<std::runtime_error>(msg.str());
+    }
     PQclear(pqResult);
     //        while (!etl.isStopping())
     while (true)
@@ -90,7 +125,14 @@ bulkWriteToTable(
             break;
         pqResultStatus = PQresultStatus(pqResult);
     }
-    assert(pqResultStatus == PGRES_COMMAND_OK);
+    if(pqResultStatus != PGRES_COMMAND_OK)
+    {
+        std::stringstream msg;
+        msg << "bulkWriteToTable : Postgres insert error: ";
+        msg << PQerrorMessage(conn->getConn());
+        msg << " : result status = " << pqResultStatus;
+        Throw<std::runtime_error>(msg.str());
+    }
 }
 
 bool
@@ -214,16 +256,20 @@ writeToPostgres(
     {
         JLOG(j.fatal()) << __func__ << " : "
                         << "app_.pgPool is null";
-        assert(false);
+        Throw<std::runtime_error>("pgPool is null");
     }
     std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(pgPool);
     std::shared_ptr<Pg> conn;
 
     auto res = pg->queryVariant({"BEGIN", {}}, conn);
-    assert(std::holds_alternative<pg_result_type>(res));
-    assert(
-        PQresultStatus(std::get<pg_result_type>(res).get()) ==
-        PGRES_COMMAND_OK);
+    if (!std::holds_alternative<pg_result_type>(res) ||
+        PQresultStatus(std::get<pg_result_type>(res).get()) != PGRES_COMMAND_OK)
+    {
+        std::stringstream msg;
+        msg << "bulkWriteToTable : Postgres insert error: ";
+        msg << PQerrorMessage(conn->getConn());
+        Throw<std::runtime_error>(msg.str());
+    }
 
     // Writing to the ledgers db fails if the ledger already exists in the db.
     // In this situation, the ETL process has detected there is another writer,
@@ -281,10 +327,15 @@ writeToPostgres(
     }
 
     res = pg->queryVariant({"COMMIT", {}}, conn);
-    assert(std::holds_alternative<pg_result_type>(res));
-    assert(
-        PQresultStatus(std::get<pg_result_type>(res).get()) ==
-        PGRES_COMMAND_OK);
+    if(!std::holds_alternative<pg_result_type>(res) ||
+        PQresultStatus(std::get<pg_result_type>(res).get()) !=
+        PGRES_COMMAND_OK)
+    {
+        std::stringstream msg;
+        msg << "bulkWriteToTable : Postgres insert error: ";
+        msg << PQerrorMessage(conn->getConn());
+        Throw<std::runtime_error>(msg.str());
+    }
 
     pgPool->checkin(conn);
 

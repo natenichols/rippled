@@ -235,6 +235,10 @@ Ledger::Ledger(
     {
         loaded = false;
         JLOG(j.warn()) << "Don't have transaction root for ledger" << info_.seq;
+        if(config.reporting())
+        {
+            Throw<std::runtime_error>("Missing tx map root for ledger");
+        }
     }
 
     if (info_.accountHash.isNonZero() &&
@@ -242,6 +246,10 @@ Ledger::Ledger(
     {
         loaded = false;
         JLOG(j.warn()) << "Don't have state data root for ledger" << info_.seq;
+        if (config.reporting())
+        {
+            Throw<std::runtime_error>("Missing state map root for ledger");
+        }
     }
 
     txMap_->setImmutable();

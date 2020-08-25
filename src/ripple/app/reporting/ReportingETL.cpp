@@ -239,8 +239,7 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
             << "State map hash does not match. "
             << "Expected hash = " << strHex(accountHash) << "Actual hash = "
             << strHex(ledger->stateMap().getHash().as_uint256());
-        assert(false);
-        throw std::runtime_error("state map hash mismatch");
+        Throw<std::runtime_error>("state map hash mismatch");
     }
 
     if (ledger->txMap().getHash().as_uint256() != txHash)
@@ -250,8 +249,7 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
             << "Tx map hash does not match. "
             << "Expected hash = " << strHex(txHash) << "Actual hash = "
             << strHex(ledger->txMap().getHash().as_uint256());
-        assert(false);
-        throw std::runtime_error("tx map hash mismatch");
+        Throw<std::runtime_error>("tx map hash mismatch");
     }
 
     if (ledger->info().hash != ledgerHash)
@@ -261,8 +259,7 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
             << "Ledger hash does not match. "
             << "Expected hash = " << strHex(ledgerHash)
             << "Actual hash = " << strHex(ledger->info().hash);
-        assert(false);
-        throw std::runtime_error("ledger hash mismatch");
+        Throw<std::runtime_error>("ledger hash mismatch");
     }
 
     JLOG(journal_.info()) << __func__ << " : "
@@ -494,7 +491,10 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
 
     std::shared_ptr<Ledger> parent = std::const_pointer_cast<Ledger>(
             app_.getLedgerMaster().getLedgerBySeq(startSequence-1));
-    assert(parent);
+    if(!parent)
+    {
+        Throw<std::runtime_error>("runETLPipeline: parent ledger is null");
+    }
 
     std::atomic_bool writeConflict = false;
     std::optional<uint32_t> lastPublishedSequence;
