@@ -18,6 +18,12 @@ endif ()
 find_package(PostgreSQL REQUIRED)
 message("postgresql include,libs ${PostgreSQL_INCLUDE_DIRS} ${PostgreSQL_LIBRARIES}")
 
+if (reporting)
+  find_library(cassandra NAMES cassandra cassandra-cpp-driver REQUIRED)
+  message(${cassandra})
+  find_path(cassandra_includes NAMES cassandra.h REQUIRED)
+endif()
+
 #[===============================[
     beast/legacy FILES:
     TODO: review these sources for removal or replacement
@@ -131,6 +137,10 @@ target_include_directories (xrpl_core
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/beast/extras>
     $<INSTALL_INTERFACE:include>)
 
+if (reporting)
+  target_include_directories (xrpl_core PUBLIC ${cassandra_includes})
+endif()
+
 target_compile_definitions(xrpl_core
   PUBLIC
     BOOST_ASIO_USE_TS_EXECUTOR_AS_DEFAULT
@@ -138,18 +148,19 @@ target_compile_definitions(xrpl_core
 target_compile_options (xrpl_core
   PUBLIC
     $<$<BOOL:${is_gcc}>:-Wno-maybe-uninitialized>)
-target_link_directories(xrpl_core PUBLIC /usr/local/lib/x86_64-linux-gnu)
 target_link_libraries (xrpl_core
   PUBLIC
-    PostgreSQL::PostgreSQL
+    ${PostgreSQL_LIBRARIES}
     OpenSSL::Crypto
     Ripple::boost
     Ripple::syslibs
     NIH::secp256k1
     NIH::ed25519-donna
     date::date
-    Ripple::opts
-    cassandra)
+    Ripple::opts)
+if (reporting)
+    target_link_libraries (xrpl_core PUBLIC ${cassandra})
+endif()
 #[=================================[
    main/core headers installation
 #]=================================]
@@ -986,6 +997,10 @@ exclude_if_included (rippled)
 # be exluded or run differently in CI environment
 if (is_ci)
   target_compile_definitions(rippled PRIVATE RIPPLED_RUNNING_IN_CI)
+endif ()
+
+if (reporting)
+    target_compile_definitions(rippled PRIVATE RIPPLED_REPORTING)
 endif ()
 
 if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)

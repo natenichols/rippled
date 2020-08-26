@@ -154,7 +154,7 @@ Pg::query(char const* command, std::size_t nParams, char const* const* values)
         }
     }
 
-    return ret;
+    return std::move(ret);
 }
 
 static pg_formatted_params

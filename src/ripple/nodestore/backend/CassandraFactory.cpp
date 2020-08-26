@@ -17,6 +17,8 @@
 */
 //==============================================================================
 
+#ifdef RIPPLED_REPORTING
+
 #include <cassandra.h>
 #include <libpq-fe.h>
 
@@ -949,3 +951,4 @@ static CassandraFactory cassandraFactory;
 
 }  // namespace NodeStore
 }  // namespace ripple
+#endif
