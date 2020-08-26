@@ -17,7 +17,12 @@ with the newly validated ledger from one of the ETL sources. The fetch is
 performed via a gRPC request ("GetLedger"). This request returns the ledger
 header, transactions+metadata blobs, and every ledger object
 added/modified/deleted as part of this ledger. ETL then writes all of this data
-to the databases, and moves on to the next ledger.
+to the databases, and moves on to the next ledger. ETL does not apply
+transactions, but rather extracts the already computed results of those
+transactions (all of the added/modified/deleted SHAMap leaf nodes of the state
+tree). The new SHAMap inner nodes are computed by the ETL writer; this computation mainly
+involves manipulating child pointers and recomputing hashes, logic which is
+buried inside of SHAMap.
 
 If the database is entirely empty, ETL must download an entire ledger in full
 (as opposed to just the diff, as described above). This download is done via the
