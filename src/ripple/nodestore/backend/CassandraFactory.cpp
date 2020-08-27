@@ -38,6 +38,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -100,7 +101,7 @@ private:
     std::optional<boost::asio::io_context::work> work_;
     std::thread ioThread_;
     std::atomic_uint32_t numRequestsOutstanding_ = 0;
-    uint32_t maxRequestsOutstanding = 1000000;
+    uint32_t maxRequestsOutstanding = 10000000;
 
     std::mutex throttleMutex_;
     std::condition_variable throttleCv_;
@@ -572,8 +573,7 @@ public:
     {
         CassandraBackend& backend;
         const void* const key;
-        size_t index;
-        std::vector<std::shared_ptr<NodeObject>>& results;
+        std::shared_ptr<NodeObject>& result;
         std::condition_variable& cv;
 
         std::atomic_uint32_t& numFinished;
@@ -582,15 +582,13 @@ public:
         ReadCallbackData(
             CassandraBackend& backend,
             const void* const key,
-            size_t index,
-            std::vector<std::shared_ptr<NodeObject>>& results,
+            std::shared_ptr<NodeObject>& result,
             std::condition_variable& cv,
             std::atomic_uint32_t& numFinished,
             size_t batchSize)
             : backend(backend)
             , key(key)
-            , index(index)
-            , results(results)
+            , result(result)
             , cv(cv)
             , numFinished(numFinished)
             , batchSize(batchSize)
@@ -612,7 +610,7 @@ public:
         for (size_t i = 0; i < n; ++i)
         {
             cbs[i] = std::make_shared<ReadCallbackData>(
-                *this, keys[i], i, results, cv, numFinished, n);
+                *this, keys[i], results[i], cv, numFinished, n);
             read(*cbs[i]);
         }
         assert(results.size() == cbs.size());
@@ -647,7 +645,7 @@ public:
         cass_future_free(fut);
     }
 
-    struct CallbackData
+    struct WriteCallbackData
     {
         CassandraBackend* backend;
         // The shared pointer to the node object must exist until it's
@@ -660,14 +658,16 @@ public:
         // The data is stored in this buffer. The void* in the above member
         // is a pointer into the below buffer
         nudb::detail::buffer bf;
-        std::atomic<std::uint64_t>& writeRetries;
+        std::atomic<std::uint64_t>& totalWriteRetries;
 
-        CallbackData(CassandraBackend* f,
+        uint32_t currentRetries = 0;
+
+        WriteCallbackData(CassandraBackend* f,
                      std::shared_ptr<NodeObject> const& nobj,
                      std::atomic<std::uint64_t>& retries)
             : backend(f)
             , no(nobj)
-            , writeRetries(retries)
+            , totalWriteRetries(retries)
         {
             e.prepare(no);
 
@@ -677,13 +677,20 @@ public:
     };
 
     void
-    write(CallbackData& data, bool isRetry)
+    write(WriteCallbackData& data, bool isRetry)
     {
         {
+            // We limit the total number of concurrent inflight writes. This is
+            // a client side throttling to prevent overloading the database.
+            // This is mostly useful when the very first ledger is being written
+            // in full, which is several millions records. On sufficiently large
+            // Cassandra clusters, this throttling is not needed; the default
+            // value of maxRequestsOutstanding is 10 million, which is more 
+            // records than are present in any single ledger
             std::unique_lock<std::mutex> lck(throttleMutex_);
             if (!isRetry && numRequestsOutstanding_ > maxRequestsOutstanding)
             {
-                JLOG(j_.warn()) << __func__ << " : "
+                JLOG(j_.trace()) << __func__ << " : "
                                 << "Max outstanding requests reached. "
                                 << "Waiting for other requests to finish";
                 ++counters_.writesDelayed;
@@ -734,7 +741,7 @@ public:
     void
     store(std::shared_ptr<NodeObject> const& no) override
     {
-        CallbackData* data = new CallbackData(this, no, counters_.writeRetries);
+        WriteCallbackData* data = new WriteCallbackData(this, no, counters_.writeRetries);
 
         ++numRequestsOutstanding_;
         write(*data, false);
@@ -813,6 +820,13 @@ readCallback(CassFuture* fut, void* cbData)
 
     if (rc != CASS_OK)
     {
+        JLOG(requestParams.backend.j_.warn()) << "Cassandra fetch error : "
+            << rc << " : " << cass_error_desc(rc) << " - retrying";
+        // Retry right away. The only time the cluster should ever be overloaded
+        // is when the very first ledger is being written in full (millions of
+        // writes at once), during which no reads should be occurring. If reads
+        // are timing out, the code/architecture should be modified to handle
+        // greater read load, as opposed to just exponential backoff
         requestParams.backend.read(requestParams);
     }
     else
@@ -862,15 +876,15 @@ readCallback(CassFuture* fut, void* cbData)
             finish();
             return;
         }
-        requestParams.results[requestParams.index] = decoded.createObject();
+        requestParams.result = decoded.createObject();
         finish();
     }
 }
 void
 writeCallback(CassFuture* fut, void* cbData)
 {
-    CassandraBackend::CallbackData& requestParams =
-        *static_cast<CassandraBackend::CallbackData*>(cbData);
+    CassandraBackend::WriteCallbackData& requestParams =
+        *static_cast<CassandraBackend::WriteCallbackData*>(cbData);
     CassandraBackend& backend = *requestParams.backend;
     auto rc = cass_future_error_code(fut);
     if (rc != CASS_OK)
@@ -878,12 +892,15 @@ writeCallback(CassFuture* fut, void* cbData)
         JLOG(backend.j_.error())
             << "ERROR!!! Cassandra insert error: " << rc << ", "
             << cass_error_desc(rc) << ", retrying ";
-        ++requestParams.writeRetries;
+        ++requestParams.totalWriteRetries;
+        // exponential backoff with a max wait of 2^10 ms (about 1 second)
+        auto wait = std::chrono::milliseconds(
+            lround(std::pow(2, std::min(10u, requestParams.currentRetries))));
+        ++requestParams.currentRetries;
         std::shared_ptr<boost::asio::steady_timer> timer =
             std::make_shared<boost::asio::steady_timer>(
                 backend.ioContext_,
-                std::chrono::steady_clock::now() +
-                    std::chrono::milliseconds(100));
+                    std::chrono::steady_clock::now() + wait);
         timer->async_wait([timer, &requestParams, &backend](
                               const boost::system::error_code& error) {
             backend.write(requestParams, true);
