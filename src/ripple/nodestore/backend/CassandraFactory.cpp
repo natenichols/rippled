@@ -479,6 +479,7 @@ public:
     Status
     fetch(void const* key, std::shared_ptr<NodeObject>* pno) override
     {
+        JLOG(j_.trace()) << "Fetching from cassandra";
         CassStatement* statement = cass_prepared_bind(select_);
         cass_statement_set_consistency(statement, CASS_CONSISTENCY_QUORUM);
         CassError rc = cass_statement_bind_bytes(
@@ -601,7 +602,7 @@ public:
     std::vector<std::shared_ptr<NodeObject>>
     fetchBatch(std::size_t n, void const* const* keys) override
     {
-        JLOG(j_.debug()) << "Fetching " << n << " records from Cassandra";
+        JLOG(j_.trace()) << "Fetching " << n << " records from Cassandra";
         std::atomic_uint32_t numFinished = 0;
         std::condition_variable cv;
         std::mutex mtx;
@@ -618,7 +619,7 @@ public:
         std::unique_lock<std::mutex> lck(mtx);
         cv.wait(lck, [&numFinished, &n]() { return numFinished == n; });
 
-        JLOG(j_.debug()) << "Fetched " << n << " records from Cassandra";
+        JLOG(j_.trace()) << "Fetched " << n << " records from Cassandra";
         return results;
     }
 
@@ -741,6 +742,8 @@ public:
     void
     store(std::shared_ptr<NodeObject> const& no) override
     {
+
+        JLOG(j_.trace()) << "Writing to cassandra";
         WriteCallbackData* data = new WriteCallbackData(this, no, counters_.writeRetries);
 
         ++numRequestsOutstanding_;
@@ -833,7 +836,8 @@ readCallback(CassFuture* fut, void* cbData)
     {
         auto finish = [&requestParams]() {
             ++(requestParams.numFinished);
-            requestParams.cv.notify_all();
+            if(requestParams.numFinished == requestParams.batchSize)
+                requestParams.cv.notify_all();
         };
         CassResult const* res = cass_future_get_result(fut);
 
