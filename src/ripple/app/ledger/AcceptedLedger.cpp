@@ -25,14 +25,34 @@ namespace ripple {
 
 AcceptedLedger::AcceptedLedger(
     std::shared_ptr<ReadView const> const& ledger,
-    AccountIDCache const& accountCache,
-    Logs& logs)
+    Application& app)
     : mLedger(ledger)
 {
-    for (auto const& item : ledger->txs)
+
+    if(app.config().reporting())
     {
-        insert(std::make_shared<AcceptedLedgerTx>(
-            ledger, item.first, item.second, accountCache, logs));
+        auto txns = flatFetchTransactions(*ledger, app);
+        for (auto const& item : txns)
+        {
+            insert(std::make_shared<AcceptedLedgerTx>(
+                ledger,
+                item.first,
+                item.second,
+                app.accountIDCache(),
+                app.logs()));
+        }
+    }
+    else
+    {
+        for (auto const& item : ledger->txs)
+        {
+            insert(std::make_shared<AcceptedLedgerTx>(
+                ledger,
+                item.first,
+                item.second,
+                app.accountIDCache(),
+                app.logs()));
+        }
     }
 }
 

@@ -3004,7 +3004,7 @@ NetworkOPsImp::pubLedger(std::shared_ptr<ReadView const> const& lpAccepted)
     if (!alpAccepted)
     {
         alpAccepted = std::make_shared<AcceptedLedger>(
-            lpAccepted, app_.accountIDCache(), app_.logs());
+            lpAccepted, app_);
         app_.getAcceptedLedgerCache().canonicalize_replace_client(
             lpAccepted->info().hash, alpAccepted);
     }

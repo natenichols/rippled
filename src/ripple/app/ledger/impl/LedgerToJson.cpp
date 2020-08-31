@@ -177,53 +177,13 @@ fillJsonTx(Object& json, LedgerFill const& fill)
 
     try
     {
-        if (fill.context && fill.context->app.config().usePostgresLedgerTx())
+        if (fill.context && fill.context->app.config().reporting())
         {
-            std::vector<uint256> nodestoreHashes;
-            std::vector<uint256> txIDs;
-            std::vector<uint32_t> ledgerSequences;
-            std::string query =
-                "select ledger_seq, trans_id, nodestore_hash from transactions "
-                "where ledger_seq = " +
-                std::to_string(fill.ledger.info().seq);
-            auto res = PgQuery(fill.context->app.pgPool()).query(query.c_str());
-            assert(res);
-
-            for (size_t i = 0; i < PQntuples(res.get()); ++i)
+            auto sttxs = flatFetchTransactions(fill.ledger, fill.context->app);
+            for (auto& i : sttxs)
             {
-                assert(PQnfields(res.get()) == 3);
-
-                char const* txID = PQgetvalue(res.get(), i, 1);
-                char const* nodestoreHash = PQgetvalue(res.get(), i, 2);
-
-                txIDs.push_back(from_hex_text<uint256>(txID + 2));
-                nodestoreHashes.push_back(
-                    from_hex_text<uint256>(nodestoreHash + 2));
-            }
-
-            auto start = std::chrono::system_clock::now();
-            auto objs = fill.context->app.getNodeFamily().db().fetchBatch(
-                nodestoreHashes);
-
-            auto end = std::chrono::system_clock::now();
-            JLOG(fill.context->j.debug())
-                << "ledger Flat fetch time : "
-                << ((end - start).count() / 1000000000.0);
-            assert(objs.size() == nodestoreHashes.size());
-            for (size_t i = 0; i < objs.size(); ++i)
-            {
-                uint256& nodestoreHash = nodestoreHashes[i];
-                auto& obj = objs[i];
-                if (obj)
-                {
-                    auto node = SHAMapAbstractNode::makeFromPrefix(
-                        makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
-                    auto item =
-                        (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
-                    auto [txn, meta] = deserializeTxPlusMeta(*item);
-                    txns.append(
-                        fillJsonTx(fill, bBinary, bExpanded, txn, meta));
-                }
+                txns.append(
+                    fillJsonTx(fill, bBinary, bExpanded, i.first, i.second));
             }
         }
         else

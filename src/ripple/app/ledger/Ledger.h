@@ -479,6 +479,11 @@ getHashesByIndex(std::uint32_t minSeq, std::uint32_t maxSeq, Application& app);
 extern LedgerInfo
 getLatestLedger(Application& app);
 
+extern
+std::vector<std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
+flatFetchTransactions(ReadView const& ledger, Application& app);
+
+
 /** Deserialize a SHAMapItem containing a single STTx
 
     Throw:

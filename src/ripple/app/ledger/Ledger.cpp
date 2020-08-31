@@ -935,7 +935,7 @@ saveValidatedLedger(
         if (!aLedger)
         {
             aLedger = std::make_shared<AcceptedLedger>(
-                ledger, app.accountIDCache(), app.logs());
+                ledger, app);
             app.getAcceptedLedgerCache().canonicalize_replace_client(
                 ledger->info().hash, aLedger);
         }
@@ -1651,4 +1651,61 @@ getHashesByIndex(std::uint32_t minSeq, std::uint32_t maxSeq, Application& app)
     return ret;
 }
 
+std::vector<std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
+flatFetchTransactions(ReadView const& ledger, Application& app)
+{
+
+    if(!app.config().reporting() || !app.config().usePostgresLedgerTx())
+    {
+        assert(false);
+        return {};
+    }
+    std::vector<
+        std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
+        txns;
+
+    std::vector<uint256> nodestoreHashes;
+    std::vector<uint256> txIDs;
+    std::vector<uint32_t> ledgerSequences;
+    std::string query =
+        "select ledger_seq, trans_id, nodestore_hash from transactions "
+        "where ledger_seq = " +
+        std::to_string(ledger.info().seq);
+    auto res = PgQuery(app.pgPool()).query(query.c_str());
+    assert(res);
+
+    for (size_t i = 0; i < PQntuples(res.get()); ++i)
+    {
+        assert(PQnfields(res.get()) == 3);
+
+        char const* txID = PQgetvalue(res.get(), i, 1);
+        char const* nodestoreHash = PQgetvalue(res.get(), i, 2);
+
+        txIDs.push_back(from_hex_text<uint256>(txID + 2));
+        nodestoreHashes.push_back(from_hex_text<uint256>(nodestoreHash + 2));
+    }
+
+    auto start = std::chrono::system_clock::now();
+    auto objs =
+        app.getNodeFamily().db().fetchBatch(nodestoreHashes);
+
+    auto end = std::chrono::system_clock::now();
+    JLOG(app.journal("Ledger").debug()) << "ledger Flat fetch time : "
+                                  << ((end - start).count() / 1000000000.0);
+    assert(objs.size() == nodestoreHashes.size());
+    for (size_t i = 0; i < objs.size(); ++i)
+    {
+        uint256& nodestoreHash = nodestoreHashes[i];
+        auto& obj = objs[i];
+        if (obj)
+        {
+            auto node = SHAMapAbstractNode::makeFromPrefix(
+                makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
+            auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
+            auto txnPlusMeta = deserializeTxPlusMeta(*item);
+            txns.push_back(std::move(txnPlusMeta));
+        }
+    }
+    return txns;
+}
 }  // namespace ripple
