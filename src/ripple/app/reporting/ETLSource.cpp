@@ -32,12 +32,11 @@ namespace ripple {
 ETLSource::ETLSource(
     std::string ip,
     std::string wsPort,
-    ReportingETL& etl,
-    boost::asio::io_context& ioc)
+    ReportingETL& etl)
     : ip_(ip)
     , wsPort_(wsPort)
     , etl_(etl)
-    , ioc_(ioc)
+    , ioc_(etl.getApplication().getIOService())
     , ws_(std::make_unique<
           boost::beast::websocket::stream<boost::beast::tcp_stream>>(
           boost::asio::make_strand(ioc_)))
@@ -53,13 +52,12 @@ ETLSource::ETLSource(
     std::string ip,
     std::string wsPort,
     std::string grpcPort,
-    ReportingETL& etl,
-    boost::asio::io_context& ioc)
+    ReportingETL& etl)
     : ip_(ip)
     , wsPort_(wsPort)
     , grpcPort_(grpcPort)
     , etl_(etl)
-    , ioc_(ioc)
+    , ioc_(etl.getApplication().getIOService())
     , ws_(std::make_unique<
           boost::beast::websocket::stream<boost::beast::tcp_stream>>(
           boost::asio::make_strand(ioc_)))
@@ -615,7 +613,7 @@ ETLLoadBalancer::add(
     std::string& grpcPort)
 {
     std::unique_ptr<ETLSource> ptr =
-        std::make_unique<ETLSource>(host, websocketPort, grpcPort, etl_, ioc_);
+        std::make_unique<ETLSource>(host, websocketPort, grpcPort, etl_);
     sources_.push_back(std::move(ptr));
     JLOG(journal_.info()) << __func__ << " : added etl source - "
                           << sources_.back()->toString();
@@ -625,7 +623,7 @@ void
 ETLLoadBalancer::add(std::string& host, std::string& websocketPort)
 {
     std::unique_ptr<ETLSource> ptr =
-        std::make_unique<ETLSource>(host, websocketPort, etl_, ioc_);
+        std::make_unique<ETLSource>(host, websocketPort, etl_);
     sources_.push_back(std::move(ptr));
     JLOG(journal_.info()) << __func__ << " : added etl source - "
                           << sources_.back()->toString();
@@ -913,10 +911,6 @@ ETLLoadBalancer::start()
 {
     for (auto& source : sources_)
         source->start();
-    worker_ = std::thread([this]() {
-        beast::setCurrentThreadName("ETLLoadBalancer");
-        ioc_.run();
-    });
 }
 
 void
@@ -924,8 +918,6 @@ ETLLoadBalancer::stop()
 {
     for (auto& source : sources_)
         source->stop();
-    if (worker_.joinable())
-        worker_.join();
 }
 
 }  // namespace ripple

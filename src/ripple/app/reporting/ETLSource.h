@@ -102,15 +102,13 @@ struct ETLSource
     ETLSource(
         std::string ip,
         std::string wsPort,
-        ReportingETL& etl,
-        boost::asio::io_context& ioc);
+        ReportingETL& etl);
 
     ETLSource(
         std::string ip,
         std::string wsPort,
         std::string grpcPort,
-        ReportingETL& etl,
-        boost::asio::io_context& ioc);
+        ReportingETL& etl);
 
     bool
     hasLedger(uint32_t sequence)
@@ -270,13 +268,10 @@ class ETLLoadBalancer
 private:
     ReportingETL& etl_;
 
-    boost::asio::io_context ioc_;
-
     beast::Journal journal_;
 
     std::vector<std::unique_ptr<ETLSource>> sources_;
 
-    std::thread worker_;
 
 public:
     ETLLoadBalancer(ReportingETL& etl);
