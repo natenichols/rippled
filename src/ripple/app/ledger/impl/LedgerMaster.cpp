@@ -52,6 +52,7 @@
 #include <ripple/resource/Fees.h>
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <limits>
 #include <chrono>
 #include <memory>
@@ -2263,10 +2264,26 @@ LedgerMaster::getFetchPackCacheSize() const
 boost::optional<LedgerIndex>
 LedgerMaster::minSqlSeq()
 {
-    boost::optional<LedgerIndex> seq;
-    auto db = app_.getLedgerDB().checkoutDb();
-    *db << "SELECT MIN(LedgerSeq) FROM Ledgers", soci::into(seq);
-    return seq;
+    if (app_.config().usePostgresLedgerTx())
+    {
+        auto seq = PgQuery(app_.pgPool()).query("SELECT min_ledger()");
+        if (!seq)
+        {
+            JLOG(m_journal.error())
+                << "Error querying minimum ledger sequence.";
+            return {};
+        }
+        if (PQgetisnull(seq.get(), 0, 0))
+            return {};
+        return std::atol(PQgetvalue(seq.get(), 0, 0));
+    }
+    else
+    {
+        boost::optional<LedgerIndex> seq;
+        auto db = app_.getLedgerDB().checkoutDb();
+        *db << "SELECT MIN(LedgerSeq) FROM Ledgers", soci::into(seq);
+        return seq;
+    }
 }
 
 }  // namespace ripple

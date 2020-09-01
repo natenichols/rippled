@@ -226,7 +226,12 @@ PgPool::PgPool(Section const& network_db_config, beast::Journal const j) : j_(j)
     if (! conn)
         Throw<std::runtime_error>("Can't create DB connection.");
     if (PQstatus(conn.get()) != CONNECTION_OK)
-        Throw<std::runtime_error>("Initial DB connection failed.");
+    {
+        std::stringstream ss;
+        ss << "Initial DB connection failed: "
+           << PQerrorMessage(conn.get());
+        Throw<std::runtime_error>(ss.str());
+    }
 
     int const sockfd = PQsocket(conn.get());
     if (sockfd == -1)
@@ -239,9 +244,6 @@ PgPool::PgPool(Section const& network_db_config, beast::Journal const j) : j_(j)
         Throw<std::system_error>(errno, std::generic_category(),
             "Can't get server address info.");
     }
-    // Ensure connection is not over domain socket.
-    if (addr.ss_family != AF_INET && addr.ss_family != AF_INET6)
-        Throw<std::runtime_error>("DB connection must be either IPv4 or IPv6.");
 
     // Set "port" and "hostaddr" if we're caching it.
     bool const remember_ip = get(network_db_config, "remember_ip", true);
