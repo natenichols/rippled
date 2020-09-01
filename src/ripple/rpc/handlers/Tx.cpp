@@ -99,11 +99,23 @@ struct TxArgs
 };
 
 std::pair<TxResult, RPC::Status>
-doTxReporting(RPC::Context& context, TxArgs const& args)
+doTxPostgres(RPC::Context& context, TxArgs const& args)
 {
     assert(context.app.config().usePostgresLedgerTx());
     TxResult res;
     res.searchedAll = SearchedAll::unknown;
+
+    // check cache
+    if (!context.app.config().reporting())
+    {
+        auto cachedTxn =
+            context.app.getMasterTransaction().fetch_from_cache(args.hash);
+        if(cachedTxn && cachedTxn->getLedger() == 0)
+        {
+            res.txn = cachedTxn;
+            return {res, rpcSUCCESS};
+        }
+    }
 
     JLOG(context.j.debug()) << "Fetching from postgres";
     Transaction::Locator locator = Transaction::locate(args.hash, context.app);
@@ -208,7 +220,7 @@ std::pair<TxResult, RPC::Status>
 doTxHelp(RPC::Context& context, TxArgs const& args)
 {
     if (context.app.config().usePostgresLedgerTx())
-        return doTxReporting(context, args);
+        return doTxPostgres(context, args);
     TxResult result;
 
     ClosedInterval<uint32_t> range;
