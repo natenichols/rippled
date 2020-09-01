@@ -133,10 +133,10 @@ public:
         database during the fetch, or failed to load correctly during the fetch,
         `nullptr` is returned for that object
 
-        @note This can be called concurrently.
-        @param hash The key of the object to retrieve.
-        @param seq The sequence of the ledger where the object is stored.
-        @return The object, or nullptr if it couldn't be retrieved.
+        @note This can be called concurrently. 
+        @note Results are returned in the same order as the hashes param
+        @param hashes The keys of the objects to retrieve.
+        @return The objects. Each not found object is a nullptr
     */
     virtual std::vector<std::shared_ptr<NodeObject>>
     fetchBatch(std::vector<uint256> const& hashes) = 0;

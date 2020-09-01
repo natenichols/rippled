@@ -173,10 +173,9 @@ Transaction::getLedgerSeq(uint256 const& id, Application& app)
     }
 }
 
-std::variant<std::pair<uint256,uint32_t>, std::pair<uint32_t, uint32_t>>
-Transaction::getNodestoreHash(uint256 const& id, Application& app)
+Transaction::Locator
+Transaction::locate(uint256 const& id, Application& app)
 {
-
     auto baseCmd = boost::format(
         R"(SELECT tx('%s');)");
 
@@ -185,15 +184,23 @@ Transaction::getNodestoreHash(uint256 const& id, Application& app)
 
     auto res = PgQuery(app.pgPool()).query(sql.data());
 
+    assert(res);
     assert(PQntuples(res.get()) == 1);
-    // TODO this should be two
     assert(PQnfields(res.get()) == 1);
-
     assert(
         PQresultStatus(res.get()) == PGRES_TUPLES_OK ||
         PQresultStatus(res.get()) == PGRES_SINGLE_TUPLE);
-    if (PQgetisnull(res.get(), 0, 0))
+
+    if (!res ||
+        (PQresultStatus(res.get()) != PGRES_TUPLES_OK &&
+         PQresultStatus(res.get()) != PGRES_SINGLE_TUPLE) ||
+        PQgetisnull(res.get(), 0, 0))
+    {
+        JLOG(app.journal("Transaction::Locator").error())
+            << "Bad postgres result"
+            << (res ? PQresultErrorMessage(res.get()) : "res is null");
         return {};
+    }
 
     char const* resultStr = PQgetvalue(res.get(), 0, 0);
 
@@ -207,22 +214,23 @@ Transaction::getNodestoreHash(uint256 const& id, Application& app)
     bool success = reader.parse(str, v);
     if (success)
     {
-        if (v.isMember("nodestore_hash") && v.isMember("ledger_seq"))
+        if(v.isMember("nodestore_hash"))
         {
-            return std::make_pair(
-                from_hex_text<uint256>(
-                    v["nodestore_hash"].asString().substr(2)),
-                v["ledger_seq"].asUInt());
+            uint256 nodestoreHash = from_hex_text<uint256>(
+                v["nodestore_hash"].asString().substr(2));
+            if(nodestoreHash.isNonZero())
+                return {nodestoreHash};
         }
-        else
+        if (v.isMember("ledger_seq"))
         {
-            return std::make_pair(v["min_seq"].asUInt(), v["max_seq"].asUInt());
+            return {v["ledger_seq"].asUInt()};
+        }
+        if(v.isMember("min_seq") && v.isMember("max_seq"))
+        {
+            return {std::make_pair(v["min_seq"].asUInt(), v["max_seq"].asUInt())};
         }
     }
-    else
-    {
-        return {};
-    }
+    return {};
 }
 
 boost::variant<Transaction::pointer, bool>

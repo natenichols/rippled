@@ -303,8 +303,35 @@ public:
     static std::variant<uint32_t, std::pair<uint32_t, uint32_t>>
     getLedgerSeq(uint256 const& id, Application& app);
 
-    static std::variant<std::pair<uint256,uint32_t>, std::pair<uint32_t, uint32_t>>
-    getNodestoreHash(uint256 const& id, Application& app);
+    struct Locator
+    {
+        std::variant<
+            std::monostate,
+            uint256,
+            uint32_t,
+            std::pair<uint32_t, uint32_t>>
+            locator;
+
+        uint256* getNodestoreHash()
+        {
+            return std::get_if<uint256>(&locator);
+        }
+
+        uint32_t* getLedgerSequence()
+        {
+            return std::get_if<uint32_t>(&locator);
+        }
+
+        std::pair<uint32_t, uint32_t>* getLedgerRange()
+        {
+            return std::get_if<std::pair<uint32_t, uint32_t>>(&locator);
+        }
+
+
+    };
+
+    static Locator
+    locate(uint256 const& id, Application& app);
 
     static pointer
     load(uint256 const& id, Application& app, error_code_i& ec);

@@ -276,6 +276,118 @@ getLedgerRange(
     return LedgerRange{uLedgerMin, uLedgerMax};
 }
 
+std::variant<
+    std::vector<std::shared_ptr<const SHAMapItem>>,
+    std::vector<std::pair<std::shared_ptr<const STTx>, std::shared_ptr<const STObject>>>>
+fetchTransactions(
+    RPC::Context& context,
+    std::vector<uint256>& txIDs,
+    std::vector<uint32_t>& ledgerSequences,
+    bool binary)
+{
+
+    std::vector<std::shared_ptr<const SHAMapItem>> shamapItems;
+    std::vector<
+        std::pair<std::shared_ptr<const STTx>, std::shared_ptr<const STObject>>>
+        deserializedTxns;
+
+    for (size_t i = 0; i < txIDs.size(); ++i)
+    {
+        auto ledger = context.ledgerMaster.getLedgerBySeq(ledgerSequences[i]);
+        if (!ledger)
+        {
+            JLOG(context.j.error())
+                << __func__
+                << " could not find ledger with sequence = " << ledgerSequences[i];
+
+            if (binary)
+                shamapItems.push_back(nullptr);
+            else
+                deserializedTxns.push_back(std::make_pair(nullptr, nullptr));
+            continue;
+        }
+
+        if (binary)
+        {
+            shamapItems.push_back(ledger->txMap().peekItem(txIDs[i]));
+        }
+        else
+        {
+            deserializedTxns.push_back(ledger->txRead(txIDs[i]));
+        }
+    }
+
+    assert(shamapItems.size() == 0 || deserializedTxns.size() == 0);
+    if(binary)
+       return shamapItems;
+    else
+        return deserializedTxns;
+
+}
+std::variant<
+    std::vector<std::shared_ptr< const SHAMapItem>>,
+    std::vector<std::pair<std::shared_ptr<const STTx>, std::shared_ptr<const STObject>>>>
+flatFetchTransactions(
+    RPC::Context& context,
+    std::vector<uint256>& nodestoreHashes,
+    bool binary)
+{
+
+    std::vector<std::shared_ptr<const SHAMapItem>> shamapItems;
+    std::vector<
+        std::pair<std::shared_ptr<const STTx>, std::shared_ptr<const STObject>>>
+        deserializedTransactions;
+
+
+
+    auto start = std::chrono::system_clock::now();
+    auto objs = context.app.getNodeFamily().db().fetchBatch(nodestoreHashes);
+
+
+    auto end = std::chrono::system_clock::now();
+    JLOG(context.j.debug()) << "account_tx Flat fetch time : "
+                            << ((end - start).count() / 1000000000.0);
+    assert(objs.size() == nodestoreHashes.size());
+    for (size_t i = 0; i < objs.size(); ++i)
+    {
+        auto& obj = objs[i];
+        auto& nodestoreHash = nodestoreHashes[i];
+        if (obj)
+        {
+            auto node = SHAMapAbstractNode::makeFromPrefix(
+                makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
+            auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
+            if (binary)
+            {
+                shamapItems.push_back(item);
+            }
+            else
+            {
+                if(!item)
+                    deserializedTransactions.push_back(std::make_pair(nullptr, nullptr));
+                else
+                    deserializedTransactions.push_back(deserializeTxPlusMeta(*item));
+            }
+        }
+        else
+        {
+            JLOG(context.j.debug()) << __func__ << " : "
+                                    << "failed to fetch transaction from db.";
+            if(binary)
+                shamapItems.push_back(nullptr);
+            else
+                deserializedTransactions.push_back(std::make_pair(nullptr, nullptr));
+        }
+    }
+
+    assert(shamapItems.size() == 0 || deserializedTransactions.size() == 0);
+
+    if(binary)
+        return shamapItems;
+    else
+        return deserializedTransactions;
+}
+
 std::pair<AccountTxResult, RPC::Status>
 processAccountTxStoredProcedureResult(
     AccountTxArgs const& args,
@@ -286,125 +398,137 @@ processAccountTxStoredProcedureResult(
     ret.usedPostgres = true;
     ret.limit = args.limit;
 
-    // TODO don't create both vectors
-    std::vector<std::pair<std::shared_ptr<Transaction>, std::shared_ptr<TxMeta>>>
-        transactions;
-    std::vector<std::tuple<Blob, Blob, uint32_t>> blobs;
-
-    std::vector<uint256> nodestoreHashes;
-    std::vector<uint256> txIDs;
-    std::vector<uint32_t> ledgerSequences;
 
     try
     {
         if (result.isMember("transactions"))
         {
+            std::vector<uint256> nodestoreHashes;
+            std::vector<uint256> txIDs;
+            std::vector<uint32_t> ledgerSequences;
             for (auto& t : result["transactions"])
             {
                 if (t.isMember("trans_id") && t.isMember("ledger_seq"))
                 {
                     std::string idHex = t["trans_id"].asString();
                     idHex.erase(0, 2);
-                    std::string nodestoreHashHex =
-                        t["nodestore_hash"].asString();
-                    nodestoreHashHex.erase(0, 2);
                     uint32_t ledgerSequence = t["ledger_seq"].asUInt();
+
                     if (RPC::isHexTxID(idHex))
                     {
-                        // TODO handle binary
                         auto txID = from_hex_text<uint256>(idHex);
-                        auto nodestoreHash =
-                            from_hex_text<uint256>(nodestoreHashHex);
-                        nodestoreHashes.push_back(nodestoreHash);
                         txIDs.push_back(txID);
                         ledgerSequences.push_back(ledgerSequence);
                     }
                     else
                     {
-                        JLOG(context.j.debug()) << "doAccountTxStoredProcedure"
+                        JLOG(context.j.debug()) << __func__ << " : "
                                                 << "bad tx hash : " << idHex;
+                        continue;
+                    }
+                    if (t.isMember("nodestore_hash"))
+                    {
+                        std::string nodestoreHashHex =
+                            t["nodestore_hash"].asString();
+                        nodestoreHashHex.erase(0, 2);
+                        uint256 nodestoreHash =
+                            from_hex_text<uint256>(nodestoreHashHex);
+                        if (nodestoreHash.isNonZero())
+                            nodestoreHashes.push_back(nodestoreHash);
                     }
                 }
                 else
                 {
-                    JLOG(context.j.debug()) << "doAccountTxStoredProcedure"
+                    JLOG(context.j.debug()) << __func__ << " : "
                                             << "Missing trans_id or ledger_seq";
                 }
             }
 
-            std::cout << "fetching from nodestore" << std::endl;
-
-            auto start = std::chrono::system_clock::now();
-            auto objs =
-                context.app.getNodeFamily().db().fetchBatch(nodestoreHashes);
-
-            auto end = std::chrono::system_clock::now();
-            JLOG(context.j.debug()) << "account_tx Flat fetch time : "
-                                    << ((end - start).count() / 1000000000.0);
-            assert(objs.size() == nodestoreHashes.size());
-            std::cout << "fetched from nodestore" << std::endl;
-            for (size_t i = 0; i < objs.size(); ++i)
+            std::variant<
+                std::vector<std::shared_ptr<const SHAMapItem>>,
+                std::vector<std::pair<
+                    std::shared_ptr<const STTx>,
+                    std::shared_ptr<const STObject>>>>
+                fetchResults;
+            assert(txIDs.size() == ledgerSequences.size());
+            if(nodestoreHashes.size() > 0)
             {
-                auto& obj = objs[i];
-                auto& txID = txIDs[i];
-                auto ledgerSequence = ledgerSequences[i];
-                auto& nodestoreHash = nodestoreHashes[i];
-                if (obj)
+                if(nodestoreHashes.size() != txIDs.size())
                 {
-                    auto node = SHAMapAbstractNode::makeFromPrefix(
-                        makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
-                    auto item =
-                        (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
-                    if (args.binary)
+                    assert(false);
+                    Throw<std::runtime_error>(
+                        "account_tx : nodestore hash returned for some txns "
+                        "but not all");
+                }
+                fetchResults = flatFetchTransactions(context, nodestoreHashes, args.binary);
+            }
+            else
+                fetchResults = fetchTransactions(context, txIDs, ledgerSequences, args.binary);
+
+            if(args.binary)
+                ret.transactions = TxnsDataBinary();
+            else
+                ret.transactions = TxnsData();
+
+            if (auto shamapItems =
+                    std::get_if<std::vector<std::shared_ptr<const SHAMapItem>>>(
+                        &fetchResults))
+            {
+                assert(args.binary);
+                auto& transactions = std::get<TxnsDataBinary>(ret.transactions);
+
+                for(size_t i = 0; i < txIDs.size(); ++i)
+                {
+                    auto& item = (*shamapItems)[i];
+                    if (item)
                     {
-                        JLOG(context.j.debug())
-                            << "doAccountTxStoredProcedure - "
-                            << "id = " << strHex(txID);
-                        if (item)
-                        {
-                            SerialIter it(item->slice());
-                            Blob txnBlob = it.getVL();
-                            Blob metaBlob = it.getVL();
-                            blobs.push_back(std::make_tuple(
-                                txnBlob, metaBlob, ledgerSequence));
-                        }
-                        else
-                        {
-                            JLOG(context.j.debug())
-                                << "doAccountTxStoredProcedure - "
-                                << "item is null: hash = " << strHex(txID);
-                        }
+                        SerialIter it(item->slice());
+                        Blob txnBlob = it.getVL();
+                        Blob metaBlob = it.getVL();
+                        transactions.push_back(
+                            std::make_tuple(txnBlob, metaBlob, ledgerSequences[i]));
                     }
                     else
                     {
-                        auto [txn, meta] = deserializeTxPlusMeta(*item);
-
-                        if (!txn || !meta)
-                        {
-                            JLOG(context.j.error())
-                                << "doAccountTxStoredProcedure - "
-                                << "could not find txn in ledger. id = "
-                                << strHex(txID)
-                                << " . ledger sequence = " << ledgerSequence;
-                            continue;
-                        }
-
-                        std::string reason;
-                        auto txnRet = std::make_shared<Transaction>(
-                            txn, reason, context.app);
-                        auto txMeta = std::make_shared<TxMeta>(
-                            txID, ledgerSequence, *meta);
-                        transactions.push_back(std::make_pair(txnRet, txMeta));
+                        assert(false);
+                        Throw<std::runtime_error>("account_tx : missing data");
                     }
                 }
-                else
+            }
+            else
+            {
+                assert(!args.binary);
+                auto& transactions = std::get<TxnsData>(ret.transactions);
+                auto& deserializedTxns =
+                    std::get < std::vector<std::pair<
+                                   std::shared_ptr<const STTx>,
+                                   std::shared_ptr<const STObject>>>>(fetchResults);
+
+                for(size_t i = 0; i < txIDs.size(); ++i)
                 {
-                    JLOG(context.j.debug())
-                        << __func__ << " : "
-                        << "failed to fetch transaction from db";
+                    auto& [txn, meta] = deserializedTxns[i];
+                    
+                    if (!txn || !meta)
+                    {
+                        JLOG(context.j.error())
+                            << "doAccountTxStoredProcedure - "
+                            << "could not find txn in ledger. id = "
+                            << strHex(txIDs[i])
+                            << " . ledger sequence = " << ledgerSequences[i];
+                        assert(false);
+                        Throw<std::runtime_error>("account_tx : missing data");
+                    }
+
+                    std::string reason;
+                    auto txnRet =
+                        std::make_shared<Transaction>(txn, reason, context.app);
+                    auto txMeta =
+                        std::make_shared<TxMeta>(txIDs[i], ledgerSequences[i], *meta);
+                    transactions.push_back(std::make_pair(txnRet, txMeta));
                 }
             }
-            JLOG(context.j.debug()) << __func__ << " : processed db results";
+
+            JLOG(context.j.trace()) << __func__ << " : processed db results";
 
             if (result.isMember("marker"))
             {
@@ -418,20 +542,12 @@ processAccountTxStoredProcedureResult(
             assert(result.isMember("ledger_index_max"));
             ret.ledgerRange = {result["ledger_index_min"].asUInt(),
                                result["ledger_index_max"].asUInt()};
-            if (args.binary)
-            {
-                ret.transactions = std::move(blobs);
-            }
-            else
-            {
-                ret.transactions = std::move(transactions);
-            }
             return {ret, rpcSUCCESS};
         }
         else if (result.isMember("error"))
         {
-            JLOG(context.j.debug()) << "doAccountTxStoredProcedure"
-                                    << "Error";
+            JLOG(context.j.debug()) << __func__ << " : error = "
+                << result["error"].asString();
             return {ret,
                     RPC::Status{rpcINVALID_PARAMS, result["error"].asString()}};
         }
@@ -443,7 +559,7 @@ processAccountTxStoredProcedureResult(
     }
     catch (std::exception& e)
     {
-        JLOG(context.j.debug()) << "doAccountTxStoredProcedure"
+        JLOG(context.j.debug()) << __func__ << " : "
                                 << "Caught exception : " << e.what();
         return {ret, rpcINTERNAL};
     }
@@ -452,8 +568,6 @@ processAccountTxStoredProcedureResult(
 std::pair<AccountTxResult, RPC::Status>
 doAccountTxStoredProcedure(AccountTxArgs const& args, RPC::Context& context)
 {
-
-    JLOG(context.j.debug()) << "doAccountTxStoredProcedure - starting";
 
     pg_params dbParams;
 

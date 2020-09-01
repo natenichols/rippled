@@ -106,49 +106,21 @@ doTxReporting(RPC::Context& context, TxArgs const& args)
     res.searchedAll = SearchedAll::unknown;
 
     JLOG(context.j.debug()) << "Fetching from postgres";
-    std::cout << "fetching from postgres" << std::endl;
-    auto where = Transaction::getNodestoreHash(args.hash, context.app);
-    uint256 nodestoreHash;
-    uint32_t ledgerSequence;
-    if (auto dbRes = std::get_if<std::pair<uint256,uint32_t>>(&where))
-    {
-        if (dbRes->first.isZero())
-            return {res, rpcINTERNAL};
-        nodestoreHash = dbRes->first;
-        ledgerSequence = dbRes->second;
-    }
-    else
-    {
-        auto& range = std::get<std::pair<uint32_t, uint32_t>>(where);
-        if (args.ledgerRange)
-        {
-            auto min = args.ledgerRange->first;
-            auto max = args.ledgerRange->second;
-            if (min >= range.first && max <= range.second)
-            {
-                res.searchedAll = SearchedAll::yes;
-            }
-            else
-            {
-                res.searchedAll = SearchedAll::no;
-            }
-        }
-        return {res, rpcTXN_NOT_FOUND};
-    }
+    Transaction::Locator locator = Transaction::locate(args.hash, context.app);
 
-    JLOG(context.j.debug())
-        << "Fetching from nodestore. hash = " << strHex(nodestoreHash);
-    bool flatFetch = true;
     std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>
         pair;
-    if (flatFetch)
+    // database returned the nodestore hash. Fetch the txn directly from the
+    // nodestore. Don't traverse the transaction SHAMap
+    if (uint256* nodestoreHash = locator.getNodestoreHash())
     {
         auto start = std::chrono::system_clock::now();
-        if (auto obj = context.app.getNodeFamily().db().fetch(
-                nodestoreHash, ledgerSequence))
+        // The second argument of fetch is ignored when not using shards
+        if (auto obj =
+                context.app.getNodeFamily().db().fetch(*nodestoreHash, 0))
         {
             auto node = SHAMapAbstractNode::makeFromPrefix(
-                makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
+                makeSlice(obj->getData()), SHAMapHash{*nodestoreHash});
             auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
 
             auto result = deserializeTxPlusMeta(*item);
@@ -160,35 +132,64 @@ doTxReporting(RPC::Context& context, TxArgs const& args)
             JLOG(context.j.error()) << "Failed to fetch from db";
         }
         auto end = std::chrono::system_clock::now();
-        JLOG(context.j.debug()) << "Flat fetch time : " << ((end - start).count() / 1000000000.0);
+        JLOG(context.j.debug())
+            << "Flat fetch time : " << ((end - start).count() / 1000000000.0);
     }
-    else
+    // database returned ledger sequence instead of nodestore hash. Get the
+    // ledger then traverse the transaction SHAMap to get the txn
+    else if (uint32_t* ledgerSequence = locator.getLedgerSequence())
     {
-
         auto start = std::chrono::system_clock::now();
-        auto ledger = context.ledgerMaster.getLedgerBySeq(ledgerSequence);
+        auto ledger = context.ledgerMaster.getLedgerBySeq(*ledgerSequence);
         if (!ledger)
-            return {res,
-                    {rpcLGR_NOT_FOUND,
-                     "The ledger containing the transaction was not found"}};
+            return {
+                res,
+                {rpcLGR_NOT_FOUND,
+                 "The ledger containing the transaction was not found"}};
 
         pair = ledger->txRead(args.hash);
         auto end = std::chrono::system_clock::now();
-        JLOG(context.j.debug()) << "traverse fetch time : " << ((end - start).count() / 1000000000.0);
+        JLOG(context.j.debug()) << "traverse fetch time : "
+                                << ((end - start).count() / 1000000000.0);
+    }
+    // database did not find the transaction, and returned the ledger range
+    // that was searched
+    else if (std::pair<uint32_t, uint32_t>* range = locator.getLedgerRange())
+    {
+        if (args.ledgerRange)
+        {
+            auto min = args.ledgerRange->first;
+            auto max = args.ledgerRange->second;
+            if (min >= range->first && max <= range->second)
+            {
+                res.searchedAll = SearchedAll::yes;
+            }
+            else
+            {
+                res.searchedAll = SearchedAll::no;
+            }
+        }
+        return {res, rpcTXN_NOT_FOUND};
+    }
+    // database didn't return anything. This shouldn't happen
+    else
+    {
+        assert(false);
+        return {res, rpcINTERNAL};
     }
 
     JLOG(context.j.debug()) << "Deserializing data";
-    auto [sttx, meta] = pair;
+    auto& [sttx, meta] = pair;
     if (!sttx || !meta)
     {
-        return {res,
-                {rpcTXN_NOT_FOUND,
-                 "Transaction was present in account_transactions, but "
-                 "was not found in the database"}};
+        return {
+            res,
+            {rpcTXN_NOT_FOUND,
+             "Transaction was present in account_transactions, but "
+             "was not found in the database"}};
     }
     std::string reason;
     res.txn = std::make_shared<Transaction>(sttx, reason, context.app);
-    res.txn->setLedger(0);
     if (args.binary)
     {
         // TODO this is not the most efficient
@@ -197,7 +198,7 @@ doTxReporting(RPC::Context& context, TxArgs const& args)
     }
     else
     {
-        res.meta = std::make_shared<TxMeta>(args.hash, ledgerSequence, *meta);
+        res.meta = std::make_shared<TxMeta>(args.hash, res.txn->getLedger(), *meta);
     }
     res.validated = true;
     return {res, rpcSUCCESS};
