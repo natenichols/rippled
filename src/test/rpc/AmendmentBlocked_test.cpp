@@ -231,12 +231,10 @@ class AmendmentBlocked_test : public beast::unit_test::suite
         set_tx[jss::Sequence] = env.seq(bob);
         sign_for[jss::tx_json] = set_tx;
         jr = env.rpc("json", "sign_for", to_string(sign_for))[jss::result];
-        BEAST_EXPECT(jr[jss::status] == "success");
-        ms_req[jss::tx_json] = jr[jss::tx_json];
-        jr = env.rpc(
-            "json", "submit_multisigned", to_string(ms_req))[jss::result];
+
         BEAST_EXPECT(
             jr.isMember(jss::error) && jr[jss::error] == "amendmentBlocked");
+        BEAST_EXPECT(jr[jss::status] == "error");
         BEAST_EXPECT(!jr.isMember(jss::warnings));
     }
 
