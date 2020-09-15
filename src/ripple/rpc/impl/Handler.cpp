@@ -95,7 +95,7 @@ Handler const handlerArray[]{
      byRef(&doLedgerCleaner),
      Role::ADMIN,
      NEEDS_NETWORK_CONNECTION},
-    {"ledger_closed", byRef(&doLedgerClosed), Role::USER, NO_CONDITION},
+    {"ledger_closed", byRef(&doLedgerClosed), Role::USER, NEEDS_CLOSED_LEDGER},
     {"ledger_current",
      byRef(&doLedgerCurrent),
      Role::USER,
@@ -129,8 +129,8 @@ Handler const handlerArray[]{
      Role::ADMIN,
      NO_CONDITION},
     {"ripple_path_find", byRef(&doRipplePathFind), Role::USER, NO_CONDITION},
-    {"sign", byRef(&doSign), Role::USER, NO_CONDITION},
-    {"sign_for", byRef(&doSignFor), Role::USER, NO_CONDITION},
+    {"sign", byRef(&doSign), Role::USER, NEEDS_CURRENT_LEDGER},
+    {"sign_for", byRef(&doSignFor), Role::USER, NEEDS_CURRENT_LEDGER},
     {"submit", byRef(&doSubmit), Role::USER, NEEDS_CURRENT_LEDGER},
     {"submit_multisigned",
      byRef(&doSubmitMultiSigned),
@@ -155,7 +155,6 @@ Handler const handlerArray[]{
      NO_CONDITION},
     {"validator_info", byRef(&doValidatorInfo), Role::ADMIN, NO_CONDITION},
     {"wallet_propose", byRef(&doWalletPropose), Role::ADMIN, NO_CONDITION},
-
     // Evented methods
     {"subscribe", byRef(&doSubscribe), Role::USER, NO_CONDITION},
     {"unsubscribe", byRef(&doUnsubscribe), Role::USER, NO_CONDITION},

@@ -17,9 +17,11 @@
 */
 //==============================================================================
 
+#include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/main/Application.h>
 #include <ripple/app/misc/Transaction.h>
 #include <ripple/core/DatabaseCon.h>
+#include <ripple/core/Pg.h>
 #include <ripple/core/SociDB.h>
 #include <ripple/net/RPCErr.h>
 #include <ripple/protocol/ErrorCodes.h>
@@ -27,9 +29,141 @@
 #include <ripple/resource/Fees.h>
 #include <ripple/rpc/Context.h>
 #include <ripple/rpc/Role.h>
+#include <ripple/rpc/Status.h>
 #include <boost/format.hpp>
 
 namespace ripple {
+
+Json::Value
+doTxHistoryReporting(RPC::JsonContext& context)
+{
+    Json::Value ret;
+    assert(context.app.config().reporting());
+    context.loadType = Resource::feeMediumBurdenRPC;
+
+    if (!context.params.isMember(jss::start))
+        return rpcError(rpcINVALID_PARAMS);
+
+    unsigned int startIndex = context.params[jss::start].asUInt();
+
+    if ((startIndex > 10000) && (!isUnlimited(context.role)))
+        return rpcError(rpcNO_PERMISSION);
+
+    std::string sql = boost::str(
+        boost::format("SELECT nodestore_hash "
+                      "  FROM transactions"
+                      " ORDER BY ledger_seq DESC LIMIT 20 "
+                      "OFFSET %u;") %
+        startIndex);
+
+    auto res = PgQuery(context.app.getPgPool())(sql.data());
+
+    if (!res)
+    {
+        JLOG(context.j.error())
+            << __func__ << " : Postgres response is null - sql = " << sql;
+        assert(false);
+        return {};
+    }
+    else if (res.status() != PGRES_TUPLES_OK)
+    {
+        JLOG(context.j.error())
+            << __func__
+            << " : Postgres response should have been "
+               "PGRES_TUPLES_OK but instead was "
+            << res.status() << " - msg  = " << res.msg() << " - sql = " << sql;
+        assert(false);
+        return {};
+    }
+
+    JLOG(context.j.trace())
+        << __func__ << " Postgres result msg  : " << res.msg();
+
+    if (res.isNull() || res.ntuples() == 0)
+    {
+        JLOG(context.j.debug()) << __func__ << " : Empty postgres response";
+        assert(false);
+        return {};
+    }
+    else if (res.ntuples() > 0)
+    {
+        if (res.nfields() != 1)
+        {
+            JLOG(context.j.error()) << __func__
+                                    << " : Wrong number of fields in Postgres "
+                                       "response. Expected 1, but got "
+                                    << res.nfields() << " . sql = " << sql;
+            assert(false);
+            return {};
+        }
+    }
+
+    JLOG(context.j.trace())
+        << __func__ << " : Postgres result = " << res.c_str();
+
+    Json::Value txs;
+
+    std::vector<uint256> nodestoreHashes;
+    for (size_t i = 0; i < res.ntuples(); ++i)
+    {
+        nodestoreHashes.push_back(from_hex_text<uint256>(res.c_str(i, 0) + 2));
+    }
+
+    auto objs = context.app.getNodeFamily().db().fetchBatch(nodestoreHashes);
+
+    assert(objs.size() == nodestoreHashes.size());
+    for (size_t i = 0; i < objs.size(); ++i)
+    {
+        auto& obj = objs[i];
+        auto& nodestoreHash = nodestoreHashes[i];
+        if (obj)
+        {
+            auto node = SHAMapAbstractNode::makeFromPrefix(
+                makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
+            if (!node)
+            {
+                assert(false);
+                RPC::Status err{rpcINTERNAL, "Error making SHAMap node"};
+                err.inject(ret);
+                return ret;
+            }
+            auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
+            if (!item)
+            {
+                assert(false);
+                RPC::Status err{rpcINTERNAL, "Error reading SHAMap node"};
+                err.inject(ret);
+                return ret;
+            }
+
+            auto [sttx, meta] = deserializeTxPlusMeta(*item);
+            JLOG(context.j.debug()) << "Successfully fetched from db";
+
+            if (!sttx || !meta)
+            {
+                assert(false);
+                RPC::Status err{rpcINTERNAL, "Error deserializing SHAMap node"};
+                err.inject(ret);
+                return ret;
+            }
+
+            txs.append(sttx->getJson(JsonOptions::none));
+        }
+        else
+        {
+            assert(false);
+            RPC::Status err{rpcINTERNAL, "Containing SHAMap node not found"};
+            err.inject(ret);
+            return ret;
+        }
+    }
+
+    ret[jss::index] = startIndex;
+    ret[jss::txs] = txs;
+    ret["used_postgres"] = true;
+
+    return ret;
+}
 
 // {
 //   start: <index>
@@ -37,6 +171,11 @@ namespace ripple {
 Json::Value
 doTxHistory(RPC::JsonContext& context)
 {
+    if (!context.app.config().useTxTables())
+        return rpcError(rpcNOT_ENABLED);
+
+    if (context.app.config().reporting())
+        return doTxHistoryReporting(context);
     context.loadType = Resource::feeMediumBurdenRPC;
 
     if (!context.params.isMember(jss::start))

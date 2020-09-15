@@ -18,8 +18,10 @@
 //==============================================================================
 
 #include <ripple/app/ledger/LedgerToJson.h>
+#include <ripple/app/main/Application.h>
 #include <ripple/app/misc/TxQ.h>
 #include <ripple/basics/base_uint.h>
+#include <ripple/core/Pg.h>
 #include <ripple/rpc/Context.h>
 #include <ripple/rpc/DeliveredAmount.h>
 
@@ -175,10 +177,22 @@ fillJsonTx(Object& json, LedgerFill const& fill)
 
     try
     {
-        for (auto& i : fill.ledger.txs)
+        if (fill.context && fill.context->app.config().reporting())
         {
-            txns.append(
-                fillJsonTx(fill, bBinary, bExpanded, i.first, i.second));
+            auto sttxs = flatFetchTransactions(fill.ledger, fill.context->app);
+            for (auto& i : sttxs)
+            {
+                txns.append(
+                    fillJsonTx(fill, bBinary, bExpanded, i.first, i.second));
+            }
+        }
+        else
+        {
+            for (auto& i : fill.ledger.txs)
+            {
+                txns.append(
+                    fillJsonTx(fill, bBinary, bExpanded, i.first, i.second));
+            }
         }
     }
     catch (std::exception const&)

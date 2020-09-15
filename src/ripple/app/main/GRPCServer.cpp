@@ -18,6 +18,7 @@
 //==============================================================================
 
 #include <ripple/app/main/GRPCServer.h>
+#include <ripple/app/reporting/P2pProxy.h>
 #include <ripple/beast/core/CurrentThreadName.h>
 #include <ripple/resource/Fees.h>
 
@@ -47,6 +48,7 @@ GRPCServerImpl::CallData<Request, Response>::CallData(
     Application& app,
     BindListener<Request, Response> bindListener,
     Handler<Request, Response> handler,
+    Forward<Request, Response> forward,
     RPC::Condition requiredCondition,
     Resource::Charge loadType)
     : service_(service)
@@ -56,6 +58,7 @@ GRPCServerImpl::CallData<Request, Response>::CallData(
     , responder_(&ctx_)
     , bindListener_(std::move(bindListener))
     , handler_(std::move(handler))
+    , forward_(std::move(forward))
     , requiredCondition_(std::move(requiredCondition))
     , loadType_(std::move(loadType))
 {
@@ -74,6 +77,7 @@ GRPCServerImpl::CallData<Request, Response>::clone()
         app_,
         bindListener_,
         handler_,
+        forward_,
         requiredCondition_,
         loadType_);
 }
@@ -146,6 +150,11 @@ GRPCServerImpl::CallData<Request, Response>::process(
                  InfoSub::pointer(),
                  apiVersion},
                 request_};
+            if (shouldForwardToP2p(context, requiredCondition_))
+            {
+                forwardToP2p(context);
+                return;
+            }
 
             // Make sure we can currently handle the rpc
             error_code_i conditionMetRes =
@@ -161,14 +170,64 @@ GRPCServerImpl::CallData<Request, Response>::process(
             }
             else
             {
-                std::pair<Response, grpc::Status> result = handler_(context);
-                responder_.Finish(result.first, result.second, this);
+                try
+                {
+                    std::pair<Response, grpc::Status> result =
+                        handler_(context);
+                    responder_.Finish(result.first, result.second, this);
+                }
+                catch (ReportingShouldProxy& e)
+                {
+                    forwardToP2p(context);
+                    return;
+                }
             }
         }
     }
     catch (std::exception const& ex)
     {
         grpc::Status status{grpc::StatusCode::INTERNAL, ex.what()};
+        responder_.FinishWithError(status, this);
+    }
+}
+
+template <class Request, class Response>
+void
+GRPCServerImpl::CallData<Request, Response>::forwardToP2p(
+    RPC::GRPCContext<Request>& context)
+{
+    auto descriptor = Request::GetDescriptor()->FindFieldByName("client_ip");
+    assert(descriptor);
+    if (descriptor)
+    {
+        Request::GetReflection()->SetString(
+            &request_, descriptor, getEndpoint(ctx_.peer()));
+        JLOG(app_.journal("gRPCServer").debug())
+            << "Set client_ip to " << ctx_.peer();
+    }
+    else
+    {
+        Throw<std::runtime_error>(
+            "Attempting to forward but no client_ip field in "
+            "protobuf message");
+    }
+    auto stub = getP2pForwardingStub(context);
+    if (stub)
+    {
+        grpc::ClientContext clientContext;
+        Response response;
+        auto status = forward_(stub.get(), &clientContext, request_, &response);
+        responder_.Finish(response, status, this);
+        JLOG(app_.journal("gRPCServer").debug()) << "Forwarded request to tx";
+    }
+    else
+    {
+        JLOG(app_.journal("gRPCServer").error())
+            << "Failed to forward request to tx";
+        grpc::Status status{
+            grpc::StatusCode::INTERNAL,
+            "Attempted to act as proxy but failed "
+            "to create forwarding stub"};
         responder_.FinishWithError(status, this);
     }
 }
@@ -199,6 +258,19 @@ Resource::Consumer
 GRPCServerImpl::CallData<Request, Response>::getUsage()
 {
     std::string peer = getEndpoint(ctx_.peer());
+    auto descriptor = Request::GetDescriptor()->FindFieldByName("client_ip");
+    if (descriptor)
+    {
+        std::string clientIp =
+            Request::GetReflection()->GetString(request_, descriptor);
+        if (!clientIp.empty())
+        {
+            JLOG(app_.journal("gRPCServer").debug())
+                << "Got client_ip from request : " << clientIp
+                << " original peer : " << peer;
+            peer = clientIp;
+        }
+    }
     boost::optional<beast::IP::Endpoint> endpoint =
         beast::IP::Endpoint::from_string_checked(peer);
     return app_.getResourceManager().newInboundEndpoint(endpoint.get());
@@ -347,6 +419,7 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
                 RequestGetFee,
             doFeeGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetFee,
             RPC::NEEDS_CURRENT_LEDGER,
             Resource::feeReferenceRPC));
     }
@@ -362,6 +435,7 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
                 RequestGetAccountInfo,
             doAccountInfoGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetAccountInfo,
             RPC::NO_CONDITION,
             Resource::feeReferenceRPC));
     }
@@ -377,6 +451,7 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
                 RequestGetTransaction,
             doTxGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetTransaction,
             RPC::NEEDS_CURRENT_LEDGER,
             Resource::feeReferenceRPC));
     }
@@ -392,6 +467,7 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
                 RequestSubmitTransaction,
             doSubmitGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::SubmitTransaction,
             RPC::NEEDS_CURRENT_LEDGER,
             Resource::feeMediumBurdenRPC));
     }
@@ -408,6 +484,73 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
                 RequestGetAccountTransactionHistory,
             doAccountTxGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::
+                GetAccountTransactionHistory,
+            RPC::NO_CONDITION,
+            Resource::feeMediumBurdenRPC));
+    }
+
+    {
+        using cd = CallData<
+            org::xrpl::rpc::v1::GetLedgerRequest,
+            org::xrpl::rpc::v1::GetLedgerResponse>;
+
+        addToRequests(std::make_shared<cd>(
+            service_,
+            *cq_,
+            app_,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
+                RequestGetLedger,
+            doLedgerGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetLedger,
+            RPC::NO_CONDITION,
+            Resource::feeMediumBurdenRPC));
+    }
+    {
+        using cd = CallData<
+            org::xrpl::rpc::v1::GetLedgerDataRequest,
+            org::xrpl::rpc::v1::GetLedgerDataResponse>;
+
+        addToRequests(std::make_shared<cd>(
+            service_,
+            *cq_,
+            app_,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
+                RequestGetLedgerData,
+            doLedgerDataGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetLedgerData,
+            RPC::NO_CONDITION,
+            Resource::feeMediumBurdenRPC));
+    }
+    {
+        using cd = CallData<
+            org::xrpl::rpc::v1::GetLedgerDiffRequest,
+            org::xrpl::rpc::v1::GetLedgerDiffResponse>;
+
+        addToRequests(std::make_shared<cd>(
+            service_,
+            *cq_,
+            app_,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
+                RequestGetLedgerDiff,
+            doLedgerDiffGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetLedgerDiff,
+            RPC::NO_CONDITION,
+            Resource::feeMediumBurdenRPC));
+    }
+    {
+        using cd = CallData<
+            org::xrpl::rpc::v1::GetLedgerEntryRequest,
+            org::xrpl::rpc::v1::GetLedgerEntryResponse>;
+
+        addToRequests(std::make_shared<cd>(
+            service_,
+            *cq_,
+            app_,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::AsyncService::
+                RequestGetLedgerEntry,
+            doLedgerEntryGrpc,
+            &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetLedgerEntry,
             RPC::NO_CONDITION,
             Resource::feeMediumBurdenRPC));
     }
@@ -445,6 +588,7 @@ GRPCServer::onStart()
     if (running_ = impl_.start(); running_)
     {
         thread_ = std::thread([this]() {
+            beast::setCurrentThreadName("rippled : GRPCServer");
             // Start the event loop and begin handling requests
             beast::setCurrentThreadName("rippled: grpc");
             this->impl_.handleRpcs();

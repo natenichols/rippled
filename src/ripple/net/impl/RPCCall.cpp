@@ -309,8 +309,16 @@ private:
         }
         else
         {
-            std::int64_t uLedgerMin = jvParams[1u].asInt();
-            std::int64_t uLedgerMax = jvParams[2u].asInt();
+            size_t idx = 1;
+            if (jvParams[idx].asString() == jss::marker)
+            {
+                Json::Value marker;
+                marker[jss::ledger] = jvParams[++idx].asInt();
+                marker[jss::seq] = jvParams[++idx].asInt();
+                jvRequest[jss::marker] = marker;
+            }
+            std::int64_t uLedgerMin = jvParams[idx].asInt();
+            std::int64_t uLedgerMax = jvParams[idx + 1].asInt();
 
             if (uLedgerMax != -1 && uLedgerMax < uLedgerMin)
             {
@@ -320,14 +328,14 @@ private:
                 return rpcError(rpcNOT_SYNCED);
             }
 
-            jvRequest[jss::ledger_index_min] = jvParams[1u].asInt();
-            jvRequest[jss::ledger_index_max] = jvParams[2u].asInt();
+            jvRequest[jss::ledger_index_min] = jvParams[idx++].asInt();
+            jvRequest[jss::ledger_index_max] = jvParams[idx++].asInt();
 
-            if (iParams >= 4)
-                jvRequest[jss::limit] = jvParams[3u].asInt();
+            if (iParams > idx)
+                jvRequest[jss::limit] = jvParams[idx++].asInt();
 
-            if (iParams >= 5)
-                jvRequest[jss::offset] = jvParams[4u].asInt();
+            if (iParams > idx)
+                jvRequest[jss::offset] = jvParams[idx++].asInt();
         }
 
         return jvRequest;

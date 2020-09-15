@@ -23,6 +23,8 @@
 #include <ripple/nodestore/Manager.h>
 
 namespace ripple {
+
+class PgPool;
 namespace NodeStore {
 
 class ManagerImp : public Manager
@@ -66,6 +68,7 @@ public:
         int readThreads,
         Stoppable& parent,
         Section const& config,
+        bool const reporting,
         beast::Journal journal) override;
 };
 

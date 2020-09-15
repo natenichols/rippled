@@ -102,6 +102,7 @@ private:
     std::shared_ptr<Ledger const> newLedger_;
     std::atomic<bool> working_;
     std::atomic<LedgerIndex> canDelete_;
+    bool reportingReadOnly_;
     int fdRequired_ = 0;
 
     std::uint32_t deleteInterval_ = 0;
@@ -233,7 +234,7 @@ private:
     clearCaches(LedgerIndex validatedSeq);
     void
     freshenCaches();
-    void
+    bool
     clearPrior(LedgerIndex lastRotated);
 
     // If rippled is not healthy, defer rotate-delete.
@@ -257,7 +258,7 @@ private:
     void
     onStart() override
     {
-        if (deleteInterval_)
+        if (deleteInterval_ && !reportingReadOnly_)
             thread_ = std::thread(&SHAMapStoreImp::run, this);
     }
 

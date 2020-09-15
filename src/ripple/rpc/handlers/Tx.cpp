@@ -37,8 +37,8 @@ namespace ripple {
 //   transaction: <hex>
 // }
 
-static bool
-isHexTxID(std::string const& txid)
+bool
+RPC::isHexTxID(std::string const& txid)
 {
     if (txid.size() != 64)
         return false;
@@ -97,8 +97,116 @@ struct TxArgs
 };
 
 std::pair<TxResult, RPC::Status>
+doTxPostgres(RPC::Context& context, TxArgs const& args)
+{
+    assert(context.app.config().reporting());
+    TxResult res;
+    res.searchedAll = TxSearched::unknown;
+
+    // check cache
+    if (!context.app.config().reporting())
+    {
+        auto cachedTxn =
+            context.app.getMasterTransaction().fetch_from_cache(args.hash);
+        if (cachedTxn && cachedTxn->getLedger() == 0)
+        {
+            res.txn = cachedTxn;
+            return {res, rpcSUCCESS};
+        }
+    }
+
+    JLOG(context.j.debug()) << "Fetching from postgres";
+    Transaction::Locator locator = Transaction::locate(args.hash, context.app);
+
+    std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>
+        pair;
+    // database returned the nodestore hash. Fetch the txn directly from the
+    // nodestore. Don't traverse the transaction SHAMap
+    if (uint256* nodestoreHash = locator.getNodestoreHash())
+    {
+        auto start = std::chrono::system_clock::now();
+        // The second argument of fetch is ignored when not using shards
+        if (auto obj =
+                context.app.getNodeFamily().db().fetch(*nodestoreHash, 0))
+        {
+            auto node = SHAMapAbstractNode::makeFromPrefix(
+                makeSlice(obj->getData()), SHAMapHash{*nodestoreHash});
+            if (!node)
+            {
+                assert(false);
+                return {res, {rpcINTERNAL, "Error making SHAMap node"}};
+            }
+            auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
+            if (!item)
+            {
+                assert(false);
+                return {res, {rpcINTERNAL, "Error reading SHAMap node"}};
+            }
+
+            auto [sttx, meta] = deserializeTxPlusMeta(*item);
+            JLOG(context.j.debug()) << "Successfully fetched from db";
+
+            if (!sttx || !meta)
+            {
+                assert(false);
+                return {res, {rpcINTERNAL, "Error deserializing SHAMap node"}};
+            }
+            std::string reason;
+            res.txn = std::make_shared<Transaction>(sttx, reason, context.app);
+            if (args.binary)
+            {
+                SerialIter it(item->slice());
+                it.skip(it.getVLDataLength());  // skip transaction
+                Blob blob = it.getVL();
+                res.meta = std::move(blob);
+            }
+            else
+            {
+                res.meta = std::make_shared<TxMeta>(
+                    args.hash, res.txn->getLedger(), *meta);
+            }
+            res.validated = true;
+            return {res, rpcSUCCESS};
+        }
+        else
+        {
+            JLOG(context.j.error()) << "Failed to fetch from db";
+            assert(false);
+            return {res, {rpcINTERNAL, "Containing SHAMap node not found"}};
+        }
+        auto end = std::chrono::system_clock::now();
+        JLOG(context.j.debug()) << "tx flat fetch time : "
+                                << ((end - start).count() / 1000000000.0);
+    }
+    // database did not find the transaction, and returned the ledger range
+    // that was searched
+    else if (std::pair<uint32_t, uint32_t>* range = locator.getLedgerRange())
+    {
+        if (args.ledgerRange)
+        {
+            auto min = args.ledgerRange->first;
+            auto max = args.ledgerRange->second;
+            if (min >= range->first && max <= range->second)
+            {
+                res.searchedAll = TxSearched::all;
+            }
+            else
+            {
+                res.searchedAll = TxSearched::some;
+            }
+        }
+        return {res, rpcTXN_NOT_FOUND};
+    }
+    // database didn't return anything. This shouldn't happen
+    assert(false);
+    return {res, {rpcINTERNAL, "unexpected Postgres response"}};
+}
+
+std::pair<TxResult, RPC::Status>
 doTxHelp(RPC::Context& context, TxArgs const& args)
 {
+    if (context.app.config().reporting())
+        return doTxPostgres(context, args);
     TxResult result;
 
     ClosedInterval<uint32_t> range;
@@ -321,13 +429,16 @@ populateJsonResponse(
 Json::Value
 doTxJson(RPC::JsonContext& context)
 {
+    if (!context.app.config().useTxTables())
+        return rpcError(rpcNOT_ENABLED);
+
     // Deserialize and validate JSON arguments
 
     if (!context.params.isMember(jss::transaction))
         return rpcError(rpcINVALID_PARAMS);
 
     std::string txHash = context.params[jss::transaction].asString();
-    if (!isHexTxID(txHash))
+    if (!RPC::isHexTxID(txHash))
         return rpcError(rpcNOT_IMPL);
 
     TxArgs args;
@@ -359,6 +470,13 @@ doTxJson(RPC::JsonContext& context)
 std::pair<org::xrpl::rpc::v1::GetTransactionResponse, grpc::Status>
 doTxGrpc(RPC::GRPCContext<org::xrpl::rpc::v1::GetTransactionRequest>& context)
 {
+    if (!context.app.config().useTxTables())
+    {
+        return {
+            {},
+            {grpc::StatusCode::UNIMPLEMENTED, "Not enabled in configuration."}};
+    }
+
     // return values
     org::xrpl::rpc::v1::GetTransactionResponse response;
     grpc::Status status = grpc::Status::OK;

@@ -617,6 +617,22 @@ STObject::set(std::unique_ptr<STBase> v)
 }
 
 void
+STObject::set(STBase* v)
+{
+    auto const i = getFieldIndex(v->getFName());
+    if (i != -1)
+    {
+        v_[i] = std::move(*v);
+    }
+    else
+    {
+        if (!isFree())
+            Throw<std::runtime_error>("missing field in templated STObject");
+        v_.emplace_back(std::move(*v));
+    }
+}
+
+void
 STObject::setFieldU8(SField const& field, unsigned char v)
 {
     setFieldUsingSetValue<STUInt8>(field, v);

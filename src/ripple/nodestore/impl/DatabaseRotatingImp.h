@@ -41,6 +41,7 @@ public:
         std::shared_ptr<Backend> writableBackend,
         std::shared_ptr<Backend> archiveBackend,
         Section const& config,
+        bool const reporting,
         beast::Journal j);
 
     ~DatabaseRotatingImp() override
@@ -66,6 +67,18 @@ public:
     void
     store(NodeObjectType type, Blob&& data, uint256 const& hash, std::uint32_t)
         override;
+
+    void
+    sync() override
+    {
+        writableBackend_->sync();
+    }
+
+    std::vector<std::shared_ptr<NodeObject>>
+    fetchBatch(std::vector<uint256> const& hashes) override
+    {
+        return doFetchBatch(hashes, *pCache_, *nCache_);
+    }
 
     bool
     asyncFetch(
@@ -102,6 +115,12 @@ public:
         return *pCache_;
     }
 
+    Backend&
+    getBackend() override
+    {
+        return *writableBackend_;
+    }
+
 private:
     // Positive cache
     std::shared_ptr<TaggedCache<uint256, NodeObject>> pCache_;
@@ -113,11 +132,32 @@ private:
     std::shared_ptr<Backend> archiveBackend_;
     mutable std::mutex mutex_;
 
+    bool const reporting_;
+
+    struct Backends
+    {
+        std::shared_ptr<Backend> const& writableBackend;
+        std::shared_ptr<Backend> const& archiveBackend;
+    };
+
+    Backends
+    getBackends() const
+    {
+        std::lock_guard lock(mutex_);
+        return Backends{writableBackend_, archiveBackend_};
+    }
+
     std::shared_ptr<NodeObject>
     fetchNodeObject(
         uint256 const& hash,
         std::uint32_t,
         FetchReport& fetchReport) override;
+
+    std::pair<std::vector<std::shared_ptr<NodeObject>>, Status>
+    fetchBatch(std::vector<uint256 const*> const& hashes) override
+    {
+        return writableBackend_->fetchBatch(hashes);
+    }
 
     void
     for_each(std::function<void(std::shared_ptr<NodeObject>)> f) override;

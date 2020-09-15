@@ -33,7 +33,8 @@ DatabaseNodeImp::store(
 {
     auto nObj = NodeObject::createObject(type, std::move(data), hash);
     pCache_->canonicalize_replace_cache(hash, nObj);
-    backend_->store(nObj);
+    if (etl || !reporting_)
+        backend_->store(nObj);
     nCache_->erase(hash);
     storeStats(1, nObj->getData().size());
 }

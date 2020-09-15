@@ -168,7 +168,7 @@ InboundLedger::getPeerCount() const
 void
 InboundLedger::queueJob()
 {
-    if (app_.getJobQueue().getJobCountTotal(jtLEDGER_DATA) > 4)
+    if (app_.getJobQueue().getJobCountTotal(jtLEDGER_DATA) > 12)
     {
         JLOG(m_journal.debug()) << "Deferring InboundLedger timer due to load";
         setTimer();
@@ -268,7 +268,7 @@ InboundLedger::neededStateHashes(int max, SHAMapSyncFilter* filter) const
 }
 
 LedgerInfo
-deserializeHeader(Slice data)
+deserializeHeader(Slice data, bool hasHash)
 {
     SerialIter sit(data.data(), data.size());
 
@@ -285,13 +285,16 @@ deserializeHeader(Slice data)
     info.closeTimeResolution = NetClock::duration{sit.get8()};
     info.closeFlags = sit.get8();
 
+    if (hasHash)
+        info.hash = sit.get256();
+
     return info;
 }
 
 LedgerInfo
-deserializePrefixedHeader(Slice data)
+deserializePrefixedHeader(Slice data, bool hasHash)
 {
-    return deserializeHeader(data + 4);
+    return deserializeHeader(data + 4, hasHash);
 }
 
 // See how much of the ledger data is stored locally

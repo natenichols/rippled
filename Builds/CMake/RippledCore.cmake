@@ -3,7 +3,6 @@
    core functionality, useable by some client software perhaps
 #]===================================================================]
 
-
 file (GLOB_RECURSE rb_headers
   src/ripple/beast/*.h
   src/ripple/beast/*.hpp)
@@ -13,6 +12,13 @@ add_library (xrpl_core
 if (unity)
   set_target_properties(xrpl_core PROPERTIES UNITY_BUILD ON)
 endif ()
+
+find_package(PostgreSQL REQUIRED)
+
+if (reporting)
+  find_library(cassandra NAMES cassandra cassandra-cpp-driver REQUIRED)
+  find_path(cassandra_includes NAMES cassandra.h REQUIRED)
+endif()
 
 #[===============================[
     beast/legacy FILES:
@@ -120,11 +126,16 @@ target_sources (xrpl_core PRIVATE
 add_library (Ripple::xrpl_core ALIAS xrpl_core)
 target_include_directories (xrpl_core
   PUBLIC
+    ${PostgreSQL_INCLUDE_DIRS}
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/ripple>
     # this one is for beast/legacy files:
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/beast/extras>
     $<INSTALL_INTERFACE:include>)
+
+if (reporting)
+  target_include_directories (xrpl_core PUBLIC ${cassandra_includes})
+endif()
 
 target_compile_definitions(xrpl_core
   PUBLIC
@@ -135,6 +146,7 @@ target_compile_options (xrpl_core
     $<$<BOOL:${is_gcc}>:-Wno-maybe-uninitialized>)
 target_link_libraries (xrpl_core
   PUBLIC
+    ${PostgreSQL_LIBRARIES}
     OpenSSL::Crypto
     Ripple::boost
     Ripple::syslibs
@@ -142,6 +154,9 @@ target_link_libraries (xrpl_core
     NIH::ed25519-donna
     date::date
     Ripple::opts)
+if (reporting)
+    target_link_libraries (xrpl_core PUBLIC ${cassandra})
+endif()
 #[=================================[
    main/core headers installation
 #]=================================]
@@ -380,6 +395,10 @@ target_sources (rippled PRIVATE
   src/ripple/app/main/Main.cpp
   src/ripple/app/main/NodeIdentity.cpp
   src/ripple/app/main/NodeStoreScheduler.cpp
+  src/ripple/app/reporting/DBHelpers.cpp
+  src/ripple/app/reporting/ReportingETL.cpp
+  src/ripple/app/reporting/ETLSource.cpp
+  src/ripple/app/reporting/P2pProxy.cpp
   src/ripple/app/misc/CanonicalTXSet.cpp
   src/ripple/app/misc/FeeVoteImpl.cpp
   src/ripple/app/misc/HashRouter.cpp
@@ -467,6 +486,7 @@ target_sources (rippled PRIVATE
   src/ripple/core/impl/Stoppable.cpp
   src/ripple/core/impl/TimeKeeper.cpp
   src/ripple/core/impl/Workers.cpp
+  src/ripple/core/Pg.cpp
   #[===============================[
      main sources:
        subdir: consensus
@@ -508,6 +528,7 @@ target_sources (rippled PRIVATE
      main sources:
        subdir: nodestore
   #]===============================]
+  src/ripple/nodestore/backend/CassandraFactory.cpp
   src/ripple/nodestore/backend/MemoryFactory.cpp
   src/ripple/nodestore/backend/NuDBFactory.cpp
   src/ripple/nodestore/backend/NullFactory.cpp
@@ -568,7 +589,6 @@ target_sources (rippled PRIVATE
   src/ripple/rpc/handlers/AccountOffers.cpp
   src/ripple/rpc/handlers/AccountTx.cpp
   src/ripple/rpc/handlers/AccountTxOld.cpp
-  src/ripple/rpc/handlers/AccountTxSwitch.cpp
   src/ripple/rpc/handlers/BlackList.cpp
   src/ripple/rpc/handlers/BookOffers.cpp
   src/ripple/rpc/handlers/CanDelete.cpp
@@ -587,6 +607,7 @@ target_sources (rippled PRIVATE
   src/ripple/rpc/handlers/LedgerClosed.cpp
   src/ripple/rpc/handlers/LedgerCurrent.cpp
   src/ripple/rpc/handlers/LedgerData.cpp
+  src/ripple/rpc/handlers/LedgerDiff.cpp
   src/ripple/rpc/handlers/LedgerEntry.cpp
   src/ripple/rpc/handlers/LedgerHandler.cpp
   src/ripple/rpc/handlers/LedgerHeader.cpp
@@ -932,6 +953,7 @@ target_sources (rippled PRIVATE
   src/test/rpc/NoRipple_test.cpp
   src/test/rpc/OwnerInfo_test.cpp
   src/test/rpc/Peers_test.cpp
+  src/test/rpc/ReportingETL_test.cpp
   src/test/rpc/Roles_test.cpp
   src/test/rpc/RPCCall_test.cpp
   src/test/rpc/RPCOverload_test.cpp
@@ -977,6 +999,10 @@ exclude_if_included (rippled)
 # be exluded or run differently in CI environment
 if (is_ci)
   target_compile_definitions(rippled PRIVATE RIPPLED_RUNNING_IN_CI)
+endif ()
+
+if (reporting)
+    target_compile_definitions(rippled PRIVATE RIPPLED_REPORTING)
 endif ()
 
 if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)

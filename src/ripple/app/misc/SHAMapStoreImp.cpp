@@ -22,6 +22,7 @@
 #include <ripple/app/misc/SHAMapStoreImp.h>
 #include <ripple/beast/core/CurrentThreadName.h>
 #include <ripple/core/ConfigSections.h>
+#include <ripple/core/Pg.h>
 #include <ripple/nodestore/impl/DatabaseRotatingImp.h>
 
 #include <boost/algorithm/string/predicate.hpp>
@@ -156,8 +157,10 @@ SHAMapStoreImp::SHAMapStoreImp(
     , journal_(journal)
     , working_(true)
     , canDelete_(std::numeric_limits<LedgerIndex>::max())
+    , reportingReadOnly_(app.config().reportingReadOnly())
 {
     Config& config{app.config()};
+
     Section& section{config.section(ConfigSection::nodeDatabase())};
     if (section.empty())
     {
@@ -184,20 +187,7 @@ SHAMapStoreImp::SHAMapStoreImp(
 
     if (deleteInterval_)
     {
-        // Configuration that affects the behavior of online delete
-        get_if_exists(section, "delete_batch", deleteBatch_);
-        std::uint32_t temp;
-        if (get_if_exists(section, "back_off_milliseconds", temp) ||
-            // Included for backward compaibility with an undocumented setting
-            get_if_exists(section, "backOff", temp))
-        {
-            backOff_ = std::chrono::milliseconds{temp};
-        }
-        if (get_if_exists(section, "age_threshold_seconds", temp))
-            ageThreshold_ = std::chrono::seconds{temp};
-        if (get_if_exists(section, "recovery_wait_seconds", temp))
-            recoveryWaitTime_.emplace(std::chrono::seconds{temp});
-
+        assert(!reportingReadOnly_);
         get_if_exists(section, "advisory_delete", advisoryDelete_);
 
         auto const minInterval = config.standalone()
@@ -250,6 +240,7 @@ SHAMapStoreImp::makeNodeStore(std::string const& name, std::int32_t readThreads)
             std::move(writableBackend),
             std::move(archiveBackend),
             app_.config().section(ConfigSection::nodeDatabase()),
+            app_.config().reporting(),
             app_.logs().journal(nodeStoreName_));
         fdRequired_ += dbr->fdRequired();
         dbRotating_ = dbr.get();
@@ -265,6 +256,7 @@ SHAMapStoreImp::makeNodeStore(std::string const& name, std::int32_t readThreads)
             readThreads,
             app_.getJobQueue(),
             app_.config().section(ConfigSection::nodeDatabase()),
+            app_.config().reporting(),
             app_.logs().journal(nodeStoreName_));
         fdRequired_ += db->fdRequired();
     }
@@ -323,9 +315,11 @@ SHAMapStoreImp::run()
     ledgerMaster_ = &app_.getLedgerMaster();
     fullBelowCache_ = &(*app_.getNodeFamily().getFullBelowCache(0));
     treeNodeCache_ = &(*app_.getNodeFamily().getTreeNodeCache(0));
-    transactionDb_ = &app_.getTxnDB();
-    ledgerDb_ = &app_.getLedgerDB();
-
+    if (!app_.config().reporting())
+    {
+        transactionDb_ = &app_.getTxnDB();
+        ledgerDb_ = &app_.getLedgerDB();
+    }
     if (advisoryDelete_)
         canDelete_ = state_db_.getCanDelete();
 
@@ -370,7 +364,8 @@ SHAMapStoreImp::run()
                 << app_.getOPs().strOperatingMode(false) << " age "
                 << ledgerMaster_->getValidatedLedgerAge().count() << 's';
 
-            clearPrior(lastRotated);
+            if (!clearPrior(lastRotated))
+                return;
             switch (health())
             {
                 case Health::stopping:
@@ -649,7 +644,7 @@ SHAMapStoreImp::freshenCaches()
         return;
 }
 
-void
+bool
 SHAMapStoreImp::clearPrior(LedgerIndex lastRotated)
 {
     // Do not allow ledgers to be acquired from the network
@@ -661,31 +656,36 @@ SHAMapStoreImp::clearPrior(LedgerIndex lastRotated)
     JLOG(journal_.trace()) << "End: Clear internal ledgers up to "
                            << lastRotated;
     if (health())
-        return;
+        return false;
 
-    clearSql(
-        *ledgerDb_,
-        lastRotated,
-        "SELECT MIN(LedgerSeq) FROM Ledgers;",
-        "DELETE FROM Ledgers WHERE LedgerSeq < %u;");
-    if (health())
-        return;
+    if (!app_.config().reporting())
+    {
+        clearSql(
+            *ledgerDb_,
+            lastRotated,
+            "SELECT MIN(LedgerSeq) FROM Ledgers;",
+            "DELETE FROM Ledgers WHERE LedgerSeq < %u;");
+        if (health())
+            return false;
 
-    clearSql(
-        *transactionDb_,
-        lastRotated,
-        "SELECT MIN(LedgerSeq) FROM Transactions;",
-        "DELETE FROM Transactions WHERE LedgerSeq < %u;");
-    if (health())
-        return;
+        clearSql(
+            *transactionDb_,
+            lastRotated,
+            "SELECT MIN(LedgerSeq) FROM Transactions;",
+            "DELETE FROM Transactions WHERE LedgerSeq < %u;");
+        if (health())
+            return false;
 
-    clearSql(
-        *transactionDb_,
-        lastRotated,
-        "SELECT MIN(LedgerSeq) FROM AccountTransactions;",
-        "DELETE FROM AccountTransactions WHERE LedgerSeq < %u;");
-    if (health())
-        return;
+        clearSql(
+            *transactionDb_,
+            lastRotated,
+            "SELECT MIN(LedgerSeq) FROM AccountTransactions;",
+            "DELETE FROM AccountTransactions WHERE LedgerSeq < %u;");
+        if (health())
+            return false;
+    }
+
+    return true;
 }
 
 SHAMapStoreImp::Health

@@ -109,6 +109,13 @@ private:
     // This implementation is currently limited to v1 of the API
     static unsigned constexpr apiVersion = 1;
 
+    template <class Request, class Response>
+    using Forward = std::function<grpc::Status(
+        org::xrpl::rpc::v1::XRPLedgerAPIService::Stub*,
+        grpc::ClientContext*,
+        Request,
+        Response*)>;
+
 public:
     explicit GRPCServerImpl(Application& app);
 
@@ -177,6 +184,9 @@ private:
         // Function that processes a request
         Handler<Request, Response> handler_;
 
+        // Function to call to forward to another server
+        Forward<Request, Response> forward_;
+
         // Condition required for this RPC
         RPC::Condition requiredCondition_;
 
@@ -195,6 +205,7 @@ private:
             Application& app,
             BindListener<Request, Response> bindListener,
             Handler<Request, Response> handler,
+            Forward<Request, Response> forward,
             RPC::Condition requiredCondition,
             Resource::Charge loadType);
 
@@ -230,6 +241,10 @@ private:
         // register endpoint with ResourceManager and return usage
         Resource::Consumer
         getUsage();
+
+        // forward request to a p2p node
+        void
+        forwardToP2p(RPC::GRPCContext<Request>& context);
 
     };  // CallData
 

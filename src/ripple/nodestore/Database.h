@@ -114,6 +114,9 @@ public:
         uint256 const& hash,
         std::uint32_t ledgerSeq) = 0;
 
+    virtual void
+    sync() = 0;
+
     /** Fetch a node object.
         If the object is known to be not in the database, isn't found in the
         database during the fetch, or failed to load correctly during the fetch,
@@ -130,6 +133,19 @@ public:
         uint256 const& hash,
         std::uint32_t ledgerSeq = 0,
         FetchType fetchType = FetchType::synchronous);
+
+    /** Fetch multiple objects
+        If an object is known to be not in the database, isn't found in the
+        database during the fetch, or failed to load correctly during the fetch,
+        `nullptr` is returned for that object
+
+        @note This can be called concurrently.
+        @note Results are returned in the same order as the hashes param
+        @param hashes The keys of the objects to retrieve.
+        @return The objects. Each not found object is a nullptr
+    */
+    virtual std::vector<std::shared_ptr<NodeObject>>
+    fetchBatch(std::vector<uint256> const& hashes) = 0;
 
     /** Fetch an object without waiting.
         If I/O is required to determine whether or not the object is present,
@@ -188,10 +204,14 @@ public:
     virtual void
     sweep() = 0;
 
+    virtual Backend&
+    getBackend() = 0;
+
     /** Gather statistics pertaining to read and write activities.
 
         @return The total read and written bytes.
      */
+<<<<<<< HEAD
     std::uint64_t
     getStoreCount() const
     {
@@ -221,6 +241,11 @@ public:
     {
         return fetchSz_;
     }
+=======
+
+    Json::Value
+    getCountsJson();
+>>>>>>> 01866f712... Add Reporting Mode
 
     /** Returns the number of file descriptors the database expects to need */
     int
@@ -270,6 +295,23 @@ protected:
     void
     importInternal(Backend& dstBackend, Database& srcDB);
 
+<<<<<<< HEAD
+=======
+    std::shared_ptr<NodeObject>
+    doFetch(
+        uint256 const& hash,
+        std::uint32_t seq,
+        TaggedCache<uint256, NodeObject>& pCache,
+        KeyCache<uint256>& nCache,
+        bool isAsync);
+
+    std::vector<std::shared_ptr<NodeObject>>
+    doFetchBatch(
+        std::vector<uint256> const& hashes,
+        TaggedCache<uint256, NodeObject>& pCache,
+        KeyCache<uint256>& nCache);
+
+>>>>>>> 01866f712... Add Reporting Mode
     // Called by the public storeLedger function
     bool
     storeLedger(
@@ -280,8 +322,17 @@ protected:
 
 private:
     std::atomic<std::uint64_t> storeCount_{0};
+<<<<<<< HEAD
     std::atomic<std::uint64_t> storeSz_{0};
     std::atomic<std::uint64_t> fetchTotalCount_{0};
+=======
+    std::atomic<std::uint64_t> fetchTotalCount_{0};
+    std::atomic<std::uint64_t> fetchHitCount_{0};
+    std::atomic<std::uint64_t> storeSz_{0};
+    std::atomic<std::uint64_t> fetchSz_{0};
+    std::atomic<std::uint64_t> fetchDurationUs_{0};
+    std::atomic<std::uint64_t> storeDurationUs_{0};
+>>>>>>> 01866f712... Add Reporting Mode
 
     std::mutex readLock_;
     std::condition_variable readCondVar_;
@@ -308,6 +359,9 @@ private:
         uint256 const& hash,
         std::uint32_t ledgerSeq,
         FetchReport& fetchReport) = 0;
+
+    virtual std::pair<std::vector<std::shared_ptr<NodeObject>>, Status>
+    fetchBatch(std::vector<uint256 const*> const& hashes) = 0;
 
     /** Visit every object in the database
         This is usually called during import.

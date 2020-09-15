@@ -20,8 +20,11 @@
 #include <ripple/app/ledger/Ledger.h>
 #include <ripple/basics/chrono.h>
 #include <ripple/beast/core/CurrentThreadName.h>
+#include <ripple/json/json_value.h>
 #include <ripple/nodestore/Database.h>
 #include <ripple/protocol/HashPrefix.h>
+#include <ripple/protocol/jss.h>
+#include <chrono>
 
 namespace ripple {
 namespace NodeStore {
@@ -180,6 +183,77 @@ Database::fetchNodeObject(
     return nodeObject;
 }
 
+// Perform a fetch and report the time it took
+std::vector<std::shared_ptr<NodeObject>>
+Database::doFetchBatch(
+    std::vector<uint256> const& hashes,
+    TaggedCache<uint256, NodeObject>& pCache,
+    KeyCache<uint256>& nCache)
+{
+    std::vector<std::shared_ptr<NodeObject>> results{hashes.size()};
+    using namespace std::chrono;
+    auto const before = steady_clock::now();
+    std::unordered_map<uint256 const*, size_t> indexMap;
+    std::vector<uint256 const*> cacheMisses;
+    for (size_t i = 0; i < hashes.size(); ++i)
+    {
+        auto const& hash = hashes[i];
+        // See if the object already exists in the cache
+        auto nObj = pCache.fetch(hash);
+        ++fetchTotalCount_;
+        if (!nObj && !nCache.touch_if_exists(hash))
+        {
+            // Try the database(s)
+            // report.wentToDisk = true;
+            indexMap[&hash] = i;
+            cacheMisses.push_back(&hash);
+        }
+        else
+        {
+            results[i] = nObj;
+            // It was in the cache.
+            ++fetchHitCount_;
+        }
+    }
+
+    auto dbResults = fetchBatch(cacheMisses).first;
+
+    for (size_t i = 0; i < dbResults.size(); ++i)
+    {
+        auto nObj = dbResults[i];
+        size_t index = indexMap[cacheMisses[i]];
+        results[index] = nObj;
+        auto const& hash = hashes[index];
+
+        if (!nObj)
+        {
+            // Just in case a write occurred
+            nObj = pCache.fetch(hash);
+            if (!nObj)
+                // We give up
+                nCache.insert(hash);
+        }
+        else
+        {
+            // Ensure all threads get the same object
+            pCache.canonicalize_replace_client(hash, nObj);
+
+            // Since this was a 'hard' fetch, we will log it.
+            JLOG(j_.trace()) << "HOS: " << hash << " fetch: in db";
+        }
+    }
+
+    fetchDurationUs_ += std::chrono::duration_cast<std::chrono::microseconds>(
+                            steady_clock::now() - before)
+                            .count();
+    /*
+report.wasFound = static_cast<bool>(nObj);
+report.elapsed = duration_cast<milliseconds>(steady_clock::now() - before);
+scheduler_.onFetch(report);
+*/
+    return results;
+}
+
 bool
 Database::storeLedger(
     Ledger const& srcLedger,
@@ -326,6 +400,25 @@ Database::threadEntry()
         // Perform the read
         fetchNodeObject(lastHash, lastSeq, FetchType::async);
     }
+}
+
+Json::Value
+Database::getCountsJson()
+{
+    Json::Value ret(Json::objectValue);
+    ret[jss::node_writes] = std::to_string(storeCount_);
+    ret[jss::node_reads_total] = std::to_string(fetchTotalCount_);
+    ret[jss::node_reads_hit] = std::to_string(fetchHitCount_);
+    ret[jss::node_written_bytes] = std::to_string(storeSz_);
+    ret[jss::node_read_bytes] = std::to_string(fetchSz_);
+    ret[jss::node_reads_duration_us] = std::to_string(fetchDurationUs_);
+    auto const& c = getBackend().counters();
+    ret[jss::node_read_errors] = std::to_string(c.readErrors);
+    ret[jss::node_read_retries] = std::to_string(c.readRetries);
+    ret[jss::node_write_retries] = std::to_string(c.writeRetries);
+    ret[jss::node_writes_delayed] = std::to_string(c.writesDelayed);
+    ret[jss::node_writes_duration_us] = std::to_string(c.writeDurationUs);
+    return ret;
 }
 
 }  // namespace NodeStore

@@ -25,6 +25,9 @@
 #include <ripple/nodestore/Factory.h>
 
 namespace ripple {
+
+class PgPool;
+
 namespace NodeStore {
 
 /** Singleton for managing NodeStore factories and back ends. */
@@ -100,6 +103,7 @@ public:
         int readThreads,
         Stoppable& parent,
         Section const& backendParameters,
+        bool const reporting,
         beast::Journal journal) = 0;
 };
 

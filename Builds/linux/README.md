@@ -19,7 +19,7 @@ Use `apt-get` to install the dependencies provided by the distribution
 
 ```
 $ apt-get update
-$ apt-get install -y gcc g++ wget git cmake protobuf-compiler libprotobuf-dev libssl-dev
+$ apt-get install -y gcc g++ wget git cmake protobuf-compiler libprotobuf-dev libssl-dev libpq-dev postgresql-server-dev-all pkg-config
 ```
 
 Advanced users can choose to install newer versions of gcc, or the clang compiler.
@@ -47,6 +47,35 @@ Source code documentation is not required for running/debugging rippled. That
 said, the documentation contains some helpful information about specific
 components of the application. For more information on how to install and run
 the necessary components, see [this document](../../docs/README.md)
+
+### (Optional) Dependencies for Building Reporting Mode
+
+Rippled has an operating mode called Reporting Mode, where Cassandra is used as
+the nodestore. To use rippled in Reporting Mode, build with `-Dreporting=ON`. 
+Packages for the cpp driver are available on some operating systems, and are available at
+[https://downloads.datastax.com/cpp-driver/](https://downloads.datastax.com/cpp-driver/).
+Once a package is downloaded, install via apt-get. Below is an example for
+downloading and installing version 2.15.2 of the cpp driver on ubuntu 18.04.
+Note that the regular package and the dev package for the cpp-driver must be
+installed (in that order) to be able to build the code:
+```
+$ wget https://downloads.datastax.com/cpp-driver/ubuntu/18.04/dependencies/libuv/v1.35.0/libuv1_1.35.0-1_amd64.deb
+$ wget https://downloads.datastax.com/cpp-driver/ubuntu/18.04/cassandra/v2.15.2/cassandra-cpp-driver_2.15.2-1_amd64.deb
+$ wget https://downloads.datastax.com/cpp-driver/ubuntu/18.04/cassandra/v2.15.2/cassandra-cpp-driver-dev_2.15.2-1_amd64.deb
+$ apt-get install ./libuv1_1.35.0-1_amd64.deb
+$ apt-get install ./cassandra-cpp-driver_2.15.2-1_amd64.deb
+$ apt-get install ./cassandra-cpp-driver-dev_2.15.2-1_amd64.deb
+```
+
+On operating systems where prebuilt packages are not available, follow the
+instructions to build from source:
+[https://docs.datastax.com/en/developer/cpp-driver/2.15/topics/building/](https://docs.datastax.com/en/developer/cpp-driver/2.15/topics/building/).
+Note, if you are using Datastax Astra (hosted Cassandra), you must build from
+source, and you must use this branch:
+[https://github.com/phact/cpp-driver/tree/tls-1.2](https://github.com/phact/cpp-driver/tree/tls-1.2)
+
+Cassandra is only needed if building with the `-Dreporting=ON` flag.
+Otherwise, this dependency can be ignored.
 
 ## Build
 
@@ -139,6 +168,7 @@ testing and running.
 * `-Dsan=thread` to enable the thread sanitizer with clang
 * `-Dsan=address` to enable the address sanitizer with clang
 * `-Dstatic=ON` to enable static linking library dependencies
+* `-Dreporting=ON` to build code neccessary for reporting mode (defaults to OFF)
 
 Several other infrequently used options are available - run `ccmake` or
 `cmake-gui` for a list of all options.

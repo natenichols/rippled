@@ -21,8 +21,12 @@
 #include <ripple/nodestore/impl/ManagerImp.h>
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <memory>
 
 namespace ripple {
+
+class PgPool;
+
 namespace NodeStore {
 
 ManagerImp&
@@ -53,7 +57,15 @@ ManagerImp::make_Backend(
 
     auto factory{find(type)};
     if (!factory)
+    {
+#ifndef RIPPLED_REPORTING
+        if (boost::iequals(type, "cassandra"))
+            Throw<std::runtime_error>(
+                "To use Cassandra as a nodestore, build rippled with "
+                "-Dreporting=ON");
+#endif
         missing_backend();
+    }
 
     return factory->createInstance(
         NodeObject::keyBytes, parameters, burstSize, scheduler, journal);
@@ -67,6 +79,7 @@ ManagerImp::make_Database(
     int readThreads,
     Stoppable& parent,
     Section const& config,
+    bool const reporting,
     beast::Journal journal)
 {
     auto backend{make_Backend(config, burstSize, scheduler, journal)};
@@ -78,6 +91,7 @@ ManagerImp::make_Database(
         parent,
         std::move(backend),
         config,
+        reporting,
         journal);
 }
 

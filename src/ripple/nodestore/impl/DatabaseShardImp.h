@@ -146,6 +146,23 @@ public:
         uint256 const& hash,
         std::uint32_t ledgerSeq) override;
 
+    void
+    sync() override{};
+
+    std::vector<std::shared_ptr<NodeObject>>
+    fetchBatch(std::vector<uint256> const& hashes) override
+    {
+        Throw<std::runtime_error>("pure virtual called");
+        return {};
+    }
+
+    std::pair<std::vector<std::shared_ptr<NodeObject>>, Status>
+    fetchBatch(std::vector<uint256 const*> const& hashes) override
+    {
+        Throw<std::runtime_error>("pure virtual called");
+        return {};
+    }
+
     bool
     asyncFetch(
         uint256 const& hash,
@@ -166,6 +183,9 @@ public:
 
     void
     sweep() override;
+
+    Backend&
+    getBackend() override;
 
 private:
     enum class PathDesignation : uint8_t {
