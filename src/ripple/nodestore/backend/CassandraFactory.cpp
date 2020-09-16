@@ -509,7 +509,7 @@ public:
             {
                 std::stringstream ss;
                 ss << "Cassandra fetch error";
-                if (rc == CASS_ERROR_LIB_REQUEST_TIMED_OUT)
+                if (rc != CASS_OK)
                 {
                     ss << ", retrying";
                     ++counters_.readRetries;
@@ -517,18 +517,7 @@ public:
                 ss << ": " << cass_error_desc(rc);
                 JLOG(j_.warn()) << ss.str();
             }
-        } while (rc == CASS_ERROR_LIB_REQUEST_TIMED_OUT);
-
-        if (rc != CASS_OK)
-        {
-            cass_statement_free(statement);
-            cass_future_free(fut);
-            JLOG(j_.error()) << "Cassandra fetch error: " << rc << ", "
-                             << cass_error_desc(rc);
-            pno->reset();
-            ++counters_.readErrors;
-            return backendError;
-        }
+        } while (rc != CASS_OK);
 
         CassResult const* res = cass_future_get_result(fut);
         cass_statement_free(statement);
