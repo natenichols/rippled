@@ -86,6 +86,8 @@ private:
 
     std::string serverAddress_;
 
+    std::vector<beast::IP::Address> secureGatewayIPs_;
+
     beast::Journal journal_;
 
     // typedef for function to bind a listener
@@ -193,6 +195,8 @@ private:
         // Load type for this RPC
         Resource::Charge loadType_;
 
+        std::vector<beast::IP::Address> const& secureGatewayIPs_;
+
     public:
         virtual ~CallData() = default;
 
@@ -207,7 +211,8 @@ private:
             Handler<Request, Response> handler,
             Forward<Request, Response> forward,
             RPC::Condition requiredCondition,
-            Resource::Charge loadType);
+            Resource::Charge loadType,
+            std::vector<beast::IP::Address> const& secureGatewayIPs);
 
         CallData(const CallData&) = delete;
 
@@ -241,6 +246,28 @@ private:
         // register endpoint with ResourceManager and return usage
         Resource::Consumer
         getUsage();
+
+        // Returns the ip of the client. If the request was proxied through
+        // another rippled node, returns the ip of the originating client.
+        // Empty optional if there was an error decoding the client ip
+        std::optional<beast::IP::Address>
+        getClientIpAddress();
+
+        // Returns the endpoint of the client. If the request was proxied
+        // through another rippled node, returns the endpoint of the originating
+        // client. Empty optional if there was an error decoding the client
+        // endpoint
+        std::optional<beast::IP::Endpoint>
+        getClientEndpoint();
+
+        // True if the client is exempt from resource controls
+        bool
+        clientIsUnlimited();
+
+        // True if the request was proxied through another rippled node prior
+        // to arriving here
+        bool
+        wasForwarded();
 
         // forward request to a p2p node
         void

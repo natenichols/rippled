@@ -50,7 +50,8 @@ GRPCServerImpl::CallData<Request, Response>::CallData(
     Handler<Request, Response> handler,
     Forward<Request, Response> forward,
     RPC::Condition requiredCondition,
-    Resource::Charge loadType)
+    Resource::Charge loadType,
+    std::vector<beast::IP::Address> const& secureGatewayIPs)
     : service_(service)
     , cq_(cq)
     , finished_(false)
@@ -61,6 +62,7 @@ GRPCServerImpl::CallData<Request, Response>::CallData(
     , forward_(std::move(forward))
     , requiredCondition_(std::move(requiredCondition))
     , loadType_(std::move(loadType))
+    , secureGatewayIPs_(secureGatewayIPs)
 {
     // Bind a listener. When a request is received, "this" will be returned
     // from CompletionQueue::Next
@@ -79,7 +81,8 @@ GRPCServerImpl::CallData<Request, Response>::clone()
         handler_,
         forward_,
         requiredCondition_,
-        loadType_);
+        loadType_,
+        secureGatewayIPs_);
 }
 
 template <class Request, class Response>
@@ -125,7 +128,7 @@ GRPCServerImpl::CallData<Request, Response>::process(
     try
     {
         auto usage = getUsage();
-        if (usage.disconnect())
+        if (!clientIsUnlimited() && usage.disconnect())
         {
             grpc::Status status{
                 grpc::StatusCode::RESOURCE_EXHAUSTED,
@@ -137,6 +140,10 @@ GRPCServerImpl::CallData<Request, Response>::process(
             auto loadType = getLoadType();
             usage.charge(loadType);
             auto role = getRole();
+            JLOG(app_.journal("GRPCServer::Calldata").debug())
+                << "role = " << (int)role
+                << " isUnlimited = " << clientIsUnlimited()
+                << " address = " << getClientIpAddress().value();
 
             RPC::GRPCContext<Request> context{
                 {app_.journal("gRPCServer"),
@@ -250,12 +257,44 @@ template <class Request, class Response>
 Role
 GRPCServerImpl::CallData<Request, Response>::getRole()
 {
-    return Role::USER;
+    if (clientIsUnlimited())
+        return Role::IDENTIFIED;
+    else if (wasForwarded())
+        return Role::PROXY;
+    else
+        return Role::USER;
 }
 
 template <class Request, class Response>
-Resource::Consumer
-GRPCServerImpl::CallData<Request, Response>::getUsage()
+bool
+GRPCServerImpl::CallData<Request, Response>::wasForwarded()
+{
+    auto descriptor = Request::GetDescriptor()->FindFieldByName("client_ip");
+    if (descriptor)
+    {
+        std::string clientIp =
+            Request::GetReflection()->GetString(request_, descriptor);
+        if (!clientIp.empty())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+template <class Request, class Response>
+std::optional<beast::IP::Address>
+GRPCServerImpl::CallData<Request, Response>::getClientIpAddress()
+{
+    auto endpoint = getClientEndpoint();
+    if (endpoint)
+        return endpoint->address();
+    return {};
+}
+
+template <class Request, class Response>
+std::optional<beast::IP::Endpoint>
+GRPCServerImpl::CallData<Request, Response>::getClientEndpoint()
 {
     std::string peer = getEndpoint(ctx_.peer());
     auto descriptor = Request::GetDescriptor()->FindFieldByName("client_ip");
@@ -271,9 +310,37 @@ GRPCServerImpl::CallData<Request, Response>::getUsage()
             peer = clientIp;
         }
     }
-    boost::optional<beast::IP::Endpoint> endpoint =
-        beast::IP::Endpoint::from_string_checked(peer);
-    return app_.getResourceManager().newInboundEndpoint(endpoint.get());
+    auto res = beast::IP::Endpoint::from_string_checked(peer);
+    if (res)
+        return {res.get()};
+    else
+        return {};
+}
+
+template <class Request, class Response>
+bool
+GRPCServerImpl::CallData<Request, Response>::clientIsUnlimited()
+{
+    auto clientIp = getClientIpAddress();
+    if (clientIp)
+    {
+        for (auto& ip : secureGatewayIPs_)
+        {
+            if (ip == clientIp)
+                return true;
+        }
+    }
+    return false;
+}
+
+template <class Request, class Response>
+Resource::Consumer
+GRPCServerImpl::CallData<Request, Response>::getUsage()
+{
+    auto endpoint = getClientEndpoint();
+    if (endpoint)
+        return app_.getResourceManager().newInboundEndpoint(endpoint.value());
+    Throw<std::runtime_error>("Failed to get client endpoint");
 }
 
 GRPCServerImpl::GRPCServerImpl(Application& app)
@@ -301,6 +368,42 @@ GRPCServerImpl::GRPCServerImpl(Application& app)
         }
         catch (std::exception const&)
         {
+        }
+
+        std::pair<std::string, bool> secureGateway =
+            section.find("secure_gateway");
+        if (secureGateway.second)
+        {
+            try
+            {
+                std::stringstream ss{secureGateway.first};
+                std::string ip;
+                while (std::getline(ss, ip, ','))
+                {
+                    auto const addr =
+                        beast::IP::Endpoint::from_string_checked(ip);
+                    if (!addr)
+                    {
+                        JLOG(journal_.error())
+                            << "Invalid value '" << ip << "' for "
+                            << "secure_gateway of port_grpc";
+                        Throw<std::exception>();
+                    }
+
+                    if (is_unspecified(*addr))
+                    {
+                        JLOG(journal_.error())
+                            << "Can't pass unspecified IP in "
+                            << "secure_gateway section of port_grpc";
+                        Throw<std::exception>();
+                    }
+
+                    secureGatewayIPs_.emplace_back(addr->address());
+                }
+            }
+            catch (std::exception const&)
+            {
+            }
         }
     }
 }
@@ -421,7 +524,8 @@ GRPCServerImpl::setupListeners()
             doFeeGrpc,
             &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetFee,
             RPC::NEEDS_CURRENT_LEDGER,
-            Resource::feeReferenceRPC));
+            Resource::feeReferenceRPC,
+            secureGatewayIPs_));
     }
     {
         using cd = CallData<
@@ -437,7 +541,8 @@ GRPCServerImpl::setupListeners()
             doAccountInfoGrpc,
             &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetAccountInfo,
             RPC::NO_CONDITION,
-            Resource::feeReferenceRPC));
+            Resource::feeReferenceRPC,
+            secureGatewayIPs_));
     }
     {
         using cd = CallData<
@@ -452,8 +557,9 @@ GRPCServerImpl::setupListeners()
                 RequestGetTransaction,
             doTxGrpc,
             &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetTransaction,
-            RPC::NEEDS_CURRENT_LEDGER,
-            Resource::feeReferenceRPC));
+            RPC::NEEDS_NETWORK_CONNECTION,
+            Resource::feeReferenceRPC,
+            secureGatewayIPs_));
     }
     {
         using cd = CallData<
@@ -469,7 +575,8 @@ GRPCServerImpl::setupListeners()
             doSubmitGrpc,
             &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::SubmitTransaction,
             RPC::NEEDS_CURRENT_LEDGER,
-            Resource::feeMediumBurdenRPC));
+            Resource::feeMediumBurdenRPC,
+            secureGatewayIPs_));
     }
 
     {
@@ -487,7 +594,8 @@ GRPCServerImpl::setupListeners()
             &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::
                 GetAccountTransactionHistory,
             RPC::NO_CONDITION,
-            Resource::feeMediumBurdenRPC));
+            Resource::feeMediumBurdenRPC,
+            secureGatewayIPs_));
     }
 
     {
@@ -504,7 +612,8 @@ GRPCServerImpl::setupListeners()
             doLedgerGrpc,
             &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetLedger,
             RPC::NO_CONDITION,
-            Resource::feeMediumBurdenRPC));
+            Resource::feeMediumBurdenRPC,
+            secureGatewayIPs_));
     }
     {
         using cd = CallData<
@@ -520,7 +629,8 @@ GRPCServerImpl::setupListeners()
             doLedgerDataGrpc,
             &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetLedgerData,
             RPC::NO_CONDITION,
-            Resource::feeMediumBurdenRPC));
+            Resource::feeMediumBurdenRPC,
+            secureGatewayIPs_));
     }
     {
         using cd = CallData<
@@ -536,7 +646,8 @@ GRPCServerImpl::setupListeners()
             doLedgerDiffGrpc,
             &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetLedgerDiff,
             RPC::NO_CONDITION,
-            Resource::feeMediumBurdenRPC));
+            Resource::feeMediumBurdenRPC,
+            secureGatewayIPs_));
     }
     {
         using cd = CallData<
@@ -552,7 +663,8 @@ GRPCServerImpl::setupListeners()
             doLedgerEntryGrpc,
             &org::xrpl::rpc::v1::XRPLedgerAPIService::Stub::GetLedgerEntry,
             RPC::NO_CONDITION,
-            Resource::feeMediumBurdenRPC));
+            Resource::feeMediumBurdenRPC,
+            secureGatewayIPs_));
     }
     return requests;
 };

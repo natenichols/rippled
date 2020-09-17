@@ -82,7 +82,9 @@ needCurrentOrClosed(RPC::GRPCContext<Request>& context)
         org::xrpl::rpc::v1::LedgerSpecifier::LedgerCase::kShortcut)
     {
         if (context.params.ledger().shortcut() !=
-            org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED)
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED &&
+            context.params.ledger().shortcut() !=
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_UNSPECIFIED)
             return true;
     }
     return false;
