@@ -251,6 +251,7 @@ class Pg
 
     PgConfig const& config_;
     beast::Journal const j_;
+    bool& stop_;
 
     // The connection object must be freed using the libpq API PQfinish() call.
     pg_connection_type conn_{nullptr, [](PGconn* conn) { PQfinish(conn); }};
@@ -332,8 +333,10 @@ public:
      *
      * @param config Config parameters.
      * @param j Logger object.
+     * @param stop Reference to connection pool's stop flag.
      */
-    Pg(PgConfig const& config, beast::Journal const j) : config_(config), j_(j)
+    Pg(PgConfig const& config, beast::Journal const j, bool& stop)
+        : config_(config), j_(j), stop_(stop)
     {
     }
 };

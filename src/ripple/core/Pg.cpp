@@ -126,6 +126,9 @@ Pg::query(char const* command, std::size_t nParams, char const* const* values)
     {
         try
         {
+            if (stop_)
+                return PgResult();
+
             connect();
             if (nParams)
             {
@@ -176,8 +179,9 @@ Pg::query(char const* command, std::size_t nParams, char const* const* values)
                << ", number of tuples: " << PQntuples(ret.get())
                << ", number of fields: " << PQnfields(ret.get());
             JLOG(j_.error()) << ss.str();
+            PgResult retRes(ret.get(), conn_.get());
             disconnect();
-            return PgResult(ret.get(), conn_.get());
+            return retRes;
         }
     }
 
@@ -534,7 +538,7 @@ PgPool::checkout()
         else if (connections_ < config_.max_connections)
         {
             ++connections_;
-            ret = std::make_unique<Pg>(config_, j_);
+            ret = std::make_unique<Pg>(config_, j_, stop_);
         }
         // Otherwise, wait until a connection becomes available or we stop.
         else
