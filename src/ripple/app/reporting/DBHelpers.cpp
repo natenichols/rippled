@@ -49,7 +49,7 @@ bool
 writeToPostgres(
     LedgerInfo const& info,
     std::vector<AccountTransactionsData>& accountTxData,
-    PgPool& pgPool,
+    std::shared_ptr<PgPool> const& pgPool,
     beast::Journal& j)
 {
     JLOG(j.debug()) << __func__ << " : "

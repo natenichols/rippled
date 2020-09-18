@@ -164,7 +164,7 @@ public:
     // Required by the SHAMapStore
     TransactionMaster m_txMaster;
 
-    std::unique_ptr<PgPool> pgPool_;
+    std::shared_ptr<PgPool> pgPool_;
     NodeStoreScheduler m_nodeStoreScheduler;
     std::unique_ptr<SHAMapStore> m_shaMapStore;
     PendingSaves pendingSaves_;
@@ -280,7 +280,8 @@ public:
         , pgPool_(
               config_->reporting() ? make_PgPool(
                                          config_->section("ledger_tx_tables"),
-                                         logs_->journal("PgPool"))
+                                         logs_->journal("PgPool"),
+                                         *this)
                                    : nullptr)
 
         , m_nodeStoreScheduler(*this)
@@ -846,11 +847,11 @@ public:
         return *mLedgerDB;
     }
 
-    PgPool&
+    std::shared_ptr<PgPool> const&
     getPgPool() override
     {
         assert(pgPool_);
-        return *pgPool_;
+        return pgPool_;
     }
 
     DatabaseCon&
@@ -945,7 +946,7 @@ public:
             }
             else if (!config_->reportingReadOnly())  // use pg
             {
-                initSchema(*pgPool_);
+                initSchema(pgPool_);
             }
 
             // wallet database
@@ -2245,7 +2246,7 @@ ApplicationImp::setMaxDisallowedLedger()
 {
     if (config().reporting())
     {
-        auto seq = PgQuery(*pgPool_)("SELECT max_ledger()");
+        auto seq = PgQuery(pgPool_)("SELECT max_ledger()");
         if (seq && !seq.isNull())
             maxDisallowedLedger_ = seq.asBigInt();
     }

@@ -247,7 +247,7 @@ public:
     virtual bool
     serverOkay(std::string& reason) = 0;
 
-    virtual PgPool&
+    virtual std::shared_ptr<PgPool> const&
     getPgPool() = 0;
 
     virtual beast::Journal

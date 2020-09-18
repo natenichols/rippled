@@ -314,7 +314,11 @@ Pg::clear()
 
 //-----------------------------------------------------------------------------
 
-PgPool::PgPool(Section const& pgConfig, beast::Journal const j) : j_(j)
+PgPool::PgPool(
+    Section const& pgConfig,
+    beast::Journal const j,
+    Stoppable& parent)
+    : Stoppable("PgPool", parent), j_(j)
 {
     /*
     Connect to postgres to create low level connection parameters
@@ -483,12 +487,14 @@ PgPool::setup()
 }
 
 void
-PgPool::stop()
+PgPool::onStop()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     stop_ = true;
     cond_.notify_all();
     idle_.clear();
+    stopped();
+    JLOG(j_.info()) << "stopped";
 }
 
 void
@@ -520,13 +526,13 @@ PgPool::idleSweeper()
 std::unique_ptr<Pg>
 PgPool::checkout()
 {
-    if (stop_)
-        return {};
-
     std::unique_ptr<Pg> ret;
     std::unique_lock<std::mutex> lock(mutex_);
     do
     {
+        if (stop_)
+            return {};
+
         // If there is a connection in the pool, return the most recent.
         if (idle_.size())
         {
@@ -574,10 +580,10 @@ PgPool::checkin(std::unique_ptr<Pg>& pg)
 
 //-----------------------------------------------------------------------------
 
-std::unique_ptr<PgPool>
-make_PgPool(Section const& pgConfig, beast::Journal const j)
+std::shared_ptr<PgPool>
+make_PgPool(Section const& pgConfig, beast::Journal const j, Stoppable& parent)
 {
-    auto ret = std::make_unique<PgPool>(pgConfig, j);
+    auto ret = std::make_shared<PgPool>(pgConfig, j, parent);
     ret->setup();
     return ret;
 }
@@ -1305,7 +1311,7 @@ std::array<char const*, LATEST_SCHEMA_VERSION> upgrade_schemata = {
  */
 void
 applySchema(
-    PgPool& pool,
+    std::shared_ptr<PgPool> const& pool,
     char const* schema,
     std::uint32_t currentVersion,
     std::uint32_t schemaVersion)
@@ -1341,7 +1347,7 @@ applySchema(
 }
 
 void
-initSchema(PgPool& pool)
+initSchema(std::shared_ptr<PgPool> const& pool)
 {
     // Figure out what schema version, if any, is already installed.
     auto res = PgQuery(pool)({version_query, {}});
