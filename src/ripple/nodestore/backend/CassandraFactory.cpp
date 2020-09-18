@@ -151,7 +151,7 @@ public:
     }
 
     // Setup all of the necessary components for talking to the database.
-    // Create the objects table if it doesn't exist already
+    // Create the table if it doesn't exist already
     // @param createIfMissing ignored
     void
     open(bool createIfMissing) override
@@ -319,6 +319,13 @@ public:
                 "nodestore: Missing keyspace in Cassandra config");
         }
 
+        std::string tableName = get<std::string>(config_, "table_name");
+        if (tableName.empty())
+        {
+            Throw<std::runtime_error>(
+                "nodestore: Missing table name in Cassandra config");
+        }
+
         cass_cluster_set_connect_timeout(cluster, 10000);
 
         CassStatement* statement;
@@ -343,11 +350,11 @@ public:
                 continue;
             }
 
-            statement = makeStatement(
-                "CREATE TABLE IF NOT EXISTS objects ("
-                "    hash   blob PRIMARY KEY, "
-                "    object blob)",
-                0);
+            std::stringstream query;
+            query << "CREATE TABLE IF NOT EXISTS " << tableName
+                  << " ( hash blob PRIMARY KEY, object blob)";
+
+            statement = makeStatement(query.str().c_str(), 0);
             fut = cass_session_execute(session_.get(), statement);
             rc = cass_future_error_code(fut);
             cass_future_free(fut);
@@ -355,13 +362,15 @@ public:
             if (rc != CASS_OK && rc != CASS_ERROR_SERVER_INVALID_QUERY)
             {
                 std::stringstream ss;
-                ss << "nodestore: Error creating Cassandra objects table: "
-                   << rc << ", " << cass_error_desc(rc);
+                ss << "nodestore: Error creating Cassandra table: " << rc
+                   << ", " << cass_error_desc(rc);
                 JLOG(j_.error()) << ss.str();
                 continue;
             }
 
-            statement = makeStatement("SELECT * FROM objects LIMIT 1", 0);
+            query = {};
+            query << "SELECT * FROM " << tableName << " LIMIT 1";
+            statement = makeStatement(query.str().c_str(), 0);
             fut = cass_session_execute(session_.get(), statement);
             rc = cass_future_error_code(fut);
             cass_future_free(fut);
@@ -370,16 +379,15 @@ public:
             {
                 if (rc == CASS_ERROR_SERVER_INVALID_QUERY)
                 {
-                    JLOG(j_.warn())
-                        << "objects table not here yet, sleeping 1s to "
-                           "see if table creation propagates";
+                    JLOG(j_.warn()) << "table not here yet, sleeping 1s to "
+                                       "see if table creation propagates";
                     continue;
                 }
                 else
                 {
                     std::stringstream ss;
-                    ss << "nodestore: Error checking for objects table: " << rc
-                       << ", " << cass_error_desc(rc);
+                    ss << "nodestore: Error checking for table: " << rc << ", "
+                       << cass_error_desc(rc);
                     JLOG(j_.error()) << ss.str();
                     continue;
                 }
@@ -394,9 +402,11 @@ public:
         while (!setupPreparedStatements)
         {
             std::this_thread::sleep_for(std::chrono::seconds(1));
-            CassFuture* prepare_future = cass_session_prepare(
-                session_.get(),
-                "INSERT INTO objects (hash, object) VALUES (?, ?)");
+            std::stringstream query;
+            query << "INSERT INTO " << tableName
+                  << " (hash, object) VALUES (?, ?)";
+            CassFuture* prepare_future =
+                cass_session_prepare(session_.get(), query.str().c_str());
 
             /* Wait for the statement to prepare and get the result */
             rc = cass_future_error_code(prepare_future);
@@ -421,8 +431,10 @@ public:
              */
             cass_future_free(prepare_future);
 
-            prepare_future = cass_session_prepare(
-                session_.get(), "SELECT object FROM objects WHERE hash = ?");
+            query = {};
+            query << "SELECT object FROM " << tableName << " WHERE hash = ?";
+            prepare_future =
+                cass_session_prepare(session_.get(), query.str().c_str());
 
             /* Wait for the statement to prepare and get the result */
             rc = cass_future_error_code(prepare_future);
