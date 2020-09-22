@@ -30,6 +30,7 @@
 
 #include <ripple/basics/contract.h>
 #include <ripple/core/Pg.h>
+#include <boost/asio/ssl/detail/openssl_init.hpp>
 #include <boost/format.hpp>
 #include <algorithm>
 #include <array>
@@ -289,11 +290,14 @@ Pg::clear()
 
     // The result object must be freed using the libpq API PQclear() call.
     pg_result_type res{nullptr, [](PGresult* result) { PQclear(result); }};
-    while (true)
+
+    // Consume results until no more, or until the connection is severed.
+    do
     {
         res.reset(PQgetResult(conn_.get()));
         if (!res)
             break;
+
         // Pending bulk copy operations may leave the connection in such a
         // state that it must be disconnected.
         switch (PQresultStatus(res.get()))
@@ -307,7 +311,7 @@ Pg::clear()
                 conn_.reset();
             default:;
         }
-    }
+    } while (res && conn_);
 
     return conn_ != nullptr;
 }
@@ -320,6 +324,13 @@ PgPool::PgPool(
     Stoppable& parent)
     : Stoppable("PgPool", parent), j_(j)
 {
+    // Make sure that boost::asio initializes the SSL library.
+    {
+        boost::asio::ssl::detail::openssl_init<true> initSsl;
+    }
+    // Don't have postgres client initialize SSL.
+    PQinitOpenSSL(0, 0);
+
     /*
     Connect to postgres to create low level connection parameters
     with optional caching of network address info for subsequent connections.
