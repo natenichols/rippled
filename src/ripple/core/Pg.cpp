@@ -257,6 +257,7 @@ Pg::bulkInsert(char const* table, std::string const& records)
         std::stringstream ss;
         ss << "bulkInsert to " << table
            << ". PQputCopyData error: " << PQerrorMessage(conn_.get());
+        disconnect();
         Throw<std::runtime_error>(ss.str());
     }
 
@@ -265,6 +266,7 @@ Pg::bulkInsert(char const* table, std::string const& records)
         std::stringstream ss;
         ss << "bulkInsert to " << table
            << ". PQputCopyEnd error: " << PQerrorMessage(conn_.get());
+        disconnect();
         Throw<std::runtime_error>(ss.str());
     }
 
@@ -278,6 +280,7 @@ Pg::bulkInsert(char const* table, std::string const& records)
         std::stringstream ss;
         ss << "bulkInsert to " << table
            << ". PQputCopyEnd status not PGRES_COMMAND_OK: " << status;
+        disconnect();
         Throw<std::runtime_error>(ss.str());
     }
 }
