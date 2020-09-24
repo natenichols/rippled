@@ -402,23 +402,22 @@ Database::threadEntry()
     }
 }
 
-Json::Value
-Database::getCountsJson()
+void
+Database::getCountsJson(Json::Value& obj)
 {
-    Json::Value ret(Json::objectValue);
-    ret[jss::node_writes] = std::to_string(storeCount_);
-    ret[jss::node_reads_total] = std::to_string(fetchTotalCount_);
-    ret[jss::node_reads_hit] = std::to_string(fetchHitCount_);
-    ret[jss::node_written_bytes] = std::to_string(storeSz_);
-    ret[jss::node_read_bytes] = std::to_string(fetchSz_);
-    ret[jss::node_reads_duration_us] = std::to_string(fetchDurationUs_);
+    assert(obj.isObject());
+    obj[jss::node_writes] = std::to_string(storeCount_);
+    obj[jss::node_reads_total] = std::to_string(fetchTotalCount_);
+    obj[jss::node_reads_hit] = std::to_string(fetchHitCount_);
+    obj[jss::node_written_bytes] = std::to_string(storeSz_);
+    obj[jss::node_read_bytes] = std::to_string(fetchSz_);
+    obj[jss::node_reads_duration_us] = std::to_string(fetchDurationUs_);
     auto const& c = getBackend().counters();
-    ret[jss::node_read_errors] = std::to_string(c.readErrors);
-    ret[jss::node_read_retries] = std::to_string(c.readRetries);
-    ret[jss::node_write_retries] = std::to_string(c.writeRetries);
-    ret[jss::node_writes_delayed] = std::to_string(c.writesDelayed);
-    ret[jss::node_writes_duration_us] = std::to_string(c.writeDurationUs);
-    return ret;
+    obj[jss::node_read_errors] = std::to_string(c.readErrors);
+    obj[jss::node_read_retries] = std::to_string(c.readRetries);
+    obj[jss::node_write_retries] = std::to_string(c.writeRetries);
+    obj[jss::node_writes_delayed] = std::to_string(c.writesDelayed);
+    obj[jss::node_writes_duration_us] = std::to_string(c.writeDurationUs);
 }
 
 }  // namespace NodeStore

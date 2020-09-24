@@ -208,10 +208,9 @@ public:
     getBackend() = 0;
 
     /** Gather statistics pertaining to read and write activities.
-
-        @return The total read and written bytes.
+     *
+     * @param obj Json object reference into which to place counters.
      */
-<<<<<<< HEAD
     std::uint64_t
     getStoreCount() const
     {
@@ -241,11 +240,9 @@ public:
     {
         return fetchSz_;
     }
-=======
 
-    Json::Value
-    getCountsJson();
->>>>>>> 01866f712... Add Reporting Mode
+    void
+    getCountsJson(Json::Value& obj);
 
     /** Returns the number of file descriptors the database expects to need */
     int
@@ -295,23 +292,12 @@ protected:
     void
     importInternal(Backend& dstBackend, Database& srcDB);
 
-<<<<<<< HEAD
-=======
-    std::shared_ptr<NodeObject>
-    doFetch(
-        uint256 const& hash,
-        std::uint32_t seq,
-        TaggedCache<uint256, NodeObject>& pCache,
-        KeyCache<uint256>& nCache,
-        bool isAsync);
-
     std::vector<std::shared_ptr<NodeObject>>
     doFetchBatch(
         std::vector<uint256> const& hashes,
         TaggedCache<uint256, NodeObject>& pCache,
         KeyCache<uint256>& nCache);
 
->>>>>>> 01866f712... Add Reporting Mode
     // Called by the public storeLedger function
     bool
     storeLedger(
@@ -322,17 +308,10 @@ protected:
 
 private:
     std::atomic<std::uint64_t> storeCount_{0};
-<<<<<<< HEAD
     std::atomic<std::uint64_t> storeSz_{0};
     std::atomic<std::uint64_t> fetchTotalCount_{0};
-=======
-    std::atomic<std::uint64_t> fetchTotalCount_{0};
-    std::atomic<std::uint64_t> fetchHitCount_{0};
-    std::atomic<std::uint64_t> storeSz_{0};
-    std::atomic<std::uint64_t> fetchSz_{0};
     std::atomic<std::uint64_t> fetchDurationUs_{0};
     std::atomic<std::uint64_t> storeDurationUs_{0};
->>>>>>> 01866f712... Add Reporting Mode
 
     std::mutex readLock_;
     std::condition_variable readCondVar_;

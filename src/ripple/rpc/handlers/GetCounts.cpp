@@ -123,8 +123,6 @@ getCountsJson(Application& app, int minObjectCount)
     textTime(uptime, s, "second", 1s);
     ret[jss::uptime] = uptime;
 
-    ret[jss::nodestore] = app.getNodeStore().getCountsJson();
-
     if (auto shardStore = app.getShardStore())
     {
         auto shardFamily{dynamic_cast<ShardFamily*>(app.getShardFamily())};
@@ -142,6 +140,10 @@ getCountsJson(Application& app, int minObjectCount)
         jv[jss::node_written_bytes] =
             std::to_string(shardStore->getStoreSize());
         jv[jss::node_read_bytes] = shardStore->getFetchSize();
+    }
+    else
+    {
+        app.getNodeStore().getCountsJson(ret);
     }
 
     return ret;
