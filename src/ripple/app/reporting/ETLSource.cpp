@@ -885,13 +885,12 @@ ETLLoadBalancer::execute(Func f, uint32_t ledgerSequence)
             // If another process loaded the ledger into the database, we can
             // abort trying to fetch the ledger from a transaction processing
             // process
-            if (etl_.getApplication().getLedgerMaster().getLedgerBySeq(
-                    ledgerSequence))
+            if (loadByIndexPostgres(ledgerSequence, etl_.getApplication(), false))
             {
                 JLOG(journal_.warn())
                     << __func__ << " : "
                     << "Error executing function. "
-                    << " Tried all sources, but ledger was found in db."
+                    << " Tried all sources, but ledger was found in postgres."
                     << " Sequence = " << ledgerSequence;
                 break;
             }

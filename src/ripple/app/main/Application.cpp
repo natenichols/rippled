@@ -966,6 +966,9 @@ public:
     bool
     initNodeStore()
     {
+        if(config_->reporting())
+            return true;
+
         if (config_->doImport)
         {
             auto j = logs_->journal("NodeObject");
@@ -1254,7 +1257,12 @@ public:
         if (shardFamily_)
             shardFamily_->sweep();
         getMasterTransaction().sweep();
-        getNodeStore().sweep();
+
+        if(config_->reporting())
+            getReportingETL().sweep();
+        else
+            getNodeStore().sweep();
+
         if (shardStore_)
             shardStore_->sweep();
         getLedgerMaster().sweep();
@@ -1821,9 +1829,8 @@ ApplicationImp::getLastFullLedger()
 
     try
     {
-        auto const [ledger, seq, hash] = config_->usePostgresLedgerTx()
-            ? loadLedgerHelperPostgres(bool{false}, *this)
-            : loadLedgerHelper("order by LedgerSeq desc limit 1", *this);
+        auto const [ledger, seq, hash] = 
+            loadLedgerHelper("order by LedgerSeq desc limit 1", *this);
 
         if (!ledger)
             return ledger;

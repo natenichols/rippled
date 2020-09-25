@@ -158,10 +158,10 @@ public:
     }
 
     void
-        setLedgerInfo(LedgerInfo const& info)
-        {
-            info_ = info;
-        }
+    setLedgerInfo(LedgerInfo const& info)
+    {
+        info_ = info;
+    }
 
     Fees const&
     fees() const override
@@ -443,24 +443,6 @@ loadLedgerHelper(
 
 extern std::shared_ptr<Ledger>
 loadByHash(uint256 const& ledgerHash, Application& app, bool acquire = true);
-
-extern std::tuple<std::shared_ptr<Ledger>, std::uint32_t, uint256>
-loadLedgerHelperPostgres(
-    std::variant<uint256, uint32_t, bool> const& whichLedger,
-    Application& app,
-    bool acquire = true);
-
-extern std::shared_ptr<Ledger>
-loadByHashPostgres(
-    uint256 const& ledgerHash,
-    Application& app,
-    bool acquire = true);
-
-extern std::shared_ptr<Ledger>
-loadByIndexPostgres(
-    std::uint32_t ledgerIndex,
-    Application& app,
-    bool acquire = true);
 
 extern
 uint256

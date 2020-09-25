@@ -1594,8 +1594,6 @@ LedgerMaster::getValidatedLedger ()
     return mValidLedger.get();
 }
 
-
-
 Rules
 LedgerMaster::getValidatedRules()
 {

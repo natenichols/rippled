@@ -28,6 +28,8 @@
 #include <ripple/net/InfoSub.h>
 #include <ripple/protocol/ErrorCodes.h>
 #include <ripple/resource/Charge.h>
+#include <ripple/app/reporting/CassandraBackend.h>
+#include <ripple/app/reporting/FlatLedger.h>
 #include <ripple/rpc/Context.h>
 #include <ripple/rpc/GRPCHandlers.h>
 #include <ripple/rpc/Role.h>
@@ -52,7 +54,7 @@ namespace ripple {
 
 struct AccountTransactionsData;
 
-class ReportingETL : Stoppable
+class ReportingETL : public Stoppable
 {
 private:
     Application& app_;
@@ -62,6 +64,8 @@ private:
     std::thread worker_;
 
     boost::asio::io_context::strand publishStrand_;
+
+    NodeStore::CassandraBackend cassandra_;
 
     ETLLoadBalancer loadBalancer_;
 
@@ -101,7 +105,7 @@ private:
         lastPublish_ = std::chrono::system_clock::now();
     }
 
-    std::shared_ptr<Ledger>
+    std::shared_ptr<FlatLedger>
     loadInitialLedger(uint32_t startingSequence);
 
     std::optional<uint32_t>
@@ -124,16 +128,16 @@ private:
 
     std::vector<AccountTransactionsData>
     insertTransactions(
-        std::shared_ptr<Ledger>& ledger,
+        std::shared_ptr<FlatLedger>& ledger,
         org::xrpl::rpc::v1::GetLedgerResponse& data);
 
-    std::pair<std::shared_ptr<Ledger>, std::vector<AccountTransactionsData>>
+    std::pair<std::shared_ptr<FlatLedger>, std::vector<AccountTransactionsData>>
     buildNextLedger(
-        std::shared_ptr<Ledger>& parent,
+        std::shared_ptr<FlatLedger>& parent,
         org::xrpl::rpc::v1::GetLedgerResponse& rawData);
 
     void
-    flushLedger(std::shared_ptr<Ledger>& ledger);
+    flushLedger(std::shared_ptr<FlatLedger>& ledger);
 
     // returns true if publish was successful (if ledger is in db)
     bool
@@ -141,14 +145,14 @@ private:
 
     // Publishes the passed in ledger
     void
-    publishLedger(std::shared_ptr<Ledger>& ledger);
+    publishLedger(std::shared_ptr<FlatLedger>& ledger);
 
     void
     outputMetrics(std::shared_ptr<Ledger>& ledger);
 
     void
     consumeLedgerData(
-        std::shared_ptr<Ledger>& ledger,
+        std::shared_ptr<FlatLedger>& ledger,
         ThreadSafeQueue<std::shared_ptr<SLE>>& writeQueue);
 
     void
@@ -159,12 +163,19 @@ public:
 
     ~ReportingETL()
     {
+        
     }
 
     NetworkValidatedLedgers&
     getNetworkValidatedLedgers()
     {
         return networkValidatedLedgers_;
+    }
+
+    NodeStore::CassandraBackend&
+    getCassandra()
+    {
+        return cassandra_;
     }
 
     bool
@@ -215,6 +226,9 @@ public:
     setup();
 
     void
+    sweep();
+
+    void
     run()
     {
         JLOG(journal_.info()) << "Starting reporting etl";
@@ -256,6 +270,7 @@ public:
 private:
     void
     doWork();
+
 };
 
 }  // namespace ripple

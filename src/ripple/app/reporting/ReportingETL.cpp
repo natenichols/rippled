@@ -36,32 +36,22 @@ namespace ripple {
 
 void
 ReportingETL::consumeLedgerData(
-    std::shared_ptr<Ledger>& ledger,
+    std::shared_ptr<FlatLedger>& ledger,
     ThreadSafeQueue<std::shared_ptr<SLE>>& writeQueue)
 {
     std::shared_ptr<SLE> sle;
-    size_t num = 0;
     // TODO: if this call blocks, flushDirty in the meantime
     while (not stopping_ and (sle = writeQueue.pop()))
     {
         assert(sle);
-        // TODO get rid of this conditional
-        if (!ledger->exists(sle->key()))
-            ledger->rawInsert(sle);
-
-        if (flushInterval_ != 0 and (num % flushInterval_) == 0)
-        {
-            JLOG(journal_.debug()) << "Flushing! key = " << strHex(sle->key());
-            ledger->stateMap().flushDirty(
-                hotACCOUNT_NODE, ledger->info().seq, true);
-        }
-        ++num;
+        ledger->rawInsert(sle);
+        cassandra_.sync();
     }
 }
 
 std::vector<AccountTransactionsData>
 ReportingETL::insertTransactions(
-    std::shared_ptr<Ledger>& ledger,
+    std::shared_ptr<FlatLedger>& ledger,
     org::xrpl::rpc::v1::GetLedgerResponse& data)
 {
     std::vector<AccountTransactionsData> accountTxData;
@@ -84,8 +74,11 @@ ReportingETL::insertTransactions(
         JLOG(journal_.trace())
             << __func__ << " : "
             << "Inserting transaction = " << sttx.getTransactionID();
+
         uint256 nodestoreHash = ledger->rawTxInsert(
             sttx.getTransactionID(), txSerializer, metaSerializer);
+        cassandra_.sync();
+
         accountTxData.emplace_back(txMeta, nodestoreHash, journal_);
     }
     return accountTxData;
@@ -95,13 +88,12 @@ ReportingETL::insertTransactions(
 // @param sequence of ledger to download
 // @return the full ledger. All data has been written to the database (key-value
 // and relational). Empty shared_ptr on error
-std::shared_ptr<Ledger>
+std::shared_ptr<FlatLedger>
 ReportingETL::loadInitialLedger(uint32_t startingSequence)
 {
     // check that database is actually empty
-    auto ledger = std::const_pointer_cast<Ledger>(
-        app_.getLedgerMaster().getValidatedLedger());
-    if(ledger)
+    std::shared_ptr<FlatLedger> ledger = getValidatedLedgerPostgres(app_);
+    if (ledger)
     {
         JLOG(journal_.fatal()) << __func__ << " : "
             << "Database is not empty";
@@ -124,9 +116,9 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
                            << "Deserialized ledger header. "
                            << toString(lgrInfo);
 
-    ledger = std::make_shared<Ledger>(lgrInfo, app_.config(), app_.getNodeFamily());
-    ledger->stateMap().clearSynching();
-    ledger->txMap().clearSynching();
+    ledger = std::make_shared<FlatLedger>(lgrInfo, app_.config(), app_.getNodeFamily(), cassandra_);
+    // ledger->stateMap().clearSynching();
+    // ledger->txMap().clearSynching();
     std::vector<AccountTransactionsData> accountTxData =
         insertTransactions(ledger, *ledgerData);
 
@@ -171,7 +163,13 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
 }
 
 void
-ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
+ReportingETL::sweep()
+{
+
+}
+
+void
+ReportingETL::flushLedger(std::shared_ptr<FlatLedger>& ledger)
 {
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Flushing ledger. " << toString(ledger->info());
@@ -184,93 +182,93 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
     ledger->setImmutable(app_.config(), false);
     auto start = std::chrono::system_clock::now();
 
-    auto numFlushed = ledger->stateMap().flushDirty(
-        hotACCOUNT_NODE, ledger->info().seq, true);
+    // auto numFlushed = ledger->stateMap().flushDirty(
+    //     hotACCOUNT_NODE, ledger->info().seq, true);
 
-    auto numTxFlushed = ledger->txMap().flushDirty(
-        hotTRANSACTION_NODE, ledger->info().seq, true);
+    // auto numTxFlushed = ledger->txMap().flushDirty(
+    //     hotTRANSACTION_NODE, ledger->info().seq, true);
 
-    {
-        Serializer s(128);
-        s.add32(HashPrefix::ledgerMaster);
-        addRaw(ledger->info(), s);
-        app_.getNodeStore().store(
-            hotLEDGER,
-            std::move(s.modData()),
-            ledger->info().hash,
-            ledger->info().seq,
-            true);
-    }
+    // {
+    //     Serializer s(128);
+    //     s.add32(HashPrefix::ledgerMaster);
+    //     addRaw(ledger->info(), s);
+    //     // app_.getNodeStore().store(
+        //     hotLEDGER,
+        //     std::move(s.modData()),
+        //     ledger->info().hash,
+        //     ledger->info().seq,
+        //     true);
+    // }
 
-    app_.getNodeStore().sync();
+    // app_.getNodeStore().sync();
 
     auto end = std::chrono::system_clock::now();
 
-    JLOG(journal_.debug()) << __func__ << " : "
-                           << "Flushed " << numFlushed
-                           << " nodes to nodestore from stateMap";
-    JLOG(journal_.debug()) << __func__ << " : "
-                           << "Flushed " << numTxFlushed
-                           << " nodes to nodestore from txMap";
+    // JLOG(journal_.debug()) << __func__ << " : "
+    //                        << "Flushed " << numFlushed
+    //                        << " nodes to nodestore from stateMap";
+    // JLOG(journal_.debug()) << __func__ << " : "
+    //                        << "Flushed " << numTxFlushed
+    //                        << " nodes to nodestore from txMap";
 
-    JLOG(journal_.debug()) << __func__ << " : "
-                           << "Flush took "
-                           << (end - start).count() / 1000000000.0
-                           << " seconds";
+    // JLOG(journal_.debug()) << __func__ << " : "
+    //                        << "Flush took "
+    //                        << (end - start).count() / 1000000000.0
+    //                        << " seconds";
 
-    if (numFlushed == 0)
-    {
-        JLOG(journal_.fatal()) << __func__ << " : "
-                               << "Flushed 0 nodes from state map";
-        assert(false);
-    }
-    if (numTxFlushed == 0)
-    {
-        JLOG(journal_.warn()) << __func__ << " : "
-                              << "Flushed 0 nodes from tx map";
-    }
+    // if (numFlushed == 0)
+    // {
+    //     JLOG(journal_.fatal()) << __func__ << " : "
+    //                            << "Flushed 0 nodes from state map";
+    //     assert(false);
+    // }
+    // if (numTxFlushed == 0)
+    // {
+    //     JLOG(journal_.warn()) << __func__ << " : "
+    //                           << "Flushed 0 nodes from tx map";
+    // }
 
 
     // Make sure calculated hashes are correct
-    if (ledger->stateMap().getHash().as_uint256() != accountHash)
-    {
-        JLOG(journal_.fatal())
-            << __func__ << " : "
-            << "State map hash does not match. "
-            << "Expected hash = " << strHex(accountHash) << "Actual hash = "
-            << strHex(ledger->stateMap().getHash().as_uint256());
-        Throw<std::runtime_error>("state map hash mismatch");
-    }
+    // if (ledger->stateMap().getHash().as_uint256() != accountHash)
+    // {
+    //     JLOG(journal_.fatal())
+    //         << __func__ << " : "
+    //         << "State map hash does not match. "
+    //         << "Expected hash = " << strHex(accountHash) << "Actual hash = "
+    //         << strHex(ledger->stateMap().getHash().as_uint256());
+    //     Throw<std::runtime_error>("state map hash mismatch");
+    // }
 
-    if (ledger->txMap().getHash().as_uint256() != txHash)
-    {
-        JLOG(journal_.fatal())
-            << __func__ << " : "
-            << "Tx map hash does not match. "
-            << "Expected hash = " << strHex(txHash) << "Actual hash = "
-            << strHex(ledger->txMap().getHash().as_uint256());
-        Throw<std::runtime_error>("tx map hash mismatch");
-    }
+    // if (ledger->txMap().getHash().as_uint256() != txHash)
+    // {
+    //     JLOG(journal_.fatal())
+    //         << __func__ << " : "
+    //         << "Tx map hash does not match. "
+    //         << "Expected hash = " << strHex(txHash) << "Actual hash = "
+    //         << strHex(ledger->txMap().getHash().as_uint256());
+    //     Throw<std::runtime_error>("tx map hash mismatch");
+    // }
 
-    if (ledger->info().hash != ledgerHash)
-    {
-        JLOG(journal_.fatal())
-            << __func__ << " : "
-            << "Ledger hash does not match. "
-            << "Expected hash = " << strHex(ledgerHash)
-            << "Actual hash = " << strHex(ledger->info().hash);
-        Throw<std::runtime_error>("ledger hash mismatch");
-    }
+    // if (ledger->info().hash != ledgerHash)
+    // {
+    //     JLOG(journal_.fatal())
+    //         << __func__ << " : "
+    //         << "Ledger hash does not match. "
+    //         << "Expected hash = " << strHex(ledgerHash)
+    //         << "Actual hash = " << strHex(ledger->info().hash);
+    //     Throw<std::runtime_error>("ledger hash mismatch");
+    // }
 
-    JLOG(journal_.info()) << __func__ << " : "
-                          << "Successfully flushed ledger! "
-                          << toString(ledger->info());
+    // JLOG(journal_.info()) << __func__ << " : "
+    //                       << "Successfully flushed ledger! "
+    //                       << toString(ledger->info());
 }
 
 void
-ReportingETL::publishLedger(std::shared_ptr<Ledger>& ledger)
+ReportingETL::publishLedger(std::shared_ptr<FlatLedger>& ledger)
 {
-    app_.getOPs().pubLedger(ledger);
+    // app_.getOPs().pubLedger(ledger);
 
     lastPublish_ = std::chrono::system_clock::now();
 }
@@ -284,7 +282,7 @@ ReportingETL::publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts)
     size_t numAttempts = 0;
     while (!stopping_)
     {
-        auto ledger = app_.getLedgerMaster().getLedgerBySeq(ledgerSequence);
+        auto ledger = loadByIndexPostgres(ledgerSequence, app_, false);
 
         if (!ledger)
         {
@@ -331,7 +329,7 @@ ReportingETL::publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts)
         }
 
         publishStrand_.post(
-            [this, ledger]() { app_.getOPs().pubLedger(ledger); });
+            [this, ledger]() { app_.getOPs().pubLedger(nullptr); });
         lastPublish_ = std::chrono::system_clock::now();
         JLOG(journal_.info())
             << __func__ << " : "
@@ -374,9 +372,9 @@ ReportingETL::fetchLedgerDataAndDiff(uint32_t idx)
     return {std::move(response)};
 }
 
-std::pair<std::shared_ptr<Ledger>, std::vector<AccountTransactionsData>>
+std::pair<std::shared_ptr<FlatLedger>, std::vector<AccountTransactionsData>>
 ReportingETL::buildNextLedger(
-    std::shared_ptr<Ledger>& next,
+    std::shared_ptr<FlatLedger>& next,
     org::xrpl::rpc::v1::GetLedgerResponse& rawData)
 {
     JLOG(journal_.info()) << __func__ << " : "
@@ -390,9 +388,6 @@ ReportingETL::buildNextLedger(
                            << toString(lgrInfo);
 
     next->setLedgerInfo(lgrInfo);
-
-    next->stateMap().clearSynching();
-    next->txMap().clearSynching();
 
     std::vector<AccountTransactionsData> accountTxData{
         insertTransactions(next, rawData)};
@@ -489,8 +484,8 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
                            << "Starting etl pipeline";
     writing_ = true;
 
-    std::shared_ptr<Ledger> parent = std::const_pointer_cast<Ledger>(
-            app_.getLedgerMaster().getLedgerBySeq(startSequence-1));
+    std::shared_ptr<FlatLedger> parent = loadByIndexPostgres(startSequence-1, app_, false);
+
     if(!parent)
     {
         Throw<std::runtime_error>("runETLPipeline: parent ledger is null");
@@ -546,7 +541,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
         }};
 
     ThreadSafeQueue<std::optional<std::pair<
-        std::shared_ptr<Ledger>,
+        std::shared_ptr<FlatLedger>,
         std::vector<AccountTransactionsData>>>>
         loadQueue{maxQueueSize};
     std::thread transformer{[this,
@@ -557,7 +552,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
         beast::setCurrentThreadName("rippled: ReportingETL transform");
 
         assert(parent);
-        parent = std::make_shared<Ledger>(*parent, NetClock::time_point{});
+        parent = std::make_shared<FlatLedger>(*parent, NetClock::time_point{}, cassandra_);
         while (!writeConflict)
         {
             std::optional<org::xrpl::rpc::v1::GetLedgerResponse> fetchResponse{
@@ -576,7 +571,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
             // The below line needs to execute before pushing to the queue, in
             // order to prevent this thread and the loader thread from accessing
             // the same SHAMap concurrently
-            parent = std::make_shared<Ledger>(*next, NetClock::time_point{});
+            parent = std::make_shared<FlatLedger>(*next, NetClock::time_point{}, cassandra_);
             loadQueue.push(
                 std::make_pair(std::move(next), std::move(accountTxData)));
         }
@@ -592,7 +587,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
             while (!writeConflict)
             {
                 std::optional<std::pair<
-                    std::shared_ptr<Ledger>,
+                    std::shared_ptr<FlatLedger>,
                     std::vector<AccountTransactionsData>>>
                     result{loadQueue.pop()};
                 // if result is an empty optional, the transformer thread has
@@ -675,13 +670,14 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
 void
 ReportingETL::monitor()
 {
-    auto ledger = std::const_pointer_cast<Ledger>(
-        app_.getLedgerMaster().getValidatedLedger());
-    if (!ledger)
+    auto ledger = getValidatedLedgerPostgres(app_);
+
+    if(!ledger)
     {
         JLOG(journal_.info()) << __func__ << " : "
                               << "Database is empty. Will download a ledger "
                                  "from the network.";
+        
         if (startSequence_)
         {
             JLOG(journal_.info())
@@ -696,8 +692,10 @@ ReportingETL::monitor()
             JLOG(journal_.info())
                 << __func__ << " : "
                 << "Waiting for next ledger to be validated by network...";
+
             std::optional<uint32_t> mostRecentValidated =
-                networkValidatedLedgers_.getMostRecent();
+                            networkValidatedLedgers_.getMostRecent();
+
             if (mostRecentValidated)
             {
                 JLOG(journal_.info()) << __func__ << " : "
@@ -713,7 +711,7 @@ ReportingETL::monitor()
                                       << "ledger has been aborted. "
                                       << "Exiting monitor loop";
                 return;
-            }
+            }         
         }
     }
     else
@@ -824,6 +822,8 @@ ReportingETL::doWork()
 void
 ReportingETL::setup()
 {
+    cassandra_.open(true);
+
     if (app_.config().START_UP == Config::StartUpType::FRESH && !readOnly_)
     {
         startSequence_ = std::stol(app_.config().START_LEDGER);
@@ -840,6 +840,7 @@ ReportingETL::ReportingETL(Application& app, Stoppable& parent)
     , app_(app)
     , journal_(app.journal("ReportingETL"))
     , publishStrand_(app_.getIOService())
+    , cassandra_(32, app_.config().section("node_db"), journal_)
     , loadBalancer_(*this)
 {
     // if present, get endpoint from config

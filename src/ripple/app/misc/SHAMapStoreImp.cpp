@@ -216,6 +216,9 @@ SHAMapStoreImp::SHAMapStoreImp(
 std::unique_ptr<NodeStore::Database>
 SHAMapStoreImp::makeNodeStore(std::string const& name, std::int32_t readThreads)
 {
+    if(app_.config().reporting())
+        return nullptr;
+
     // Anything which calls addJob must be a descendant of the JobQueue.
     // Therefore Database objects use the JobQueue as Stoppable parent.
     std::unique_ptr<NodeStore::Database> db;

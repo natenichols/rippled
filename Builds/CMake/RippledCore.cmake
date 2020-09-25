@@ -400,6 +400,8 @@ target_sources (rippled PRIVATE
   src/ripple/app/main/NodeStoreScheduler.cpp
   src/ripple/app/reporting/DBHelpers.cpp
   src/ripple/app/reporting/ReportingETL.cpp
+  src/ripple/app/reporting/CassandraBackend.cpp
+  src/ripple/app/reporting/FlatLedger.cpp
   src/ripple/app/reporting/ETLSource.cpp
   src/ripple/app/reporting/TxProxy.cpp
   src/ripple/app/misc/CanonicalTXSet.cpp
@@ -530,7 +532,6 @@ target_sources (rippled PRIVATE
      main sources:
        subdir: nodestore
   #]===============================]
-  src/ripple/nodestore/backend/CassandraFactory.cpp
   src/ripple/nodestore/backend/MemoryFactory.cpp
   src/ripple/nodestore/backend/NuDBFactory.cpp
   src/ripple/nodestore/backend/NullFactory.cpp

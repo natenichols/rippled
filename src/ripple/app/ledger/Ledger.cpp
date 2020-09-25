@@ -1286,121 +1286,6 @@ finishLoadByIndexOrHash(
     ledger->setFull();
 }
 
-// TODO: make an abstract class that represents the ledgers db
-// Implement two derived classes: one for SQLite, one for Postgres
-// Maybe also do this for the transaction (or account_transactions) db
-
-// if whichLedger is a bool, will simply load the latest ledger
-// TODO create a struct for these args
-std::vector<LedgerInfo>
-loadLedgerInfosPostgres(
-    std::variant<uint256, uint32_t, bool, std::pair<uint32_t, uint32_t>> const&
-        whichLedger,
-    Application& app)
-{
-    assert(app.config().usePostgresLedgerTx());
-    std::string sql =
-        "SELECT "
-        "ledger_hash, prev_hash, account_set_hash, trans_set_hash, "
-        "total_coins,"
-        "closing_time, prev_closing_time, close_time_res, close_flags,"
-        "ledger_seq from ledgers ";
-
-    uint32_t expNumResults = 1;
-
-    if (auto ledgerSeq = std::get_if<uint32_t>(&whichLedger))
-    {
-        sql += "WHERE ledger_seq = " + std::to_string(*ledgerSeq);
-    }
-    else if (auto ledgerHash = std::get_if<uint256>(&whichLedger))
-    {
-        sql += ("WHERE ledger_hash = \'\\x" + strHex(*ledgerHash) + "\'");
-    }
-    else if (
-        auto minAndMax =
-            std::get_if<std::pair<uint32_t, uint32_t>>(&whichLedger))
-    {
-        expNumResults = minAndMax->second - minAndMax->first;
-
-        sql +=
-            ("WHERE ledger_seq >= " + std::to_string(minAndMax->first) +
-             " AND ledger_seq <= " + std::to_string(minAndMax->second));
-    }
-    else
-    {
-        sql += ("ORDER BY ledger_seq desc LIMIT 1");
-    }
-    sql += ";";
-
-    JLOG(app.journal("Ledger").debug())
-        << "loadLedgerHelperPostgres - sql : " << sql;
-
-    assert(app.pgPool());
-    std::shared_ptr<PgQuery> pg = std::make_shared<PgQuery>(app.pgPool());
-    std::shared_ptr<Pg> conn;
-    auto res = pg->query(sql.data(), conn);
-    assert(res);
-    auto result = PQresultStatus(res.get());
-    app.pgPool()->checkin(conn);
-
-    JLOG(app.journal("Ledger").debug())
-        << "loadLedgerHelperPostgres - result: " << result;
-    assert(result == PGRES_TUPLES_OK);
-
-    // assert(PQntuples(res.get()) == expNumResults);
-    if (PQntuples(res.get()) > 0)
-        assert(PQnfields(res.get()) == 10);
-
-    if (PQntuples(res.get()) == 0)
-    {
-        auto stream = app.journal("Ledger").debug();
-        JLOG(stream) << "Ledger not found: " << sql;
-        return {};
-    }
-
-    std::vector<LedgerInfo> infos;
-    for (size_t i = 0; i < PQntuples(res.get()); ++i)
-    {
-        char const* hash = PQgetvalue(res.get(), i, 0);
-        char const* prevHash = PQgetvalue(res.get(), i, 1);
-
-        char const* accountHash = PQgetvalue(res.get(), i, 2);
-        char const* txHash = PQgetvalue(res.get(), i, 3);
-        char const* totalCoins = PQgetvalue(res.get(), i, 4);
-        char const* closeTime = PQgetvalue(res.get(), i, 5);
-        char const* parentCloseTime = PQgetvalue(res.get(), i, 6);
-        char const* closeTimeRes = PQgetvalue(res.get(), i, 7);
-        char const* closeFlags = PQgetvalue(res.get(), i, 8);
-        char const* ledgerSeq = PQgetvalue(res.get(), i, 9);
-
-        JLOG(app.journal("Ledger").debug())
-            << "loadLedgerHelperPostgres - data = " << hash << " , " << prevHash
-            << " , " << accountHash << " , " << txHash << " , " << totalCoins
-            << ", " << closeTime << ", " << parentCloseTime << ", "
-            << closeTimeRes << ", " << closeFlags << ", " << ledgerSeq;
-
-        using time_point = NetClock::time_point;
-        using duration = NetClock::duration;
-
-        LedgerInfo info;
-        info.parentHash.SetHexExact(prevHash + 2);
-        info.txHash.SetHexExact(txHash + 2);
-        info.accountHash.SetHexExact(accountHash + 2);
-        info.drops = std::stoll(totalCoins);
-        info.closeTime = time_point{duration{std::stoll(closeTime)}};
-        info.parentCloseTime =
-            time_point{duration{std::stoll(parentCloseTime)}};
-        info.closeFlags = std::stoi(closeFlags);
-        info.closeTimeResolution = duration{std::stoll(closeTimeRes)};
-        info.seq = std::stoi(ledgerSeq);
-        info.hash.SetHexExact(hash + 2);
-        info.validated = true;
-        infos.push_back(info);
-    }
-
-    return infos;
-}
-
 LedgerInfo
 getLatestLedger(Application& app)
 {
@@ -1409,59 +1294,6 @@ getLatestLedger(Application& app)
         return infos[0];
     else
         return LedgerInfo{};
-}
-
-std::tuple<std::shared_ptr<Ledger>, std::uint32_t, uint256>
-loadLedgerHelperPostgres(
-    std::variant<uint256, uint32_t, bool> const& whichLedger,
-    Application& app,
-    bool acquire)
-{
-    std::vector<LedgerInfo> infos;
-    std::visit(
-        [&infos, &app](auto&& arg) {
-            infos = loadLedgerInfosPostgres(arg, app);
-        },
-        whichLedger);
-    assert(infos.size() <= 1);
-    if (!infos.size())
-        return std::make_tuple(std::shared_ptr<Ledger>(), 0, uint256{});
-    LedgerInfo info = infos[0];
-    bool loaded;
-    auto ledger = std::make_shared<Ledger>(
-        info,
-        loaded,
-        acquire,
-        app.config(),
-        app.getNodeFamily(),
-        app.journal("Ledger"));
-
-    if (!loaded)
-        ledger.reset();
-
-    return std::make_tuple(ledger, info.seq, info.hash);
-}
-
-std::shared_ptr<Ledger>
-loadByIndexPostgres(std::uint32_t ledgerIndex, Application& app, bool acquire)
-{
-    auto [ledger, seq, hash] =
-        loadLedgerHelperPostgres(uint32_t{ledgerIndex}, app, acquire);
-    finishLoadByIndexOrHash(ledger, app.config(), app.journal("Ledger"));
-    return ledger;
-}
-
-std::shared_ptr<Ledger>
-loadByHashPostgres(uint256 const& ledgerHash, Application& app, bool acquire)
-{
-    auto [ledger, seq, hash] =
-        loadLedgerHelperPostgres(uint256{ledgerHash}, app, acquire);
-
-    finishLoadByIndexOrHash(ledger, app.config(), app.journal("Ledger"));
-
-    assert(!ledger || ledger->info().hash == ledgerHash);
-
-    return ledger;
 }
 
 uint256
@@ -1513,8 +1345,6 @@ std::shared_ptr<Ledger>
 loadByIndex (std::uint32_t ledgerIndex,
     Application& app, bool acquire)
 {
-    if (app.config().usePostgresLedgerTx())
-        return loadByIndexPostgres(ledgerIndex, app, acquire);
     std::shared_ptr<Ledger> ledger;
     {
         std::ostringstream s;
@@ -1530,8 +1360,6 @@ loadByIndex (std::uint32_t ledgerIndex,
 std::shared_ptr<Ledger>
 loadByHash(uint256 const& ledgerHash, Application& app, bool acquire)
 {
-    if (app.config().usePostgresLedgerTx())
-        return loadByHashPostgres(ledgerHash, app, acquire);
     std::shared_ptr<Ledger> ledger;
     {
         std::ostringstream s;
@@ -1687,7 +1515,7 @@ flatFetchTransactions(ReadView const& ledger, Application& app)
 
     auto start = std::chrono::system_clock::now();
     auto objs =
-        app.getNodeFamily().db().fetchBatch(nodestoreHashes);
+        app.getReportingETL().getCassandra().fetchBatch(nodestoreHashes, ledger.info().seq);
 
     auto end = std::chrono::system_clock::now();
     JLOG(app.journal("Ledger").debug()) << "ledger Flat fetch time : "
@@ -1700,7 +1528,7 @@ flatFetchTransactions(ReadView const& ledger, Application& app)
         if (obj)
         {
             auto node = SHAMapAbstractNode::makeFromPrefix(
-                makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
+                makeSlice(strHex(obj->begin(), obj->end())), SHAMapHash{nodestoreHash});
             auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
             auto txnPlusMeta = deserializeTxPlusMeta(*item);
             txns.push_back(std::move(txnPlusMeta));

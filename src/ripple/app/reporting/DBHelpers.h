@@ -18,6 +18,7 @@
 //==============================================================================
 
 #include <ripple/app/reporting/ReportingETL.h>
+#include <ripple/app/reporting/FlatLedger.h>
 #include <ripple/basics/Log.h>
 #include <ripple/core/Pg.h>
 #include <boost/container/flat_set.hpp>
