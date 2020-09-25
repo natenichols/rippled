@@ -522,9 +522,9 @@ PgPool::idleSweeper()
         {
             auto const found =
                 idle_.upper_bound(clock_type::now() - config_.timeout);
-            for (auto it = idle_.begin(); it != found; ++it)
+            for (auto it = idle_.begin(); it != found;)
             {
-                idle_.erase(it);
+                it = idle_.erase(it);
                 --connections_;
             }
         }
