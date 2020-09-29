@@ -40,12 +40,17 @@ ReportingETL::consumeLedgerData(
     ThreadSafeQueue<std::shared_ptr<SLE>>& writeQueue)
 {
     std::shared_ptr<SLE> sle;
+    std::size_t num = 0;
     // TODO: if this call blocks, flushDirty in the meantime
     while (not stopping_ and (sle = writeQueue.pop()))
     {
         assert(sle);
         ledger->rawInsert(sle);
-        cassandra_.sync();
+
+        if (flushInterval_ != 0 and (num % flushInterval_) == 0)
+            cassandra_.sync();
+    
+        ++num;
     }
 }
 
@@ -77,7 +82,6 @@ ReportingETL::insertTransactions(
 
         uint256 nodestoreHash = ledger->rawTxInsert(
             sttx.getTransactionID(), txSerializer, metaSerializer);
-        cassandra_.sync();
 
         accountTxData.emplace_back(txMeta, nodestoreHash, journal_);
     }
@@ -268,7 +272,7 @@ ReportingETL::flushLedger(std::shared_ptr<FlatLedger>& ledger)
 void
 ReportingETL::publishLedger(std::shared_ptr<FlatLedger>& ledger)
 {
-    // app_.getOPs().pubLedger(ledger);
+    app_.getOPs().pubLedger(ledger);
 
     lastPublish_ = std::chrono::system_clock::now();
 }
@@ -329,7 +333,7 @@ ReportingETL::publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts)
         }
 
         publishStrand_.post(
-            [this, ledger]() { app_.getOPs().pubLedger(nullptr); });
+            [this, ledger]() { app_.getOPs().pubLedger(ledger); });
         lastPublish_ = std::chrono::system_clock::now();
         JLOG(journal_.info())
             << __func__ << " : "

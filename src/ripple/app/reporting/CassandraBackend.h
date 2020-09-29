@@ -124,7 +124,6 @@ public:
 
     ~CassandraBackend()
     {
-        std::cout << "CassBackendCloses for some reason" << std::endl;
         close();
     }
 

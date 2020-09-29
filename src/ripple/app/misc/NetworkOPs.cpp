@@ -547,6 +547,10 @@ public:
     //
     void
     pubLedger(std::shared_ptr<ReadView const> const& lpAccepted) override;
+
+    void
+    pubLedger(std::shared_ptr<FlatLedger const> const& ledger) override;
+
     void
     pubProposedTransaction(
         std::shared_ptr<ReadView const> const& lpCurrent,
@@ -2991,6 +2995,12 @@ NetworkOPsImp::forwardProposedAccountTransaction(Json::Value const& jvObj)
         for (InfoSub::ref isrListener : notify)
             isrListener->send(jvObj, true);
     }
+}
+
+void
+NetworkOPsImp::pubLedger(std::shared_ptr<FlatLedger const> const& ledger)
+{
+
 }
 
 void

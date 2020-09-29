@@ -21,6 +21,7 @@
 #include <ripple/beast/utility/Journal.h>
 #include <ripple/core/TimeKeeper.h>
 #include <ripple/protocol/STLedgerEntry.h>
+#include <ripple/app/reporting/CassandraBackend.h>
 
 #ifndef RIPPLE_CORE_FLATLEDGER_H_INCLUDED
 #define RIPPLE_CORE_FLATLEDGER_H_INCLUDED
@@ -102,6 +103,9 @@ private:
     Fees fees_;
     Rules rules_;
     LedgerInfo info_;
+
+    std::map<uint256, Blob> txMap_;
+    std::map<uint256, Blob> stateMap_;
 
     NodeStore::CassandraBackend& cassandra_;
 };

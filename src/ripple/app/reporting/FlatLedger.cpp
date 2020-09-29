@@ -103,12 +103,10 @@ FlatLedger::rawErase(uint256 const& key)
 void
 FlatLedger::rawInsert(std::shared_ptr<SLE> const& sle)
 {
-    if (!sle)
-        return;
-
     Serializer s;
     sle->add(s);
-    cassandra_.store(sle->key(), info().seq, s.peekData());
+    auto item = std::make_shared<SHAMapItem const>(sle->key(), std::move(s));
+    cassandra_.store(sle->key(), info().seq, item->peekData());
 }
 
 void
@@ -141,7 +139,7 @@ FlatLedger::rawTxInsert(
         HashPrefix::txNode, makeSlice(item->peekData()), item->key());
 
     // Write item, seq, and hash to Cassandra tx table
-    cassandra_.store(key, seq, s.peekData());
+    cassandra_.store(key, seq, item->peekData());
 
     return hash;
 }

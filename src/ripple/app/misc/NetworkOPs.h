@@ -27,6 +27,7 @@
 #include <ripple/ledger/ReadView.h>
 #include <ripple/net/InfoSub.h>
 #include <ripple/protocol/STValidation.h>
+#include <ripple/app/reporting/FlatLedger.h>
 #include <boost/asio.hpp>
 #include <deque>
 #include <memory>
@@ -304,6 +305,10 @@ public:
     //
     virtual void
     pubLedger(std::shared_ptr<ReadView const> const& lpAccepted) = 0;
+
+    virtual void
+    pubLedger(std::shared_ptr<FlatLedger const> const& ledger) = 0;
+
     virtual void
     pubProposedTransaction(
         std::shared_ptr<ReadView const> const& lpCurrent,
