@@ -307,9 +307,6 @@ public:
     pubLedger(std::shared_ptr<ReadView const> const& lpAccepted) = 0;
 
     virtual void
-    pubLedger(std::shared_ptr<FlatLedger const> const& ledger) = 0;
-
-    virtual void
     pubProposedTransaction(
         std::shared_ptr<ReadView const> const& lpCurrent,
         std::shared_ptr<STTx const> const& stTxn,

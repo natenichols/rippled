@@ -138,12 +138,21 @@ lookupLedger(
     JsonContext&,
     Json::Value& result);
 
+Status 
+lookupLedgerReporting(
+    std::shared_ptr<ReadView const>& ledger,
+    JsonContext& context,
+    Json::Value& result);
+
+template <class T>
+Status
+ledgerFromRequestReporting(T& ledger, JsonContext& context);
+
 template <class T, class R>
 Status
 ledgerFromRequest(
     T& ledger,
     GRPCContext<R>& context);
-
 
 template <class T>
 Status

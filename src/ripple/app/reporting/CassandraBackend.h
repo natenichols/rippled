@@ -118,9 +118,7 @@ public:
         Section const& keyValues,
         beast::Journal journal)
         : j_(journal), keyBytes_(keyBytes), config_(keyValues)
-    {
-        std::cout << "CassBackendConstructed" << std::endl;
-    }
+    {}
 
     ~CassandraBackend()
     {
@@ -476,7 +474,8 @@ public:
                 select_ = nullptr;
             }
             work_.reset();
-            ioThread_.join();
+            if(ioThread_.joinable())
+                ioThread_.join();
         }
         open_ = false;
     }

@@ -45,7 +45,7 @@ ReportingETL::consumeLedgerData(
     while (not stopping_ and (sle = writeQueue.pop()))
     {
         assert(sle);
-        ledger->rawInsert(sle);
+        ledger->rawInsert(sle, cassandra_);
 
         if (flushInterval_ != 0 and (num % flushInterval_) == 0)
             cassandra_.sync();
@@ -81,7 +81,7 @@ ReportingETL::insertTransactions(
             << "Inserting transaction = " << sttx.getTransactionID();
 
         uint256 nodestoreHash = ledger->rawTxInsert(
-            sttx.getTransactionID(), txSerializer, metaSerializer);
+            sttx.getTransactionID(), txSerializer, metaSerializer, cassandra_);
 
         accountTxData.emplace_back(txMeta, nodestoreHash, journal_);
     }
@@ -120,7 +120,7 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
                            << "Deserialized ledger header. "
                            << toString(lgrInfo);
 
-    ledger = std::make_shared<FlatLedger>(lgrInfo, app_.config(), app_.getNodeFamily(), cassandra_);
+    ledger = std::make_shared<FlatLedger>(lgrInfo, app_.config(), app_.getNodeFamily());
     // ledger->stateMap().clearSynching();
     // ledger->txMap().clearSynching();
     std::vector<AccountTransactionsData> accountTxData =
@@ -434,7 +434,7 @@ ReportingETL::buildNextLedger(
             {
                 JLOG(journal_.trace()) << __func__ << " : "
                                        << "Inserting object = " << key;
-                next->rawInsert(sle);
+                next->rawInsert(sle, cassandra_);
             }
         }
     }
@@ -556,7 +556,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
         beast::setCurrentThreadName("rippled: ReportingETL transform");
 
         assert(parent);
-        parent = std::make_shared<FlatLedger>(*parent, NetClock::time_point{}, cassandra_);
+        parent = std::make_shared<FlatLedger>(*parent, NetClock::time_point{});
         while (!writeConflict)
         {
             std::optional<org::xrpl::rpc::v1::GetLedgerResponse> fetchResponse{
@@ -575,7 +575,7 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
             // The below line needs to execute before pushing to the queue, in
             // order to prevent this thread and the loader thread from accessing
             // the same SHAMap concurrently
-            parent = std::make_shared<FlatLedger>(*next, NetClock::time_point{}, cassandra_);
+            parent = std::make_shared<FlatLedger>(*next, NetClock::time_point{});
             loadQueue.push(
                 std::make_pair(std::move(next), std::move(accountTxData)));
         }

@@ -18,6 +18,7 @@
 //==============================================================================
 
 #include <ripple/app/ledger/Ledger.h>
+#include <ripple/ledger/ReadView.h>
 #include <ripple/beast/utility/Journal.h>
 #include <ripple/core/TimeKeeper.h>
 #include <ripple/protocol/STLedgerEntry.h>
@@ -28,9 +29,10 @@
 
 namespace ripple
 {
-class FlatLedger 
+class FlatLedger final : public DigestAwareReadView
 {
 public:
+
     static char const*
     getCountedObjectName()
     {
@@ -41,9 +43,9 @@ public:
     FlatLedger&
     operator=(FlatLedger const&) = delete;
 
-    FlatLedger(LedgerInfo const& info, Config const& config, Family& family, NodeStore::CassandraBackend& cass);
+    FlatLedger(LedgerInfo const& info, Config const& config, Family& family);
 
-    FlatLedger(FlatLedger const& previous, NetClock::time_point closeTime, NodeStore::CassandraBackend& cass);
+    FlatLedger(FlatLedger const& previous, NetClock::time_point closeTime);
 
     FlatLedger(
         LedgerInfo const& info,
@@ -51,17 +53,18 @@ public:
         bool acquire,
         Config const& config,
         Family& family,
-        beast::Journal j,
-        NodeStore::CassandraBackend& cass);
+        beast::Journal j);
 
-    bool
-    setup(Config const& config);
+    ~FlatLedger() = default;
+
 
     void
     rawErase(uint256 const& key);
 
     void
-    rawInsert(std::shared_ptr<SLE> const& sle);
+    rawInsert(
+        std::shared_ptr<SLE> const& sle,
+        NodeStore::CassandraBackend& cassandra);
 
     void
     rawReplace(std::shared_ptr<SLE> const& sle);
@@ -72,6 +75,15 @@ public:
     bool
     exists(uint256 const& entry) const;
 
+    bool
+    exists(Keylet const& k) const override;
+
+    bool
+    open() const override
+    {
+        return false;
+    }  
+
     void
     setLedgerInfo(LedgerInfo const& info)
     {
@@ -79,22 +91,72 @@ public:
     }
 
     LedgerInfo const&
-    info() const
+    info() const override
     {
         return info_;
     }
+
+    Fees const&
+    fees() const override
+    {
+        return fees_;
+    }
+
+    Rules const&
+    rules() const override
+    {
+        return rules_;
+    }
+
+    boost::optional<uint256>
+    succ(uint256 const& key, boost::optional<uint256> const& last = boost::none)
+        const override;
+
+    std::shared_ptr<SLE const>
+    read(Keylet const& k) const override;
+
+    std::unique_ptr<sles_type::iter_base>
+    slesBegin() const final;
+
+    std::unique_ptr<sles_type::iter_base>
+    slesEnd() const override;
+
+    std::unique_ptr<sles_type::iter_base>
+    slesUpperBound(uint256 const& key) const override;
+
+    std::unique_ptr<txs_type::iter_base>
+    txsBegin() const override;
+
+    std::unique_ptr<txs_type::iter_base>
+    txsEnd() const override;
+
+    bool
+    txExists(uint256 const& key) const override;
+
+    tx_type
+    txRead(key_type const& key) const override;
+
+    boost::optional<digest_type>
+    digest(key_type const& key) const override;
 
     uint256
     rawTxInsert(
         uint256 const& key,
         std::shared_ptr<Serializer const> const& txn,
-        std::shared_ptr<Serializer const> const& metaData);
+        std::shared_ptr<Serializer const> const& metaData,
+        NodeStore::CassandraBackend& cassandra);
 
     void 
     setImmutable(
         Config const& config,
         bool rehash);
 private:
+    class sles_iter_impl;
+    class txs_iter_impl;
+
+    bool
+    setup(Config const& config);
+    
     SHAMap::const_iterator
     upper_bound(uint256 const& id) const;
 
@@ -106,8 +168,6 @@ private:
 
     std::map<uint256, Blob> txMap_;
     std::map<uint256, Blob> stateMap_;
-
-    NodeStore::CassandraBackend& cassandra_;
 };
 
 extern std::shared_ptr<FlatLedger>

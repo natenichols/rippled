@@ -352,7 +352,6 @@ ledgerFromSpecifier(
     return Status::OK;
 }
 
-
 template <class T>
 Status
 getLedger(
@@ -556,6 +555,9 @@ lookupLedger(
     JsonContext& context,
     Json::Value& result)
 {
+    if(context.app.config().reporting())
+        return lookupLedgerReporting(ledger, context, result);
+
     if (auto status = ledgerFromRequest(ledger, context))
         return status;
 
@@ -573,6 +575,71 @@ lookupLedger(
 
     result[jss::validated] =
         isValidated(context.ledgerMaster, *ledger, context.app);
+    return Status::OK;
+}
+
+Status 
+lookupLedgerReporting(
+    std::shared_ptr<ReadView const>& ledger,
+    JsonContext& context,
+    Json::Value& result)
+{
+
+    if (auto status = ledgerFromRequestReporting(ledger, context))
+        return status;
+
+    auto& info = ledger->info();
+
+    result[jss::ledger_hash] = to_string(info.hash);
+    result[jss::ledger_index] = info.seq;
+    result[jss::validated] = true;
+
+    return Status::OK;
+}
+
+template <class T>
+Status
+ledgerFromRequestReporting(T& ledger, JsonContext& context)
+{
+    ledger.reset();
+
+    auto& params = context.params;
+
+    auto indexValue = params[jss::ledger_index];
+    auto hashValue = params[jss::ledger_hash];
+
+    // We need to support the legacy "ledger" field.
+    auto& legacyLedger = params[jss::ledger];
+    if (legacyLedger)
+    {
+        if (legacyLedger.asString().size() > 12)
+            hashValue = legacyLedger;
+        else
+            indexValue = legacyLedger;
+    }
+
+    if (hashValue)
+    {
+        if (!hashValue.isString())
+            return {rpcINVALID_PARAMS, "ledgerHashNotString"};
+
+        uint256 ledgerHash;
+        if (!ledgerHash.SetHex(hashValue.asString()))
+            return {rpcINVALID_PARAMS, "ledgerHashMalformed"};
+        ledger = loadByHashPostgres(ledgerHash, context.app, false);
+    }
+    else if (indexValue.isNumeric())
+    {
+        ledger = loadByIndexPostgres(indexValue.asInt(), context.app, false);
+    }
+    else
+    {
+        ledger = getValidatedLedgerPostgres(context.app);
+    }
+
+    if (ledger == nullptr)
+        return {rpcLGR_NOT_FOUND, "ledgerNotFound"};
+
     return Status::OK;
 }
 

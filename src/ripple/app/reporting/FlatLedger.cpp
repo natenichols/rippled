@@ -18,13 +18,12 @@
 //==============================================================================
 
 #include<ripple/app/reporting/FlatLedger.h>
+#include<ripple/consensus/LedgerTiming.h>
 #include<ripple/app/ledger/Ledger.h>
 
 namespace ripple
 {
 
-//This is duplicate code
-//TODO: make this a static member or something to use Ledger::calculateLedgerHash
 static uint256
 calculateLedgerHash(LedgerInfo const& info)
 {
@@ -42,10 +41,105 @@ calculateLedgerHash(LedgerInfo const& info)
         std::uint8_t(info.closeFlags));
 }
 
-FlatLedger::FlatLedger(LedgerInfo const& info, Config const& config, Family& family, NodeStore::CassandraBackend& cass)
+class FlatLedger::sles_iter_impl : public sles_type::iter_base
+{
+private:
+    SHAMap::const_iterator iter_;
+
+public:
+    sles_iter_impl() = delete;
+    sles_iter_impl&
+    operator=(sles_iter_impl const&) = delete;
+
+    sles_iter_impl(sles_iter_impl const&) = default;
+
+    sles_iter_impl(SHAMap::const_iterator iter) : iter_(iter)
+    {
+    }
+
+    std::unique_ptr<base_type>
+    copy() const override
+    {
+        return std::make_unique<sles_iter_impl>(*this);
+    }
+
+    bool
+    equal(base_type const& impl) const override
+    {
+        auto const& other = dynamic_cast<sles_iter_impl const&>(impl);
+        return iter_ == other.iter_;
+    }
+
+    void
+    increment() override
+    {
+        ++iter_;
+    }
+
+    sles_type::value_type
+    dereference() const override
+    {
+        auto const item = *iter_;
+        SerialIter sit(item.slice());
+        return std::make_shared<SLE const>(sit, item.key());
+    }
+};
+
+//------------------------------------------------------------------------------
+
+class FlatLedger::txs_iter_impl : public txs_type::iter_base
+{
+private:
+    bool metadata_;
+    SHAMap::const_iterator iter_;
+
+public:
+    txs_iter_impl() = delete;
+    txs_iter_impl&
+    operator=(txs_iter_impl const&) = delete;
+
+    txs_iter_impl(txs_iter_impl const&) = default;
+
+    txs_iter_impl(bool metadata, SHAMap::const_iterator iter)
+        : metadata_(metadata), iter_(iter)
+    {
+    }
+
+    std::unique_ptr<base_type>
+    copy() const override
+    {
+        return std::make_unique<txs_iter_impl>(*this);
+    }
+
+    bool
+    equal(base_type const& impl) const override
+    {
+        auto const& other = dynamic_cast<txs_iter_impl const&>(impl);
+        return iter_ == other.iter_;
+    }
+
+    void
+    increment() override
+    {
+        ++iter_;
+    }
+
+    txs_type::value_type
+    dereference() const override
+    {
+        auto const item = *iter_;
+        if (metadata_)
+            return deserializeTxPlusMeta(item);
+        return {deserializeTx(item), nullptr};
+    }
+};
+
+//------------------------------------------------------------------------------
+
+
+FlatLedger::FlatLedger(LedgerInfo const& info, Config const& config, Family& family)
     : rules_(config.features)
     , info_(info)
-    , cassandra_(cass)
 {
     assert(config.reporting());
 
@@ -54,12 +148,32 @@ FlatLedger::FlatLedger(LedgerInfo const& info, Config const& config, Family& fam
 
 FlatLedger::FlatLedger(
     FlatLedger const& previous, 
-    NetClock::time_point closeTime,
-    NodeStore::CassandraBackend& cass)
-    : rules_(previous.rules_)
-    , cassandra_(cass)
+    NetClock::time_point closeTime)
+    : fees_(previous.fees_)
+    , rules_(previous.rules_)
 {
-    
+    assert(previous.config().reporting());
+
+    info_.seq = previous.info_.seq + 1;
+    info_.parentCloseTime = previous.info_.closeTime;
+    info_.hash = previous.info().hash + uint256(1);
+    info_.drops = previous.info().drops;
+    info_.closeTimeResolution = previous.info_.closeTimeResolution;
+    info_.parentHash = previous.info().hash;
+    info_.closeTimeResolution = getNextLedgerTimeResolution(
+        previous.info_.closeTimeResolution,
+        getCloseAgree(previous.info()),
+        info_.seq);
+
+    if (previous.info_.closeTime == NetClock::time_point{})
+    {
+        info_.closeTime = roundCloseTime(closeTime, info_.closeTimeResolution);
+    }
+    else
+    {
+        info_.closeTime =
+            previous.info_.closeTime + info_.closeTimeResolution;
+    }
 }
 
 FlatLedger::FlatLedger(
@@ -68,11 +182,9 @@ FlatLedger::FlatLedger(
     bool acquire,
     Config const& config,
     Family& family,
-    beast::Journal j,
-    NodeStore::CassandraBackend& cass)
+    beast::Journal j)
     : rules_(config.features)
     , info_(info)
-    , cassandra_(cass)
 {
     assert(config.reporting());
 
@@ -94,6 +206,70 @@ FlatLedger::setup(Config const& config)
     return true;
 }
 
+boost::optional<uint256>
+FlatLedger::succ(uint256 const& key, boost::optional<uint256> const& last) const 
+{
+    std::cout << "HI" << std::endl;
+    return {};
+}
+
+std::shared_ptr<SLE const>
+FlatLedger::read(Keylet const& k) const 
+{
+    std::cout << "HI" << std::endl;
+    return nullptr;
+}
+
+auto 
+FlatLedger::slesBegin() const -> std::unique_ptr<sles_type::iter_base>
+{
+    std::cout << "HI" << std::endl;
+    return nullptr;
+}
+
+auto
+FlatLedger::slesEnd() const -> std::unique_ptr<sles_type::iter_base>
+{
+    std::cout << "HI" << std::endl;
+    return nullptr;
+}
+
+auto
+FlatLedger::slesUpperBound(uint256 const& key) const 
+    -> std::unique_ptr<sles_type::iter_base>
+{
+    std::cout << "HI" << std::endl;
+    return nullptr;
+}
+
+auto
+FlatLedger::txsBegin() const -> std::unique_ptr<txs_type::iter_base>
+{
+    std::cout << "HI" << std::endl;
+    return nullptr;
+}
+
+auto 
+FlatLedger::txsEnd() const -> std::unique_ptr<txs_type::iter_base>
+{
+    std::cout << "HI" << std::endl;
+    return nullptr;
+}
+
+bool
+FlatLedger::txExists(uint256 const& key) const 
+{    
+    std::cout << "HI" << std::endl;
+    return false;
+}
+
+auto 
+FlatLedger::txRead(key_type const& key) const -> tx_type
+{
+    std::cout << "HI" << std::endl;
+    return {nullptr, nullptr};
+}
+
 void
 FlatLedger::rawErase(uint256 const& key)
 {
@@ -101,18 +277,33 @@ FlatLedger::rawErase(uint256 const& key)
 }
 
 void
-FlatLedger::rawInsert(std::shared_ptr<SLE> const& sle)
+FlatLedger::rawInsert(
+    std::shared_ptr<SLE> const& sle,
+    NodeStore::CassandraBackend& cassandra)
 {
     Serializer s;
     sle->add(s);
     auto item = std::make_shared<SHAMapItem const>(sle->key(), std::move(s));
-    cassandra_.store(sle->key(), info().seq, item->peekData());
+    cassandra.store(sle->key(), info().seq, item->peekData());
 }
 
 void
 FlatLedger::rawReplace(std::shared_ptr<SLE> const& sle)
 {
 
+}
+
+auto
+FlatLedger::digest(key_type const& key) const -> boost::optional<digest_type>
+{
+    std::cout << "HI" << std::endl;
+    return {};
+}
+
+bool
+FlatLedger::exists(Keylet const& k) const
+{
+    return true;
 }
 
 bool
@@ -125,7 +316,8 @@ uint256
 FlatLedger::rawTxInsert(
     uint256 const& key,
     std::shared_ptr<Serializer const> const& txn,
-    std::shared_ptr<Serializer const> const& metaData)
+    std::shared_ptr<Serializer const> const& metaData,
+    NodeStore::CassandraBackend& cassandra)
 {
     assert(metaData);
 
@@ -139,7 +331,7 @@ FlatLedger::rawTxInsert(
         HashPrefix::txNode, makeSlice(item->peekData()), item->key());
 
     // Write item, seq, and hash to Cassandra tx table
-    cassandra_.store(key, seq, item->peekData());
+    cassandra.store(key, seq, item->peekData());
 
     return hash;
 }
@@ -173,8 +365,7 @@ loadLedgerHelperPostgres(
         acquire,
         app.config(),
         app.getNodeFamily(),
-        app.journal("Ledger"),
-        app.getReportingETL().getCassandra());
+        app.journal("Ledger"));
 
     if (!loaded)
         ledger.reset();
