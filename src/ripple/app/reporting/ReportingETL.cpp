@@ -423,19 +423,10 @@ ReportingETL::buildNextLedger(
             SerialIter it{data.data(), data.size()};
             std::shared_ptr<SLE> sle = std::make_shared<SLE>(it, key);
 
-            // TODO maybe remove this conditional
-            if (next->exists(key))
-            {
-                JLOG(journal_.trace()) << __func__ << " : "
-                                       << "Replacing object = " << key;
-                next->rawReplace(sle);
-            }
-            else
-            {
-                JLOG(journal_.trace()) << __func__ << " : "
-                                       << "Inserting object = " << key;
-                next->rawInsert(sle, cassandra_);
-            }
+
+            JLOG(journal_.trace()) << __func__ << " : "
+                                    << "Inserting object = " << key;
+            next->rawInsert(sle, cassandra_);
         }
     }
     JLOG(journal_.debug())

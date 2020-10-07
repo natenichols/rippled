@@ -3424,7 +3424,15 @@ NetworkOPsImp::acceptLedger(
 bool
 NetworkOPsImp::subLedger(InfoSub::ref isrListener, Json::Value& jvResult)
 {
-    if (auto lpClosed = m_ledgerMaster.getValidatedLedger())
+
+    std::shared_ptr<ReadView const> lpClosed;
+
+    if (app_.config().reporting())
+        lpClosed = static_pointer_cast<ReadView const>(getValidatedLedgerPostgres(app_));
+    else
+        lpClosed = static_pointer_cast<ReadView const>(m_ledgerMaster.getValidatedLedger());
+
+    if(lpClosed)
     {
         jvResult[jss::ledger_index] = lpClosed->info().seq;
         jvResult[jss::ledger_hash] = to_string(lpClosed->info().hash);

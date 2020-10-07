@@ -209,28 +209,24 @@ FlatLedger::setup(Config const& config)
 boost::optional<uint256>
 FlatLedger::succ(uint256 const& key, boost::optional<uint256> const& last) const 
 {
-    std::cout << "HI" << std::endl;
     return {};
 }
 
 std::shared_ptr<SLE const>
 FlatLedger::read(Keylet const& k) const 
 {
-    std::cout << "HI" << std::endl;
     return nullptr;
 }
 
 auto 
 FlatLedger::slesBegin() const -> std::unique_ptr<sles_type::iter_base>
 {
-    std::cout << "HI" << std::endl;
     return nullptr;
 }
 
 auto
 FlatLedger::slesEnd() const -> std::unique_ptr<sles_type::iter_base>
 {
-    std::cout << "HI" << std::endl;
     return nullptr;
 }
 
@@ -238,35 +234,30 @@ auto
 FlatLedger::slesUpperBound(uint256 const& key) const 
     -> std::unique_ptr<sles_type::iter_base>
 {
-    std::cout << "HI" << std::endl;
     return nullptr;
 }
 
 auto
 FlatLedger::txsBegin() const -> std::unique_ptr<txs_type::iter_base>
 {
-    std::cout << "HI" << std::endl;
     return nullptr;
 }
 
 auto 
 FlatLedger::txsEnd() const -> std::unique_ptr<txs_type::iter_base>
 {
-    std::cout << "HI" << std::endl;
     return nullptr;
 }
 
 bool
 FlatLedger::txExists(uint256 const& key) const 
 {    
-    std::cout << "HI" << std::endl;
     return false;
 }
 
 auto 
 FlatLedger::txRead(key_type const& key) const -> tx_type
 {
-    std::cout << "HI" << std::endl;
     return {nullptr, nullptr};
 }
 
@@ -326,12 +317,14 @@ FlatLedger::rawTxInsert(
     s.addVL(txn->peekData());
     s.addVL(metaData->peekData());
     auto item = std::make_shared<SHAMapItem const>(key, std::move(s));
+    std::cout << "FROM RAWINSERT: " << strHex(item->peekData()) << std::endl;
+    deserializeTxPlusMeta(*item);
     auto seq = info().seq;
     auto hash = sha512Half(
         HashPrefix::txNode, makeSlice(item->peekData()), item->key());
 
     // Write item, seq, and hash to Cassandra tx table
-    cassandra.store(key, seq, item->peekData());
+    cassandra.store(hash, seq, item->peekData());
 
     return hash;
 }

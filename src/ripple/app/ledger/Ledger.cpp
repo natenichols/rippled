@@ -1482,7 +1482,6 @@ getHashesByIndex(std::uint32_t minSeq, std::uint32_t maxSeq, Application& app)
 std::vector<std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
 flatFetchTransactions(ReadView const& ledger, Application& app)
 {
-
     if(!app.config().reporting() || !app.config().usePostgresLedgerTx())
     {
         assert(false);
@@ -1527,9 +1526,7 @@ flatFetchTransactions(ReadView const& ledger, Application& app)
         auto& obj = objs[i];
         if (obj)
         {
-            auto node = SHAMapAbstractNode::makeFromPrefix(
-                makeSlice(strHex(obj->begin(), obj->end())), SHAMapHash{nodestoreHash});
-            auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
+            auto item = std::make_shared<SHAMapItem>(nodestoreHash, *obj);
             auto txnPlusMeta = deserializeTxPlusMeta(*item);
             txns.push_back(std::move(txnPlusMeta));
         }

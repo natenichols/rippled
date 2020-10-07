@@ -1,4 +1,5 @@
 #include<ripple/app/reporting/CassandraBackend.h>
+#include<ripple/basics/strHex.h>
 
 namespace ripple {
 namespace NodeStore {
@@ -55,23 +56,16 @@ readCallback(CassFuture* fut, void* cbData)
             finish();
             return;
         }
-        nudb::detail::buffer bf;
-        std::pair<void const*, std::size_t> uncompressed =
-            nodeobject_decompress(buf, bufSize, bf);
-        DecodedBlob decoded(
-            requestParams.hash.begin(), uncompressed.first, uncompressed.second);
+        // nudb::detail::buffer bf;
+        // std::pair<void const*, std::size_t> uncompressed =
+        //     nodeobject_decompress(buf, bufSize, bf);
+        // DecodedBlob decoded(
+        //     requestParams.hash.begin(), uncompressed.first, uncompressed.second);
+
+        Blob decoded(buf, buf + bufSize);        
         cass_result_free(res);
 
-        if (!decoded.wasOk())
-        {
-            JLOG(requestParams.backend.j_.error())
-                << "Cassandra fetch error decoding result: " << rc << ", "
-                << cass_error_desc(rc);
-            ++requestParams.backend.counters_.readErrors;
-            finish();
-            return;
-        }
-        requestParams.result = std::make_shared<Blob>(std::move(decoded.createObject()->getData()));
+        requestParams.result = std::make_shared<Blob>(std::move(decoded));
         finish();
     }
 }
