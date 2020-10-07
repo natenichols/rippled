@@ -61,6 +61,7 @@
 #include <ripple/protocol/STParsedJSON.h>
 #include <ripple/resource/ResourceManager.h>
 #include <ripple/rpc/DeliveredAmount.h>
+#include <ripple/rpc/impl/RPCHelpers.h>
 #include <boost/asio/ip/host_name.hpp>
 #include <boost/asio/steady_timer.hpp>
 

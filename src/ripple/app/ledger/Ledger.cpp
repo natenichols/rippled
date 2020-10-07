@@ -1283,6 +1283,8 @@ loadLedgerInfosPostgres(
         std::pair<uint32_t, uint32_t>> const& whichLedger,
     Application& app)
 {
+    std::vector<LedgerInfo> infos;
+#ifdef RIPPLED_REPORTING
     auto log = app.journal("Ledger");
     assert(app.config().reporting());
     std::stringstream sql;
@@ -1360,7 +1362,6 @@ loadLedgerInfosPostgres(
         }
     }
 
-    std::vector<LedgerInfo> infos;
     for (size_t i = 0; i < res.ntuples(); ++i)
     {
         char const* hash = res.c_str(i, 0);
@@ -1402,6 +1403,7 @@ loadLedgerInfosPostgres(
         infos.push_back(info);
     }
 
+#endif
     return infos;
 }
 
@@ -1694,6 +1696,7 @@ flatFetchTransactions(ReadView const& ledger, Application& app)
     std::vector<
         std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
         txns;
+#ifdef RIPPLED_REPORTING
 
     std::vector<uint256> nodestoreHashes;
     std::vector<uint256> txIDs;
@@ -1799,6 +1802,7 @@ flatFetchTransactions(ReadView const& ledger, Application& app)
                 "flatFetchTransactions : Containing SHAMap node not found");
         }
     }
+#endif
     return txns;
 }
 }  // namespace ripple

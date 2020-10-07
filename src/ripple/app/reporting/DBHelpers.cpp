@@ -17,6 +17,7 @@
 */
 //==============================================================================
 
+#ifdef RIPPLED_REPORTING
 #include <ripple/app/reporting/DBHelpers.h>
 #include <memory>
 
@@ -128,3 +129,4 @@ writeToPostgres(
 }
 
 }  // namespace ripple
+#endif

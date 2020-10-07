@@ -132,6 +132,7 @@ Transaction::load(
 Transaction::Locator
 Transaction::locate(uint256 const& id, Application& app)
 {
+#ifdef RIPPLED_REPORTING
     auto baseCmd = boost::format(R"(SELECT tx('%s');)");
 
     std::string txHash = "\\x" + strHex(id);
@@ -193,6 +194,7 @@ Transaction::locate(uint256 const& id, Application& app)
                 std::make_pair(v["min_seq"].asUInt(), v["max_seq"].asUInt())};
         }
     }
+#endif
     // Shouldn' happen. Postgres should return the ledger range searched if
     // the transaction was not found
     assert(false);

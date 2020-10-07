@@ -38,6 +38,7 @@ Json::Value
 doTxHistoryReporting(RPC::JsonContext& context)
 {
     Json::Value ret;
+#ifdef RIPPLED_REPORTING
     assert(context.app.config().reporting());
     context.loadType = Resource::feeMediumBurdenRPC;
 
@@ -162,6 +163,7 @@ doTxHistoryReporting(RPC::JsonContext& context)
     ret[jss::txs] = txs;
     ret["used_postgres"] = true;
 
+#endif
     return ret;
 }
 

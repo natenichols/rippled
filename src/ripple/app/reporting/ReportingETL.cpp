@@ -148,8 +148,10 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
         flushLedger(ledger);
         if (app_.config().reporting())
         {
+#ifdef RIPPLED_REPORTING
             writeToPostgres(
                 ledger->info(), accountTxData, app_.getPgPool(), journal_);
+#endif
         }
     }
     auto end = std::chrono::system_clock::now();
@@ -604,9 +606,11 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
             // write to RDBMS
             // if there is a write conflict, some other process has already
             // written this ledger and has taken over as the ETL writer
+#ifdef RIPPLED_REPORTING
             if (!writeToPostgres(
                     ledger->info(), accountTxData, app_.getPgPool(), journal_))
                 writeConflict = true;
+#endif
 
             auto end = std::chrono::system_clock::now();
 

@@ -247,8 +247,10 @@ public:
     virtual bool
     serverOkay(std::string& reason) = 0;
 
+#ifdef RIPPLED_REPORTING
     virtual std::shared_ptr<PgPool> const&
     getPgPool() = 0;
+#endif
 
     virtual beast::Journal
     journal(std::string const& name) = 0;

@@ -13,12 +13,6 @@ if (unity)
   set_target_properties(xrpl_core PROPERTIES UNITY_BUILD ON)
 endif ()
 
-find_package(PostgreSQL REQUIRED)
-
-if (reporting)
-  find_library(cassandra NAMES cassandra cassandra-cpp-driver REQUIRED)
-  find_path(cassandra_includes NAMES cassandra.h REQUIRED)
-endif()
 
 #[===============================[
     beast/legacy FILES:
@@ -126,16 +120,12 @@ target_sources (xrpl_core PRIVATE
 add_library (Ripple::xrpl_core ALIAS xrpl_core)
 target_include_directories (xrpl_core
   PUBLIC
-    ${PostgreSQL_INCLUDE_DIRS}
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/ripple>
     # this one is for beast/legacy files:
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/beast/extras>
     $<INSTALL_INTERFACE:include>)
 
-if (reporting)
-  target_include_directories (xrpl_core PUBLIC ${cassandra_includes})
-endif()
 
 target_compile_definitions(xrpl_core
   PUBLIC
@@ -146,7 +136,6 @@ target_compile_options (xrpl_core
     $<$<BOOL:${is_gcc}>:-Wno-maybe-uninitialized>)
 target_link_libraries (xrpl_core
   PUBLIC
-    ${PostgreSQL_LIBRARIES}
     OpenSSL::Crypto
     Ripple::boost
     Ripple::syslibs
@@ -154,9 +143,6 @@ target_link_libraries (xrpl_core
     NIH::ed25519-donna
     date::date
     Ripple::opts)
-if (reporting)
-    target_link_libraries (xrpl_core PUBLIC ${cassandra})
-endif()
 #[=================================[
    main/core headers installation
 #]=================================]

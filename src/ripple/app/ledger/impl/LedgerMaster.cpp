@@ -272,6 +272,7 @@ LedgerMaster::getValidatedLedgerAge()
 {
     using namespace std::chrono_literals;
 
+#ifdef RIPPLED_REPORTING
     if (app_.config().reporting())
     {
         auto age = PgQuery(app_.getPgPool())("SELECT age()");
@@ -282,23 +283,20 @@ LedgerMaster::getValidatedLedgerAge()
         }
         return std::chrono::seconds{age.asInt()};
     }
-    else
+#endif
+    std::chrono::seconds valClose{mValidLedgerSign.load()};
+    if (valClose == 0s)
     {
-        std::chrono::seconds valClose{mValidLedgerSign.load()};
-        if (valClose == 0s)
-        {
-            JLOG(m_journal.debug()) << "No validated ledger";
-            return weeks{2};
-        }
-
-        std::chrono::seconds ret =
-            app_.timeKeeper().closeTime().time_since_epoch();
-        ret -= valClose;
-        ret = (ret > 0s) ? ret : 0s;
-
-        JLOG(m_journal.trace()) << "Validated ledger age is " << ret.count();
-        return ret;
+        JLOG(m_journal.debug()) << "No validated ledger";
+        return weeks{2};
     }
+
+    std::chrono::seconds ret = app_.timeKeeper().closeTime().time_since_epoch();
+    ret -= valClose;
+    ret = (ret > 0s) ? ret : 0s;
+
+    JLOG(m_journal.trace()) << "Validated ledger age is " << ret.count();
+    return ret;
 }
 
 bool
@@ -1582,6 +1580,7 @@ LedgerMaster::getCurrentLedger()
 std::shared_ptr<Ledger const>
 LedgerMaster::getValidatedLedger()
 {
+#ifdef RIPPLED_REPORTING
     if (app_.config().reporting())
     {
         auto seq = PgQuery(app_.getPgPool())("SELECT max_ledger()");
@@ -1589,6 +1588,7 @@ LedgerMaster::getValidatedLedger()
             return {};
         return getLedgerBySeq(seq.asInt());
     }
+#endif
     return mValidLedger.get();
 }
 
@@ -1617,6 +1617,7 @@ LedgerMaster::getPublishedLedger()
 std::string
 LedgerMaster::getCompleteLedgers()
 {
+#ifdef RIPPLED_REPORTING
     if (app_.config().reporting())
     {
         auto range = PgQuery(app_.getPgPool())("SELECT complete_ledgers()");
@@ -1624,11 +1625,10 @@ LedgerMaster::getCompleteLedgers()
             return "error";
         return range.c_str();
     }
-    else
-    {
-        std::lock_guard sl(mCompleteLock);
-        return to_string(mCompleteLedgers);
-    }
+
+#endif
+    std::lock_guard sl(mCompleteLock);
+    return to_string(mCompleteLedgers);
 }
 
 boost::optional<NetClock::time_point>
@@ -2261,6 +2261,7 @@ LedgerMaster::getFetchPackCacheSize() const
 boost::optional<LedgerIndex>
 LedgerMaster::minSqlSeq()
 {
+#ifdef RIPPLED_REPORTING
     if (app_.config().reporting())
     {
         auto seq = PgQuery(app_.getPgPool())("SELECT min_ledger()");
@@ -2274,13 +2275,11 @@ LedgerMaster::minSqlSeq()
             return {};
         return seq.asInt();
     }
-    else
-    {
-        boost::optional<LedgerIndex> seq;
-        auto db = app_.getLedgerDB().checkoutDb();
-        *db << "SELECT MIN(LedgerSeq) FROM Ledgers", soci::into(seq);
-        return seq;
-    }
+#endif
+    boost::optional<LedgerIndex> seq;
+    auto db = app_.getLedgerDB().checkoutDb();
+    *db << "SELECT MIN(LedgerSeq) FROM Ledgers", soci::into(seq);
+    return seq;
 }
 
 }  // namespace ripple

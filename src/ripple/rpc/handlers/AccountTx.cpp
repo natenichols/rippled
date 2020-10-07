@@ -437,6 +437,7 @@ processAccountTxStoredProcedureResult(
 std::pair<AccountTxResult, RPC::Status>
 doAccountTxStoredProcedure(AccountTxArgs const& args, RPC::Context& context)
 {
+#ifdef RIPPLED_REPORTING
     pg_params dbParams;
 
     char const*& command = dbParams.first;
@@ -539,7 +540,7 @@ doAccountTxStoredProcedure(AccountTxArgs const& args, RPC::Context& context)
     {
         return processAccountTxStoredProcedureResult(args, v, context);
     }
-
+#endif
     // This shouldn't happen. Postgres should return a parseable error
     assert(false);
     return {{}, {rpcINTERNAL, "Failed to deserialize Postgres result"}};

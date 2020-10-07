@@ -17,6 +17,7 @@
 */
 //==============================================================================
 
+#ifdef RIPPLED_REPORTING
 // Need raw socket manipulation to determine if postgres socket IPv4 or 6.
 #if defined(_WIN32)
 #include <winsock2.h>
@@ -1418,3 +1419,4 @@ initSchema(std::shared_ptr<PgPool> const& pool)
 }
 
 }  // namespace ripple
+#endif
