@@ -126,11 +126,13 @@ Pg::query(char const* command, std::size_t nParams, char const* const* values)
     // Connect then submit query.
     while (true)
     {
-        try
         {
+            std::lock_guard<std::mutex> lock(mutex_);
             if (stop_)
                 return PgResult();
-
+        }
+        try
+        {
             connect();
             if (nParams)
             {
@@ -191,7 +193,7 @@ Pg::query(char const* command, std::size_t nParams, char const* const* values)
 }
 
 static pg_formatted_params
-formatParams(pg_params const& dbParams, beast::Journal const j)
+formatParams(pg_params const& dbParams, beast::Journal const& j)
 {
     std::vector<std::optional<std::string>> const& values = dbParams.second;
     /* Convert vector to C-style array of C-strings for postgres API.
@@ -324,13 +326,13 @@ Pg::clear()
 
 PgPool::PgPool(
     Section const& pgConfig,
-    beast::Journal const j,
+    beast::Journal const& j,
     Stoppable& parent)
     : Stoppable("PgPool", parent), j_(j)
 {
     // Make sure that boost::asio initializes the SSL library.
     {
-        boost::asio::ssl::detail::openssl_init<true> initSsl;
+        static boost::asio::ssl::detail::openssl_init<true> initSsl;
     }
     // Don't have postgres client initialize SSL.
     PQinitOpenSSL(0, 0);
@@ -559,7 +561,7 @@ PgPool::checkout()
         else if (connections_ < config_.max_connections)
         {
             ++connections_;
-            ret = std::make_unique<Pg>(config_, j_, stop_);
+            ret = std::make_unique<Pg>(config_, j_, stop_, mutex_);
         }
         // Otherwise, wait until a connection becomes available or we stop.
         else
@@ -596,7 +598,7 @@ PgPool::checkin(std::unique_ptr<Pg>& pg)
 //-----------------------------------------------------------------------------
 
 std::shared_ptr<PgPool>
-make_PgPool(Section const& pgConfig, beast::Journal const j, Stoppable& parent)
+make_PgPool(Section const& pgConfig, beast::Journal const& j, Stoppable& parent)
 {
     auto ret = std::make_shared<PgPool>(pgConfig, j, parent);
     ret->setup();
