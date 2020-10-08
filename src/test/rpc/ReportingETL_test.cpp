@@ -766,6 +766,18 @@ class ReportingETL_test : public beast::unit_test::suite
                 org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT);
             BEAST_EXPECT(needCurrentOrClosed(request));
         }
+
+        {
+            org::xrpl::rpc::v1::GetFeeRequest feeRequest;
+            BEAST_EXPECT(!needCurrentOrClosed(feeRequest));
+
+            org::xrpl::rpc::v1::GetAccountTransactionHistoryRequest
+                accountTxRequest;
+            BEAST_EXPECT(!needCurrentOrClosed(accountTxRequest));
+
+            org::xrpl::rpc::v1::GetTransactionRequest txRequest;
+            BEAST_EXPECT(!needCurrentOrClosed(txRequest));
+        }
     }
 
 public:
