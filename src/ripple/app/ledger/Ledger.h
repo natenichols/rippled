@@ -179,7 +179,7 @@ public:
     exists(Keylet const& k) const override;
 
     bool
-    exists(uint256 const& key)
+    exists(uint256 const& key) const
     {
         return stateMap_->hasItem(key);
     }

@@ -74,7 +74,7 @@ class ETLSource
 
     Application& app_;
 
-    std::mutex mtx_;
+    mutable std::mutex mtx_;
 
     size_t numFailures_ = 0;
 
@@ -89,30 +89,30 @@ class ETLSource
     std::atomic_bool forwardingStream_ = false;
 
     // The last time a message was received on the ledgers stream
-    std::chrono::time_point<std::chrono::system_clock> lastMsgTime_;
-    std::mutex lastMsgTimeMtx_;
+    std::chrono::system_clock::time_point lastMsgTime_;
+    mutable std::mutex lastMsgTimeMtx_;
 
     // used for retrying connections
     boost::asio::steady_timer timer_;
 
 public:
     bool
-    isConnected()
+    isConnected() const
     {
         return connected_;
     }
 
-    std::chrono::time_point<std::chrono::system_clock>
-    getLastMsgTime()
+    std::chrono::system_clock::time_point
+    getLastMsgTime() const
     {
-        std::unique_lock<std::mutex> lck(lastMsgTimeMtx_);
+        std::lock_guard lck(lastMsgTimeMtx_);
         return lastMsgTime_;
     }
 
     void
     setLastMsgTime()
     {
-        std::unique_lock<std::mutex> lck(lastMsgTimeMtx_);
+        std::lock_guard lck(lastMsgTimeMtx_);
         lastMsgTime_ = std::chrono::system_clock::now();
     }
 
@@ -131,9 +131,9 @@ public:
     /// @param sequence ledger sequence to check for
     /// @return true if this source has the desired ledger
     bool
-    hasLedger(uint32_t sequence)
+    hasLedger(uint32_t sequence) const
     {
-        std::lock_guard<std::mutex> lck(mtx_);
+        std::lock_guard lck(mtx_);
         for (auto& pair : validatedLedgers_)
         {
             if (sequence >= pair.first && sequence <= pair.second)
@@ -184,7 +184,7 @@ public:
         });
 
         // we only hold the lock here, to avoid blocking while string processing
-        std::unique_lock<std::mutex> lck(mtx_);
+        std::lock_guard lck(mtx_);
         validatedLedgers_ = std::move(pairs);
         validatedLedgersRaw_ = range;
     }
@@ -192,9 +192,9 @@ public:
     /// @return the validated range of this source
     /// @note this is only used by server_info
     std::string
-    getValidatedRange()
+    getValidatedRange() const
     {
-        std::lock_guard<std::mutex> lck(mtx_);
+        std::lock_guard lck(mtx_);
 
         return validatedLedgersRaw_;
     }
@@ -219,7 +219,7 @@ public:
     fetchLedger(uint32_t ledgerSequence, bool getObjects = true);
 
     std::string
-    toString()
+    toString() const
     {
         return "{ validated_ledger : " + getValidatedRange() +
             " , ip : " + ip_ + " , web socket port : " + wsPort_ +
@@ -227,7 +227,7 @@ public:
     }
 
     Json::Value
-    toJson()
+    toJson() const
     {
         Json::Value result(Json::objectValue);
         result["connected"] = connected_.load();
@@ -297,13 +297,13 @@ public:
     /// Get grpc stub to forward requests to p2p node
     /// @return stub to send requests to ETL source
     std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>
-    getP2pForwardingStub();
+    getP2pForwardingStub() const;
 
     /// Forward a JSON RPC request to a p2p node
     /// @param context context of RPC request
     /// @return response received from ETL source
     Json::Value
-    forwardToP2p(RPC::JsonContext& context);
+    forwardToP2p(RPC::JsonContext& context) const;
 };
 
 /// This class is used to manage connections to transaction processing processes
@@ -374,7 +374,7 @@ public:
     /// @param in ETLSource in question
     /// @return true if messages should be forwarded
     bool
-    shouldPropagateTxnStream(ETLSource* in)
+    shouldPropagateTxnStream(ETLSource* in) const
     {
         for (auto& src : sources_)
         {
@@ -394,7 +394,7 @@ public:
     }
 
     Json::Value
-    toJson()
+    toJson() const
     {
         Json::Value ret(Json::arrayValue);
         for (auto& src : sources_)
@@ -407,13 +407,13 @@ public:
     /// Randomly select a p2p node to forward a gRPC request to
     /// @return gRPC stub to forward requests to p2p node
     std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>
-    getP2pForwardingStub();
+    getP2pForwardingStub() const;
 
     /// Forward a JSON RPC request to a randomly selected p2p node
     /// @param context context of the request
     /// @return response received from p2p node
     Json::Value
-    forwardToP2p(RPC::JsonContext& context);
+    forwardToP2p(RPC::JsonContext& context) const;
 
 private:
     /// f is a function that takes an ETLSource as an argument and returns a

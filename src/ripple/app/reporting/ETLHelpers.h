@@ -23,6 +23,7 @@
 #include <ripple/ledger/ReadView.h>
 #include <condition_variable>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <sstream>
 
@@ -52,7 +53,7 @@ public:
     void
     push(uint32_t idx)
     {
-        std::unique_lock<std::mutex> lck(mtx_);
+        std::lock_guard lck(mtx_);
         if (!max_ || idx > *max_)
             max_ = idx;
         cv_.notify_all();
@@ -65,7 +66,7 @@ public:
     std::optional<uint32_t>
     getMostRecent()
     {
-        std::unique_lock<std::mutex> lck(mtx_);
+        std::unique_lock lck(mtx_);
         cv_.wait(lck, [this]() { return max_ || stopping_; });
         return max_;
     }
@@ -77,7 +78,7 @@ public:
     bool
     waitUntilValidatedByNetwork(uint32_t sequence)
     {
-        std::unique_lock<std::mutex> lck(mtx_);
+        std::unique_lock lck(mtx_);
         cv_.wait(lck, [sequence, this]() {
             return (max_ && sequence <= *max_) || stopping_;
         });
@@ -90,7 +91,7 @@ public:
     void
     stop()
     {
-        std::unique_lock<std::mutex> lck(mtx_);
+        std::lock_guard lck(mtx_);
         stopping_ = true;
         cv_.notify_all();
     }
@@ -109,21 +110,19 @@ class ThreadSafeQueue
 public:
     /// @param maxSize maximum size of the queue. Calls that would cause the
     /// queue to exceed this size will block until free space is available
-    ThreadSafeQueue(uint32_t maxSize) : maxSize_(maxSize)
+    explicit ThreadSafeQueue(uint32_t maxSize) : maxSize_(maxSize)
     {
     }
 
     /// Create a queue with no maximum size
-    ThreadSafeQueue()
-    {
-    }
+    ThreadSafeQueue() = default;
 
     /// @param elt element to push onto queue
     /// if maxSize is set, this method will block until free space is available
     void
     push(T const& elt)
     {
-        std::unique_lock<std::mutex> lck(m_);
+        std::unique_lock lck(m_);
         // if queue has a max size, wait until not full
         if (maxSize_)
             cv_.wait(lck, [this]() { return queue_.size() <= *maxSize_; });
@@ -136,7 +135,7 @@ public:
     void
     push(T&& elt)
     {
-        std::unique_lock<std::mutex> lck(m_);
+        std::unique_lock lck(m_);
         // if queue has a max size, wait until not full
         if (maxSize_)
             cv_.wait(lck, [this]() { return queue_.size() <= *maxSize_; });
@@ -148,7 +147,7 @@ public:
     T
     pop()
     {
-        std::unique_lock<std::mutex> lck(m_);
+        std::unique_lock lck(m_);
         cv_.wait(lck, [this]() { return !queue_.empty(); });
         T ret = std::move(queue_.front());
         queue_.pop();
@@ -181,6 +180,7 @@ getMarkers(size_t numMarkers)
     unsigned char incr = 256 / numMarkers;
 
     std::vector<uint256> markers;
+    markers.reserve(numMarkers);
     uint256 base{0};
     for (size_t i = 0; i < numMarkers; ++i)
     {

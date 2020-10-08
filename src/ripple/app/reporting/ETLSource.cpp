@@ -678,7 +678,7 @@ ETLLoadBalancer::fetchLedger(uint32_t ledgerSequence, bool getObjects)
 }
 
 std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>
-ETLLoadBalancer::getP2pForwardingStub()
+ETLLoadBalancer::getP2pForwardingStub() const
 {
     if (sources_.size() == 0)
         return nullptr;
@@ -700,7 +700,7 @@ ETLLoadBalancer::getP2pForwardingStub()
 }
 
 Json::Value
-ETLLoadBalancer::forwardToP2p(RPC::JsonContext& context)
+ETLLoadBalancer::forwardToP2p(RPC::JsonContext& context) const
 {
     Json::Value res;
     if (sources_.size() == 0)
@@ -725,7 +725,7 @@ ETLLoadBalancer::forwardToP2p(RPC::JsonContext& context)
 }
 
 std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>
-ETLSource::getP2pForwardingStub()
+ETLSource::getP2pForwardingStub() const
 {
     if (!connected_)
         return nullptr;
@@ -746,7 +746,7 @@ ETLSource::getP2pForwardingStub()
 }
 
 Json::Value
-ETLSource::forwardToP2p(RPC::JsonContext& context)
+ETLSource::forwardToP2p(RPC::JsonContext& context) const
 {
     JLOG(journal_.debug()) << "Attempting to forward request to tx. "
                            << "request = " << context.params.toStyledString();

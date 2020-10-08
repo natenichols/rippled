@@ -19,6 +19,7 @@
 //==============================================================================
 
 #include <ripple/app/ledger/LedgerMaster.h>
+#include <ripple/app/reporting/P2pProxy.h>
 #include <ripple/beast/unit_test.h>
 #include <ripple/rpc/impl/Tuning.h>
 
@@ -630,6 +631,143 @@ class ReportingETL_test : public beast::unit_test::suite
         }
     }
 
+    void
+    testNeedCurrentOrClosed()
+    {
+        testcase("NeedCurrentOrClosed");
+        {
+            org::xrpl::rpc::v1::GetAccountInfoRequest request;
+            request.mutable_ledger()->set_sequence(1);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_hash("");
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_UNSPECIFIED);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CLOSED);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+        }
+
+        {
+            org::xrpl::rpc::v1::GetLedgerRequest request;
+            request.mutable_ledger()->set_sequence(1);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_hash("");
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_UNSPECIFIED);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CLOSED);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+        }
+
+        {
+            org::xrpl::rpc::v1::GetLedgerDataRequest request;
+            request.mutable_ledger()->set_sequence(1);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_hash("");
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_UNSPECIFIED);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CLOSED);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+        }
+
+        {
+            org::xrpl::rpc::v1::GetLedgerEntryRequest request;
+            request.mutable_ledger()->set_sequence(1);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_hash("");
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_UNSPECIFIED);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+            request.mutable_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CLOSED);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+        }
+
+        {
+            org::xrpl::rpc::v1::GetLedgerDiffRequest request;
+
+            // set desired ledger, so desired ledger does not need current or
+            // closed
+            request.mutable_base_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED);
+
+            request.mutable_base_ledger()->set_sequence(1);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_base_ledger()->set_hash("");
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_base_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_base_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_UNSPECIFIED);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_base_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+            request.mutable_base_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CLOSED);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+
+            // reset base ledger, so base ledger doesn't need current or closed
+            request.mutable_base_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED);
+
+            request.mutable_desired_ledger()->set_sequence(1);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_desired_ledger()->set_hash("");
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_desired_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_desired_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_UNSPECIFIED);
+            BEAST_EXPECT(!needCurrentOrClosed(request));
+            request.mutable_desired_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+            request.mutable_desired_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CLOSED);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+
+            // both base and desired need current or closed
+            request.mutable_base_ledger()->set_shortcut(
+                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_CURRENT);
+            BEAST_EXPECT(needCurrentOrClosed(request));
+        }
+    }
+
 public:
     void
     run() override
@@ -641,6 +779,8 @@ public:
         testGetLedgerDiff();
 
         testGetLedgerEntry();
+
+        testNeedCurrentOrClosed();
     }
 };
 

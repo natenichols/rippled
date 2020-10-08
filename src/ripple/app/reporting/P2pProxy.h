@@ -42,50 +42,49 @@ forwardToP2p(RPC::JsonContext& context);
 bool
 shouldForwardToP2p(RPC::JsonContext& context);
 
-template <class T>
-struct SpecifiesLedger
-{
-    // List out all GRPC request types that specify a ledger
-    // Note, GetAccountTransactionHistory specifies a ledger, but
-    // GetAccountTransationHistory only ever returns validated data, so
-    // GetAccountTransactionHistory will never be forwarded
-    static bool const value =
-        std::is_same<T, org::xrpl::rpc::v1::GetAccountInfoRequest>::value ||
-        std::is_same<T, org::xrpl::rpc::v1::GetLedgerRequest>::value ||
-        std::is_same<T, org::xrpl::rpc::v1::GetLedgerDataRequest>::value;
-};
-
-/// Whether a request needs the current or closed ledger
-/// @param context context of the request
-/// @return true if the request needs the current or closed ledger
-template <
-    class Request,
-    typename std::enable_if<!SpecifiesLedger<Request>::value, Request>::type* =
-        nullptr>
+template <class Request>
 bool
-needCurrentOrClosed(RPC::GRPCContext<Request>& context)
+needCurrentOrClosed(Request& request)
 {
-    return false;
-}
-
-/// Whether a request needs the current or closed ledger
-/// @param context context of the request
-/// @return true if the request needs the current or closed ledger
-template <
-    class Request,
-    typename std::enable_if<SpecifiesLedger<Request>::value, Request>::type* =
-        nullptr>
-bool
-needCurrentOrClosed(RPC::GRPCContext<Request>& context)
-{
-    if (context.params.ledger().ledger_case() ==
-        org::xrpl::rpc::v1::LedgerSpecifier::LedgerCase::kShortcut)
+    // These are the only gRPC requests that specify a ledger
+    if constexpr (
+        std::is_same<Request, org::xrpl::rpc::v1::GetAccountInfoRequest>::
+            value ||
+        std::is_same<Request, org::xrpl::rpc::v1::GetLedgerRequest>::value ||
+        std::is_same<Request, org::xrpl::rpc::v1::GetLedgerDataRequest>::
+            value ||
+        std::is_same<Request, org::xrpl::rpc::v1::GetLedgerEntryRequest>::value)
     {
-        if (context.params.ledger().shortcut() !=
-                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED &&
-            context.params.ledger().shortcut() !=
-                org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_UNSPECIFIED)
-            return true;
+        if (request.ledger().ledger_case() ==
+            org::xrpl::rpc::v1::LedgerSpecifier::LedgerCase::kShortcut)
+        {
+            if (request.ledger().shortcut() !=
+                    org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_VALIDATED &&
+                request.ledger().shortcut() !=
+                    org::xrpl::rpc::v1::LedgerSpecifier::SHORTCUT_UNSPECIFIED)
+                return true;
+        }
+    }
+    // GetLedgerDiff specifies two ledgers
+    else if constexpr (std::is_same<
+                           Request,
+                           org::xrpl::rpc::v1::GetLedgerDiffRequest>::value)
+    {
+        auto help = [](auto specifier) {
+            if (specifier.ledger_case() ==
+                org::xrpl::rpc::v1::LedgerSpecifier::LedgerCase::kShortcut)
+            {
+                if (specifier.shortcut() !=
+                        org::xrpl::rpc::v1::LedgerSpecifier::
+                            SHORTCUT_VALIDATED &&
+                    specifier.shortcut() !=
+                        org::xrpl::rpc::v1::LedgerSpecifier::
+                            SHORTCUT_UNSPECIFIED)
+                    return true;
+            }
+            return false;
+        };
+        return help(request.base_ledger()) || help(request.desired_ledger());
     }
     return false;
 }
@@ -104,7 +103,7 @@ shouldForwardToP2p(RPC::GRPCContext<Request>& context, RPC::Condition condition)
         condition == RPC::NEEDS_CLOSED_LEDGER)
         return true;
 
-    return needCurrentOrClosed(context);
+    return needCurrentOrClosed(context.params);
 }
 
 /// Get stub used to forward gRPC requests to a p2p node

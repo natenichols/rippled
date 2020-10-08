@@ -23,7 +23,7 @@
 
 namespace ripple {
 
-bool
+static bool
 writeToLedgersDB(LedgerInfo const& info, PgQuery& pgQuery, beast::Journal& j)
 {
     JLOG(j.debug()) << __func__;
@@ -81,7 +81,7 @@ writeToPostgres(
 
         std::stringstream transactionsCopyBuffer;
         std::stringstream accountTransactionsCopyBuffer;
-        for (auto& data : accountTxData)
+        for (auto const& data : accountTxData)
         {
             std::string txHash = strHex(data.txHash);
             std::string nodestoreHash = strHex(data.nodestoreHash);
@@ -93,7 +93,7 @@ writeToPostgres(
                                    << txHash << '\t' << "\\\\x" << nodestoreHash
                                    << '\n';
 
-            for (auto& a : data.accounts)
+            for (auto const& a : data.accounts)
             {
                 std::string acct = strHex(a);
                 accountTransactionsCopyBuffer
