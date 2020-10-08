@@ -3,7 +3,6 @@ if(reporting)
     find_library(postgres NAMES pq libpq-dev pq-dev postgresql-devel)
 
 
-    # This command attempts to find the library, REQUIRED argument is optional
     find_package(PostgreSQL)
 
     if(NOT PostgreSQL_FOUND)
@@ -46,10 +45,8 @@ if(reporting)
     else()
         message("Found system installed Postgres")
 
-        # Add include directories to your target. PRIVATE is useful with multi-target projects - see documentation of target_include_directories for more info
         target_include_directories(ripple_libs INTERFACE ${PostgreSQL_INCLUDE_DIRS})
 
-        # Add libraries to link your target againts. Again, PRIVATE is important for multi-target projects
         target_link_libraries(ripple_libs INTERFACE ${PostgreSQL_LIBRARIES})
     endif()
 endif()
