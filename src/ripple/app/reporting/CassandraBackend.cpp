@@ -56,16 +56,14 @@ readCallback(CassFuture* fut, void* cbData)
             finish();
             return;
         }
-        // nudb::detail::buffer bf;
-        // std::pair<void const*, std::size_t> uncompressed =
-        //     nodeobject_decompress(buf, bufSize, bf);
-        // DecodedBlob decoded(
-        //     requestParams.hash.begin(), uncompressed.first, uncompressed.second);
 
-        Blob decoded(buf, buf + bufSize);        
+        nudb::detail::buffer bf;
+        auto [data, size] = lz4_decompress(buf, bufSize, bf);     
+
         cass_result_free(res);
 
-        requestParams.result = std::make_shared<Blob>(std::move(decoded));
+        auto slice = Slice(data, size);
+        requestParams.result = std::make_shared<Blob>(slice.begin(), slice.end());
         finish();
     }
 }

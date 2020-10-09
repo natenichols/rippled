@@ -20,6 +20,8 @@
 #include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/ledger/TransactionMaster.h>
 #include <ripple/app/misc/NetworkOPs.h>
+#include <ripple/app/reporting/FlatLedger.h>
+#include <ripple/app/reporting/ReportingETL.h>
 #include <ripple/app/misc/Transaction.h>
 #include <ripple/basics/ToString.h>
 #include <ripple/net/RPCErr.h>
@@ -119,7 +121,9 @@ doTxPostgres(RPC::Context& context, TxArgs const& args)
 
     JLOG(context.j.debug()) << "Fetching from postgres";
     Transaction::Locator locator = Transaction::locate(args.hash, context.app);
+    auto seq = context.app.getLedgerMaster().getCurrentLedgerIndex();
 
+    std::shared_ptr<Blob> obj = nullptr;
     std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>
         pair;
     // database returned the nodestore hash. Fetch the txn directly from the
@@ -127,13 +131,11 @@ doTxPostgres(RPC::Context& context, TxArgs const& args)
     if (uint256* nodestoreHash = locator.getNodestoreHash())
     {
         auto start = std::chrono::system_clock::now();
+        context.app.getReportingETL().getCassandra().fetch(*nodestoreHash, seq, obj);
         // The second argument of fetch is ignored when not using shards
-        if (auto obj =
-                context.app.getNodeFamily().db().fetch(*nodestoreHash, 0))
+        if (obj)
         {
-            auto node = SHAMapAbstractNode::makeFromPrefix(
-                makeSlice(obj->getData()), SHAMapHash{*nodestoreHash});
-            auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
+            auto item = std::make_shared<SHAMapItem>(*nodestoreHash, *obj);
 
             auto result = deserializeTxPlusMeta(*item);
             pair = {std::move(result.first), std::move(result.second)};
@@ -152,14 +154,14 @@ doTxPostgres(RPC::Context& context, TxArgs const& args)
     else if (uint32_t* ledgerSequence = locator.getLedgerSequence())
     {
         auto start = std::chrono::system_clock::now();
-        auto ledger = context.ledgerMaster.getLedgerBySeq(*ledgerSequence);
-        if (!ledger)
-            return {
-                res,
-                {rpcLGR_NOT_FOUND,
-                 "The ledger containing the transaction was not found"}};
+        // auto ledger = loadByIndexPostgres(*ledgerSequence, context.app, false);
+        // if (!ledger)
+        //     return {
+        //         res,
+        //         {rpcLGR_NOT_FOUND,
+        //          "The ledger containing the transaction was not found"}};
 
-        pair = ledger->txRead(args.hash);
+        context.app.getReportingETL().getCassandra().fetch(args.hash, *ledgerSequence, obj);
         auto end = std::chrono::system_clock::now();
         JLOG(context.j.debug()) << "traverse fetch time : "
                                 << ((end - start).count() / 1000000000.0);
@@ -221,6 +223,7 @@ doTxHelp(RPC::Context& context, TxArgs const& args)
 {
     if (context.app.config().usePostgresLedgerTx())
         return doTxPostgres(context, args);
+
     TxResult result;
 
     ClosedInterval<uint32_t> range;

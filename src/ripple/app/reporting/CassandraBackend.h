@@ -482,20 +482,29 @@ public:
 
     // TODO : retry logic?
     Status
-    fetch(void const* key, std::shared_ptr<NodeObject>* pno)
+    fetch(uint256 hash, uint32_t seq, std::shared_ptr<Blob>& obj)
     {
         JLOG(j_.trace()) << "Fetching from cassandra";
+        obj = nullptr;
         CassStatement* statement = cass_prepared_bind(select_);
         cass_statement_set_consistency(statement, CASS_CONSISTENCY_QUORUM);
 
         CassError rc = cass_statement_bind_bytes(
-            statement, 0, static_cast<cass_byte_t const*>(key), keyBytes_);
+            statement, 0, static_cast<cass_byte_t const*>(hash.begin()), keyBytes_);
         if (rc != CASS_OK)
         {
             cass_statement_free(statement);
             JLOG(j_.error()) << "Binding Cassandra fetch key query: " << rc << ", "
                              << cass_error_desc(rc);
-            pno->reset();
+            return backendError;
+        }
+
+        rc = cass_statement_bind_int32(statement, 1, seq);
+        if (rc != CASS_OK)
+        {
+            cass_statement_free(statement);
+            JLOG(j_.error()) << "Binding Cassandra fetch seq query: " << rc << ", "
+                             << cass_error_desc(rc);
             return backendError;
         }
 
@@ -524,7 +533,6 @@ public:
             cass_future_free(fut);
             JLOG(j_.error()) << "Cassandra fetch error: " << rc << ", "
                              << cass_error_desc(rc);
-            pno->reset();
             ++counters_.readErrors;
             return backendError;
         }
@@ -537,7 +545,6 @@ public:
         if (!row)
         {
             cass_result_free(res);
-            pno->reset();
             return notFound;
         }
         cass_byte_t const* buf;
@@ -546,7 +553,6 @@ public:
         if (rc != CASS_OK)
         {
             cass_result_free(res);
-            pno->reset();
             JLOG(j_.error()) << "Cassandra fetch result error: " << rc << ", "
                              << cass_error_desc(rc);
             ++counters_.readErrors;
@@ -554,19 +560,12 @@ public:
         }
 
         nudb::detail::buffer bf;
-        auto [uncompressed, size] = nodeobject_decompress(buf, bufSize, bf);
-        DecodedBlob decoded(key, uncompressed, size);
+        auto [data, size] = lz4_decompress(buf, bufSize, bf);     
+        auto slice = Slice(data, size);
+        obj = std::make_shared<Blob>(slice.begin(), slice.end());
+
         cass_result_free(res);
 
-        if (!decoded.wasOk())
-        {
-            pno->reset();
-            JLOG(j_.error()) << "Cassandra error decoding result: " << rc
-                             << ", " << cass_error_desc(rc);
-            ++counters_.readErrors;
-            return dataCorrupt;
-        }
-        *pno = decoded.createObject();
         return ok;
     }
 
@@ -671,7 +670,6 @@ public:
         
         uint256 hash;
         uint32_t seq;
-        Blob obj;
 
         std::pair<void const*, std::size_t> compressed;
         std::chrono::steady_clock::time_point begin;
@@ -690,11 +688,9 @@ public:
             : backend(f)
             , hash(h)
             , seq(s)
-            , obj(o)
             , totalWriteRetries(retries)
         {
-            compressed =
-                NodeStore::nodeobject_compress(obj.data(), obj.size(), bf);
+            compressed = lz4_compress(o.data(), o.size(), bf);
         }
     };
 
@@ -753,8 +749,8 @@ public:
         rc = cass_statement_bind_bytes(
             statement,
             2,
-            static_cast<cass_byte_t const*>(data.obj.data()),
-            data.obj.size());
+            static_cast<cass_byte_t const*>(data.compressed.first),
+            data.compressed.second);
         if (rc != CASS_OK)
         {
             cass_statement_free(statement);

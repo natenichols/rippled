@@ -258,7 +258,7 @@ FlatLedger::txExists(uint256 const& key) const
 auto 
 FlatLedger::txRead(key_type const& key) const -> tx_type
 {
-    return {nullptr, nullptr};
+    return { nullptr, nullptr};
 }
 
 void
@@ -317,8 +317,6 @@ FlatLedger::rawTxInsert(
     s.addVL(txn->peekData());
     s.addVL(metaData->peekData());
     auto item = std::make_shared<SHAMapItem const>(key, std::move(s));
-    std::cout << "FROM RAWINSERT: " << strHex(item->peekData()) << std::endl;
-    deserializeTxPlusMeta(*item);
     auto seq = info().seq;
     auto hash = sha512Half(
         HashPrefix::txNode, makeSlice(item->peekData()), item->key());

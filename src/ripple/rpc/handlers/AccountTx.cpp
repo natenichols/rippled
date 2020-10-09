@@ -25,6 +25,7 @@
 #include <ripple/json/json_reader.h>
 #include <ripple/json/json_value.h>
 #include <ripple/ledger/ReadView.h>
+#include <ripple/app/reporting/ReportingETL.h>
 #include <ripple/net/RPCErr.h>
 #include <ripple/protocol/ErrorCodes.h>
 #include <ripple/protocol/UintTypes.h>
@@ -330,18 +331,22 @@ std::variant<
 flatFetchTransactions(
     RPC::Context& context,
     std::vector<uint256>& nodestoreHashes,
+    uint32_t seq,
     bool binary)
 {
+     if(!context.app.config().reporting())
+    {
+        assert(false);
+        return {};
+    }
 
     std::vector<std::shared_ptr<const SHAMapItem>> shamapItems;
     std::vector<
         std::pair<std::shared_ptr<const STTx>, std::shared_ptr<const STObject>>>
         deserializedTransactions;
 
-
-
     auto start = std::chrono::system_clock::now();
-    auto objs = context.app.getNodeFamily().db().fetchBatch(nodestoreHashes);
+    auto objs = context.app.getReportingETL().getCassandra().fetchBatch(nodestoreHashes, seq);
 
 
     auto end = std::chrono::system_clock::now();
@@ -354,9 +359,7 @@ flatFetchTransactions(
         auto& nodestoreHash = nodestoreHashes[i];
         if (obj)
         {
-            auto node = SHAMapAbstractNode::makeFromPrefix(
-                makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
-            auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
+            auto item = std::make_shared<SHAMapItem>(nodestoreHash, std::move(*obj));
             if (binary)
             {
                 shamapItems.push_back(item);
@@ -403,6 +406,7 @@ processAccountTxStoredProcedureResult(
     {
         if (result.isMember("transactions"))
         {
+            uint32_t maxSeq = 0;
             std::vector<uint256> nodestoreHashes;
             std::vector<uint256> txIDs;
             std::vector<uint32_t> ledgerSequences;
@@ -416,6 +420,9 @@ processAccountTxStoredProcedureResult(
 
                     if (RPC::isHexTxID(idHex))
                     {
+                        if(ledgerSequence > maxSeq)
+                            maxSeq = ledgerSequence;
+
                         auto txID = from_hex_text<uint256>(idHex);
                         txIDs.push_back(txID);
                         ledgerSequences.push_back(ledgerSequence);
@@ -460,7 +467,7 @@ processAccountTxStoredProcedureResult(
                         "account_tx : nodestore hash returned for some txns "
                         "but not all");
                 }
-                fetchResults = flatFetchTransactions(context, nodestoreHashes, args.binary);
+                fetchResults = flatFetchTransactions(context, nodestoreHashes, maxSeq, args.binary);
             }
             else
                 fetchResults = fetchTransactions(context, txIDs, ledgerSequences, args.binary);
