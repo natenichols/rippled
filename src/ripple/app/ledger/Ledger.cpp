@@ -332,7 +332,7 @@ Ledger::setImmutable(Config const& config, bool rehash)
 {
     // Force update, since this is the only
     // place the hash transitions to valid
-    if (!mImmutable and rehash)
+    if (!mImmutable && rehash)
     {
         info_.txHash = txMap_->getHash().as_uint256();
         info_.accountHash = stateMap_->getHash().as_uint256();
@@ -1458,7 +1458,8 @@ getLatestLedger(Application& app)
 std::shared_ptr<Ledger>
 loadByIndexPostgres(std::uint32_t ledgerIndex, Application& app)
 {
-    auto [ledger, seq, hash] =
+    std::shared_ptr<Ledger> ledger;
+    std::tie(ledger, std::ignore, std::ignore) =
         loadLedgerHelperPostgres(uint32_t{ledgerIndex}, app);
     finishLoadByIndexOrHash(ledger, app.config(), app.journal("Ledger"));
     return ledger;
@@ -1471,7 +1472,8 @@ loadByIndexPostgres(std::uint32_t ledgerIndex, Application& app)
 std::shared_ptr<Ledger>
 loadByHashPostgres(uint256 const& ledgerHash, Application& app)
 {
-    auto [ledger, seq, hash] =
+    std::shared_ptr<Ledger> ledger;
+    std::tie(ledger, std::ignore, std::ignore) =
         loadLedgerHelperPostgres(uint256{ledgerHash}, app);
 
     finishLoadByIndexOrHash(ledger, app.config(), app.journal("Ledger"));
@@ -1687,7 +1689,6 @@ std::vector<
     std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
 flatFetchTransactions(ReadView const& ledger, Application& app)
 {
-    auto log = app.journal("Ledger");
     if (!app.config().reporting())
     {
         assert(false);
@@ -1697,6 +1698,8 @@ flatFetchTransactions(ReadView const& ledger, Application& app)
         std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
         txns;
 #ifdef RIPPLED_REPORTING
+
+    auto log = app.journal("Ledger");
 
     std::vector<uint256> nodestoreHashes;
     std::vector<uint256> txIDs;

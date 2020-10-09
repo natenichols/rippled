@@ -183,7 +183,7 @@ GRPCServerImpl::CallData<Request, Response>::process(
                         handler_(context);
                     responder_.Finish(result.first, result.second, this);
                 }
-                catch (ReportingShouldProxy& e)
+                catch (ReportingShouldProxy&)
                 {
                     forwardToP2p(context);
                     return;

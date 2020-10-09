@@ -41,13 +41,13 @@ ReportingETL::consumeLedgerData(
 {
     std::shared_ptr<SLE> sle;
     size_t num = 0;
-    while (not stopping_ and (sle = writeQueue.pop()))
+    while (!stopping_ && (sle = writeQueue.pop()))
     {
         assert(sle);
         if (!ledger->exists(sle->key()))
             ledger->rawInsert(sle);
 
-        if (flushInterval_ != 0 and (num % flushInterval_) == 0)
+        if (flushInterval_ != 0 && (num % flushInterval_) == 0)
         {
             JLOG(journal_.debug()) << "Flushing! key = " << strHex(sle->key());
             ledger->stateMap().flushDirty(

@@ -404,6 +404,7 @@ class ReportingETL_test : public beast::unit_test::suite
 
         {
             auto [status, reply] = grpcLedgerData(env.closed()->seq());
+            BEAST_EXPECT(status.ok());
 
             BEAST_EXPECT(
                 reply.ledger_objects().objects_size() == num_accounts + 3);
@@ -432,6 +433,7 @@ class ReportingETL_test : public beast::unit_test::suite
 
         {
             auto [status, reply] = grpcLedgerData(env.closed()->seq());
+            BEAST_EXPECT(status.ok());
 
             int maxLimit = RPC::Tuning::pageLength(true);
             BEAST_EXPECT(reply.ledger_objects().objects_size() == maxLimit);
@@ -439,6 +441,7 @@ class ReportingETL_test : public beast::unit_test::suite
 
             auto [status2, reply2] =
                 grpcLedgerData(env.closed()->seq(), reply.marker());
+            BEAST_EXPECT(status2.ok());
             BEAST_EXPECT(reply2.marker().size() == 0);
 
             auto ledger = env.closed();
@@ -621,6 +624,8 @@ class ReportingETL_test : public beast::unit_test::suite
         {
             auto [status, reply] =
                 grpcLedgerEntry(env.closed()->seq(), sle->key());
+
+            BEAST_EXPECT(status.ok());
 
             BEAST_EXPECT(
                 uint256::fromVoid(reply.ledger_object().key().data()) ==

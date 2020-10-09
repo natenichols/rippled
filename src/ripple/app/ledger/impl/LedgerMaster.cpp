@@ -644,7 +644,7 @@ LedgerMaster::getValidatedRange(std::uint32_t& minVal, std::uint32_t& maxVal)
             }
             return true;
         }
-        catch (std::exception& e)
+        catch (std::exception&)
         {
             JLOG(m_journal.error())
                 << __func__ << " : "
