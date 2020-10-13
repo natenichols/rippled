@@ -201,7 +201,7 @@ callMethod(
         perfLog.rpcFinish(name, curId);
         return ret;
     }
-    catch (ReportingShouldProxy& e)
+    catch (ReportingShouldProxy&)
     {
         result = forwardToP2p(context);
         return rpcSUCCESS;

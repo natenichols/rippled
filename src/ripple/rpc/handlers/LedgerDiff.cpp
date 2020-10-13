@@ -13,8 +13,7 @@ doLedgerDiffGrpc(
     std::shared_ptr<ReadView const> baseLedgerRv;
     std::shared_ptr<ReadView const> desiredLedgerRv;
 
-    if (RPC::ledgerFromSpecifier(
-            baseLedgerRv, request.base_ledger(), context) != RPC::Status::OK)
+    if (RPC::ledgerFromSpecifier(baseLedgerRv, request.base_ledger(), context))
     {
         grpc::Status errorStatus{
             grpc::StatusCode::NOT_FOUND, "base ledger not found"};
@@ -22,8 +21,7 @@ doLedgerDiffGrpc(
     }
 
     if (RPC::ledgerFromSpecifier(
-            desiredLedgerRv, request.desired_ledger(), context) !=
-        RPC::Status::OK)
+            desiredLedgerRv, request.desired_ledger(), context))
     {
         grpc::Status errorStatus{
             grpc::StatusCode::NOT_FOUND, "desired ledger not found"};

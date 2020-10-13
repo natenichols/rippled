@@ -461,7 +461,7 @@ public:
 
         // if returned marker is greater than our end, we are done
         unsigned char prefix = cur_->marker()[0];
-        if (nextPrefix_ != 0x00 and prefix >= nextPrefix_)
+        if (nextPrefix_ != 0x00 && prefix >= nextPrefix_)
             more = false;
 
         // if we are not done, make the next async call
@@ -543,7 +543,7 @@ ETLSource::loadInitialLedger(
 
     size_t numFinished = 0;
     bool abort = false;
-    while (numFinished < calls.size() and not etl_.isStopping() and
+    while (numFinished < calls.size() && !etl_.isStopping() &&
            cq.Next(&tag, &ok))
     {
         assert(tag);
@@ -652,7 +652,7 @@ ETLLoadBalancer::fetchLedger(uint32_t ledgerSequence, bool getObjects)
             auto [status, data] =
                 source->fetchLedger(ledgerSequence, getObjects);
             response = std::move(data);
-            if (status.ok() and response.validated())
+            if (status.ok() && response.validated())
             {
                 JLOG(journal_.info())
                     << "Successfully fetched ledger = " << ledgerSequence

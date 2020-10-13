@@ -343,7 +343,7 @@ doLedgerEntryGrpc(
     grpc::Status status = grpc::Status::OK;
 
     std::shared_ptr<ReadView const> ledger;
-    if (RPC::ledgerFromRequest(ledger, context) != RPC::Status::OK)
+    if (RPC::ledgerFromRequest(ledger, context))
     {
         grpc::Status errorStatus{
             grpc::StatusCode::NOT_FOUND, "ledger not found"};
