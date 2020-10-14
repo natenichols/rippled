@@ -429,8 +429,8 @@ public:
         context_ = std::make_unique<grpc::ClientContext>();
     }
 
-    enum Status { MORE, DONE, ERROR };
-    Status
+    enum CallStatus { MORE, DONE, ERROR };
+    CallStatus
     process(
         std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>& stub,
         grpc::CompletionQueue& cq,
@@ -441,14 +441,14 @@ public:
         if (abort)
         {
             JLOG(journal_.error()) << "AsyncCallData aborted";
-            return Status::ERROR;
+            return CallStatus::ERROR;
         }
         if (!status_.ok())
         {
             JLOG(journal_.debug()) << "AsyncCallData status_ not ok: "
                                    << " code = " << status_.error_code()
                                    << " message = " << status_.error_message();
-            return Status::ERROR;
+            return CallStatus::ERROR;
         }
 
         std::swap(cur_, next_);
@@ -482,7 +482,7 @@ public:
             queue.push(sle);
         }
 
-        return more ? Status::MORE : Status::DONE;
+        return more ? CallStatus::MORE : CallStatus::DONE;
     }
 
     void
@@ -561,14 +561,14 @@ ETLSource::loadInitialLedger(
             JLOG(journal_.debug())
                 << "Marker prefix = " << ptr->getMarkerPrefix();
             auto result = ptr->process(stub_, cq, writeQueue, abort);
-            if (result != AsyncCallData::Status::MORE)
+            if (result != AsyncCallData::CallStatus::MORE)
             {
                 numFinished++;
                 JLOG(journal_.debug())
                     << "Finished a marker. "
                     << "Current number of finished = " << numFinished;
             }
-            if (result == AsyncCallData::Status::ERROR)
+            if (result == AsyncCallData::CallStatus::ERROR)
             {
                 abort = true;
             }
