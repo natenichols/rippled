@@ -429,7 +429,7 @@ public:
         context_ = std::make_unique<grpc::ClientContext>();
     }
 
-    enum CallStatus { MORE, DONE, ERROR };
+    enum class CallStatus { MORE, DONE, ERROR };
     CallStatus
     process(
         std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>& stub,
