@@ -28,8 +28,6 @@
 
 namespace ripple {
 
-class PgPool;
-
 namespace NodeStore {
 
 // Tests the Backend interface

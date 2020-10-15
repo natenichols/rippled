@@ -283,8 +283,8 @@ public:
         , pgPool_(
               config_->reporting() ? make_PgPool(
                                          config_->section("ledger_tx_tables"),
-                                         logs_->journal("PgPool"),
-                                         *this)
+                                         *this,
+                                         logs_->journal("PgPool"))
                                    : nullptr)
 #endif
 

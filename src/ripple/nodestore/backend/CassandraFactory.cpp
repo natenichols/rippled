@@ -165,7 +165,9 @@ public:
 
         std::lock_guard<std::mutex> lock(mutex_);
         CassCluster* cluster = cass_cluster_new();
-        assert(cluster);
+        if (!cluster)
+            Throw<std::runtime_error>(
+                "nodestore:: Failed to create CassCluster");
 
         std::string secureConnectBundle =
             get<std::string>(config_, "secure_connect_bundle");
@@ -884,8 +886,8 @@ readCallback(CassFuture* fut, void* cbData)
 
         if (!decoded.wasOk())
         {
-            JLOG(requestParams.backend.j_.error())
-                << "Cassandra fetch error decoding result: " << rc << ", "
+            JLOG(requestParams.backend.j_.fatal())
+                << "Cassandra fetch error - data corruption : " << rc << ", "
                 << cass_error_desc(rc);
             ++requestParams.backend.counters_.readErrors;
             finish();

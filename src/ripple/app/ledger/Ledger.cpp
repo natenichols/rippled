@@ -405,6 +405,12 @@ Ledger::exists(Keylet const& k) const
     return stateMap_->hasItem(k.key);
 }
 
+bool
+Ledger::exists(uint256 const& key) const
+{
+    return stateMap_->hasItem(key);
+}
+
 boost::optional<uint256>
 Ledger::succ(uint256 const& key, boost::optional<uint256> const& last) const
 {
@@ -505,6 +511,13 @@ void
 Ledger::rawErase(std::shared_ptr<SLE> const& sle)
 {
     if (!stateMap_->delItem(sle->key()))
+        LogicError("Ledger::rawErase: key not found");
+}
+
+void
+Ledger::rawErase(uint256 const& key)
+{
+    if (!stateMap_->delItem(key))
         LogicError("Ledger::rawErase: key not found");
 }
 
@@ -1274,7 +1287,7 @@ finishLoadByIndexOrHash(
 // hash, a range of ledgers, or std::monostate (which loads the most recent)
 // @param app Application
 // @return vector of LedgerInfos
-std::vector<LedgerInfo>
+static std::vector<LedgerInfo>
 loadLedgerInfosPostgres(
     std::variant<
         std::monostate,
@@ -1288,11 +1301,9 @@ loadLedgerInfosPostgres(
     auto log = app.journal("Ledger");
     assert(app.config().reporting());
     std::stringstream sql;
-    sql << "SELECT ledger_hash, prev_hash, account_set_hash, trans_set_hash,"
-           "       total_coins, closing_time, prev_closing_time, "
-           "close_time_res,"
-           "       close_flags, ledger_seq"
-           "  FROM ledgers ";
+    sql << "SELECT ledger_hash, prev_hash, account_set_hash, trans_set_hash, "
+           "total_coins, closing_time, prev_closing_time, close_time_res, "
+           "close_flags, ledger_seq FROM ledgers ";
 
     uint32_t expNumResults = 1;
 
@@ -1412,7 +1423,7 @@ loadLedgerInfosPostgres(
 // std::monostate loads the most recent ledger
 // @param app the Application
 // @return tuple of (ledger, sequence, hash)
-std::tuple<std::shared_ptr<Ledger>, std::uint32_t, uint256>
+static std::tuple<std::shared_ptr<Ledger>, std::uint32_t, uint256>
 loadLedgerHelperPostgres(
     std::variant<std::monostate, uint256, uint32_t> const& whichLedger,
     Application& app)
@@ -1455,7 +1466,7 @@ getLatestLedger(Application& app)
 // @param ledgerIndex the ledger index (or sequence) to load
 // @param app reference to Application
 // @return the loaded ledger
-std::shared_ptr<Ledger>
+static std::shared_ptr<Ledger>
 loadByIndexPostgres(std::uint32_t ledgerIndex, Application& app)
 {
     std::shared_ptr<Ledger> ledger;
@@ -1469,7 +1480,7 @@ loadByIndexPostgres(std::uint32_t ledgerIndex, Application& app)
 // @param hash hash of the ledger to load
 // @param app reference to Application
 // @return the loaded ledger
-std::shared_ptr<Ledger>
+static std::shared_ptr<Ledger>
 loadByHashPostgres(uint256 const& ledgerHash, Application& app)
 {
     std::shared_ptr<Ledger> ledger;
@@ -1487,7 +1498,7 @@ loadByHashPostgres(uint256 const& ledgerHash, Application& app)
 // @param ledgerIndex ledger sequence
 // @param app Application
 // @return hash of ledger
-uint256
+static uint256
 getHashByIndexPostgres(std::uint32_t ledgerIndex, Application& app)
 {
     uint256 ret;
@@ -1505,7 +1516,7 @@ getHashByIndexPostgres(std::uint32_t ledgerIndex, Application& app)
 // @param[out] parentHash hash of parent ledger
 // @param app Application
 // @return true if the data was found
-bool
+static bool
 getHashesByIndexPostgres(
     std::uint32_t ledgerIndex,
     uint256& ledgerHash,
@@ -1529,7 +1540,7 @@ getHashesByIndexPostgres(
 // @param maxSeq upper bound of range
 // @param app Application
 // @return mapping of all found ledger sequences to their hash and parent hash
-std::map<std::uint32_t, std::pair<uint256, uint256>>
+static std::map<std::uint32_t, std::pair<uint256, uint256>>
 getHashesByIndexPostgres(
     std::uint32_t minSeq,
     std::uint32_t maxSeq,

@@ -1,7 +1,7 @@
 //------------------------------------------------------------------------------
 /*
     This file is part of rippled: https://github.com/ripple/rippled
-    Copyright (c) 2012, 2013 Ripple Labs Inc.
+    Copyright (c) 2020 Ripple Labs Inc.
 
     Permission to use, copy, modify, and/or distribute this software for any
     purpose  with  or without fee is hereby granted, provided that the above
@@ -35,13 +35,13 @@ namespace ripple {
 /// the datastructure is stopped, any threads currently waiting are unblocked.
 /// Any later calls to methods of this datastructure will not wait. Once the
 /// datastructure is stopped, the datastructure remains stopped for the rest of
-/// it's lifetime.
+/// its lifetime.
 class NetworkValidatedLedgers
 {
     // max sequence validated by network
     std::optional<uint32_t> max_;
 
-    std::mutex mtx_;
+    mutable std::mutex m_;
 
     std::condition_variable cv_;
 
@@ -53,7 +53,7 @@ public:
     void
     push(uint32_t idx)
     {
-        std::lock_guard lck(mtx_);
+        std::lock_guard lck(m_);
         if (!max_ || idx > *max_)
             max_ = idx;
         cv_.notify_all();
@@ -66,7 +66,7 @@ public:
     std::optional<uint32_t>
     getMostRecent()
     {
-        std::unique_lock lck(mtx_);
+        std::unique_lock lck(m_);
         cv_.wait(lck, [this]() { return max_ || stopping_; });
         return max_;
     }
@@ -78,7 +78,7 @@ public:
     bool
     waitUntilValidatedByNetwork(uint32_t sequence)
     {
-        std::unique_lock lck(mtx_);
+        std::unique_lock lck(m_);
         cv_.wait(lck, [sequence, this]() {
             return (max_ && sequence <= *max_) || stopping_;
         });
@@ -91,7 +91,7 @@ public:
     void
     stop()
     {
-        std::lock_guard lck(mtx_);
+        std::lock_guard lck(m_);
         stopping_ = true;
         cv_.notify_all();
     }
@@ -103,7 +103,7 @@ class ThreadSafeQueue
 {
     std::queue<T> queue_;
 
-    std::mutex m_;
+    mutable std::mutex m_;
     std::condition_variable cv_;
     std::optional<uint32_t> maxSize_;
 
@@ -158,17 +158,6 @@ public:
     }
 };
 
-/// Convenience function for printing out basic ledger info
-inline std::string
-toString(LedgerInfo const& info)
-{
-    std::stringstream ss;
-    ss << "LedgerInfo { Sequence : " << info.seq
-       << " Hash : " << strHex(info.hash) << " TxHash : " << strHex(info.txHash)
-       << " AccountHash : " << strHex(info.accountHash)
-       << " ParentHash : " << strHex(info.parentHash) << " }";
-    return ss.str();
-}
 
 /// Parititions the uint256 keyspace into numMarkers partitions, each of equal
 /// size.

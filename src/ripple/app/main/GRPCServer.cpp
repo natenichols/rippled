@@ -203,9 +203,8 @@ void
 GRPCServerImpl::CallData<Request, Response>::forwardToP2p(
     RPC::GRPCContext<Request>& context)
 {
-    auto descriptor = Request::GetDescriptor()->FindFieldByName("client_ip");
-    assert(descriptor);
-    if (descriptor)
+    if (auto descriptor =
+            Request::GetDescriptor()->FindFieldByName("client_ip"))
     {
         Request::GetReflection()->SetString(
             &request_, descriptor, getEndpoint(ctx_.peer()));
@@ -214,6 +213,7 @@ GRPCServerImpl::CallData<Request, Response>::forwardToP2p(
     }
     else
     {
+        assert(false);
         Throw<std::runtime_error>(
             "Attempting to forward but no client_ip field in "
             "protobuf message");
@@ -269,8 +269,8 @@ template <class Request, class Response>
 bool
 GRPCServerImpl::CallData<Request, Response>::wasForwarded()
 {
-    auto descriptor = Request::GetDescriptor()->FindFieldByName("client_ip");
-    if (descriptor)
+    if (auto descriptor =
+            Request::GetDescriptor()->FindFieldByName("client_ip"))
     {
         std::string clientIp =
             Request::GetReflection()->GetString(request_, descriptor);

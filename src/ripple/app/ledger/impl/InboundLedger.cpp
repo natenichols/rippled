@@ -168,7 +168,7 @@ InboundLedger::getPeerCount() const
 void
 InboundLedger::queueJob()
 {
-    if (app_.getJobQueue().getJobCountTotal(jtLEDGER_DATA) > 12)
+    if (app_.getJobQueue().getJobCountTotal(jtLEDGER_DATA) > 4)
     {
         JLOG(m_journal.debug()) << "Deferring InboundLedger timer due to load";
         setTimer();

@@ -49,7 +49,7 @@ writeToLedgersDB(LedgerInfo const& info, PgQuery& pgQuery, beast::Journal& j)
 bool
 writeToPostgres(
     LedgerInfo const& info,
-    std::vector<AccountTransactionsData>& accountTxData,
+    std::vector<AccountTransactionsData> const& accountTxData,
     std::shared_ptr<PgPool> const& pgPool,
     beast::Journal& j)
 {

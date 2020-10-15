@@ -29,9 +29,7 @@ AcceptedLedger::AcceptedLedger(
     Application& app)
     : mLedger(ledger)
 {
-    if (app.config().reporting())
-    {
-        auto txns = flatFetchTransactions(*ledger, app);
+    auto insertAll = [&](auto const& txns) {
         for (auto const& item : txns)
         {
             insert(std::make_shared<AcceptedLedgerTx>(
@@ -41,19 +39,12 @@ AcceptedLedger::AcceptedLedger(
                 app.accountIDCache(),
                 app.logs()));
         }
-    }
+    };
+
+    if (app.config().reporting())
+        insertAll(flatFetchTransactions(*ledger, app));
     else
-    {
-        for (auto const& item : ledger->txs)
-        {
-            insert(std::make_shared<AcceptedLedgerTx>(
-                ledger,
-                item.first,
-                item.second,
-                app.accountIDCache(),
-                app.logs()));
-        }
-    }
+        insertAll(ledger->txs);
 }
 
 void

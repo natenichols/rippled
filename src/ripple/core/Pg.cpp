@@ -324,10 +324,7 @@ Pg::clear()
 
 //-----------------------------------------------------------------------------
 
-PgPool::PgPool(
-    Section const& pgConfig,
-    beast::Journal const& j,
-    Stoppable& parent)
+PgPool::PgPool(Section const& pgConfig, Stoppable& parent, beast::Journal j)
     : Stoppable("PgPool", parent), j_(j)
 {
     // Make sure that boost::asio initializes the SSL library.
@@ -598,9 +595,9 @@ PgPool::checkin(std::unique_ptr<Pg>& pg)
 //-----------------------------------------------------------------------------
 
 std::shared_ptr<PgPool>
-make_PgPool(Section const& pgConfig, beast::Journal const& j, Stoppable& parent)
+make_PgPool(Section const& pgConfig, Stoppable& parent, beast::Journal j)
 {
-    auto ret = std::make_shared<PgPool>(pgConfig, j, parent);
+    auto ret = std::make_shared<PgPool>(pgConfig, parent, j);
     ret->setup();
     return ret;
 }

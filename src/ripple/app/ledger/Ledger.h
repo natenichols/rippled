@@ -179,10 +179,7 @@ public:
     exists(Keylet const& k) const override;
 
     bool
-    exists(uint256 const& key) const
-    {
-        return stateMap_->hasItem(key);
-    }
+    exists(uint256 const& key) const;
 
     boost::optional<uint256>
     succ(uint256 const& key, boost::optional<uint256> const& last = boost::none)
@@ -230,11 +227,7 @@ public:
     rawInsert(std::shared_ptr<SLE> const& sle) override;
 
     void
-    rawErase(uint256 const& key)
-    {
-        if (!stateMap_->delItem(key))
-            LogicError("Ledger::rawErase: key not found");
-    }
+    rawErase(uint256 const& key);
 
     void
     rawReplace(std::shared_ptr<SLE> const& sle) override;

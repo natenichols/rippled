@@ -1,7 +1,7 @@
 //------------------------------------------------------------------------------
 /*
     This file is part of rippled: https://github.com/ripple/rippled
-    Copyright (c) 2012, 2013 Ripple Labs Inc.
+    Copyright (c) 2020 Ripple Labs Inc.
 
     Permission to use, copy, modify, and/or distribute this software for any
     purpose  with  or without fee is hereby granted, provided that the above
@@ -17,13 +17,13 @@
 */
 //==============================================================================
 
+#ifndef RIPPLE_CORE_DBHELPERS_H_INCLUDED
+#define RIPPLE_CORE_DBHELPERS_H_INCLUDED
+
 #include <ripple/app/reporting/ReportingETL.h>
 #include <ripple/basics/Log.h>
 #include <ripple/core/Pg.h>
 #include <boost/container/flat_set.hpp>
-
-#ifndef RIPPLE_CORE_DBHELPERS_H_INCLUDED
-#define RIPPLE_CORE_DBHELPERS_H_INCLUDED
 
 namespace ripple {
 
@@ -39,25 +39,13 @@ struct AccountTransactionsData
 
     AccountTransactionsData(
         TxMeta& meta,
-        uint256 nodestoreHash,
+        uint256&& nodestoreHash,
         beast::Journal& j)
         : accounts(meta.getAffectedAccounts(j))
         , ledgerSequence(meta.getLgrSeq())
         , transactionIndex(meta.getIndex())
         , txHash(meta.getTxID())
-        , nodestoreHash(nodestoreHash)
-    {
-    }
-
-    AccountTransactionsData(
-        boost::container::flat_set<AccountID> const& accts,
-        std::uint32_t seq,
-        std::uint32_t idx,
-        uint256 const& hash)
-        : accounts(accts)
-        , ledgerSequence(seq)
-        , transactionIndex(idx)
-        , txHash(hash)
+        , nodestoreHash(std::move(nodestoreHash))
     {
     }
 };
@@ -72,7 +60,7 @@ struct AccountTransactionsData
 bool
 writeToPostgres(
     LedgerInfo const& info,
-    std::vector<AccountTransactionsData>& accountTxData,
+    std::vector<AccountTransactionsData> const& accountTxData,
     std::shared_ptr<PgPool> const& pgPool,
     beast::Journal& j);
 

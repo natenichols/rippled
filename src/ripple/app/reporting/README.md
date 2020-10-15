@@ -1,5 +1,5 @@
 Reporting mode is a special operating mode of rippled, designed to handle RPCs
-for validated data. A server running in reporting mode does not connect  the
+for validated data. A server running in reporting mode does not connect to the
 p2p network, but rather extracts validated data from a node that is connected
 to the p2p network. To run rippled in reporting mode, you must also run a
 separate rippled node in p2p mode, to use as an ETL source. Multiple reporting

@@ -26,8 +26,6 @@
 
 namespace ripple {
 
-class PgPool;
-
 namespace NodeStore {
 
 /** Singleton for managing NodeStore factories and back ends. */

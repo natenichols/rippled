@@ -99,21 +99,14 @@ struct TxArgs
 std::pair<TxResult, RPC::Status>
 doTxPostgres(RPC::Context& context, TxArgs const& args)
 {
-    assert(context.app.config().reporting());
-    TxResult res;
-    res.searchedAll = TxSearched::unknown;
-
-    // check cache
     if (!context.app.config().reporting())
     {
-        auto cachedTxn =
-            context.app.getMasterTransaction().fetch_from_cache(args.hash);
-        if (cachedTxn && cachedTxn->getLedger() == 0)
-        {
-            res.txn = cachedTxn;
-            return {res, rpcSUCCESS};
-        }
+        assert(false);
+        Throw<std::runtime_error>(
+            "Called doTxPostgres yet not in reporting mode");
     }
+    TxResult res;
+    res.searchedAll = TxSearched::unknown;
 
     JLOG(context.j.debug()) << "Fetching from postgres";
     Transaction::Locator locator = Transaction::locate(args.hash, context.app);
@@ -180,13 +173,13 @@ doTxPostgres(RPC::Context& context, TxArgs const& args)
     }
     // database did not find the transaction, and returned the ledger range
     // that was searched
-    else if (std::pair<uint32_t, uint32_t>* range = locator.getLedgerRange())
+    else if (ClosedInterval<uint32_t>* range = locator.getLedgerRange())
     {
         if (args.ledgerRange)
         {
             auto min = args.ledgerRange->first;
             auto max = args.ledgerRange->second;
-            if (min >= range->first && max <= range->second)
+            if (min >= range->lower() && max <= range->upper())
             {
                 res.searchedAll = TxSearched::all;
             }

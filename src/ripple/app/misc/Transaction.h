@@ -311,8 +311,7 @@ public:
 
     struct Locator
     {
-        std::variant<std::monostate, uint256, std::pair<uint32_t, uint32_t>>
-            locator;
+        std::variant<uint256, ClosedInterval<uint32_t>> locator;
 
         uint256*
         getNodestoreHash()
@@ -320,10 +319,10 @@ public:
             return std::get_if<uint256>(&locator);
         }
 
-        std::pair<uint32_t, uint32_t>*
+        ClosedInterval<uint32_t>*
         getLedgerRange()
         {
-            return std::get_if<std::pair<uint32_t, uint32_t>>(&locator);
+            return std::get_if<ClosedInterval<uint32_t>>(&locator);
         }
     };
 

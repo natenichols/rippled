@@ -25,8 +25,6 @@
 
 namespace ripple {
 
-class PgPool;
-
 namespace NodeStore {
 
 ManagerImp&

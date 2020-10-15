@@ -31,6 +31,7 @@ DatabaseNodeImp::store(
     uint256 const& hash,
     std::uint32_t)
 {
+    assert(!reporting_ || etl);
     auto nObj = NodeObject::createObject(type, std::move(data), hash);
     pCache_->canonicalize_replace_cache(hash, nObj);
     if (etl || !reporting_)

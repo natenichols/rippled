@@ -21,12 +21,13 @@
 #include <ripple/core/DatabaseCon.h>
 #include <ripple/nodestore/DummyScheduler.h>
 #include <ripple/nodestore/Manager.h>
-#include <memory>
 #include <test/jtx.h>
 #include <test/jtx/CheckMessageLogs.h>
 #include <test/jtx/envconfig.h>
 #include <test/nodestore/TestBase.h>
 #include <test/unit_test/SuiteJournal.h>
+
+#include <memory>
 
 namespace ripple {
 

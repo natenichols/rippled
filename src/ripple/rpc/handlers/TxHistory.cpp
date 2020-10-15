@@ -39,7 +39,12 @@ doTxHistoryReporting(RPC::JsonContext& context)
 {
     Json::Value ret;
 #ifdef RIPPLED_REPORTING
-    assert(context.app.config().reporting());
+    if (!context.app.config().reporting())
+    {
+        assert(false);
+        Throw<std::runtime_error>(
+            "called doTxHistoryReporting but not in reporting mode");
+    }
     context.loadType = Resource::feeMediumBurdenRPC;
 
     if (!context.params.isMember(jss::start))

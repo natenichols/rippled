@@ -177,22 +177,21 @@ fillJsonTx(Object& json, LedgerFill const& fill)
 
     try
     {
-        if (fill.context && fill.context->app.config().reporting())
-        {
-            auto sttxs = flatFetchTransactions(fill.ledger, fill.context->app);
-            for (auto& i : sttxs)
+        auto appendAll = [&](auto const& txs) {
+            for (auto& i : txs)
             {
                 txns.append(
                     fillJsonTx(fill, bBinary, bExpanded, i.first, i.second));
             }
+        };
+
+        if (fill.context && fill.context->app.config().reporting())
+        {
+            appendAll(flatFetchTransactions(fill.ledger, fill.context->app));
         }
         else
         {
-            for (auto& i : fill.ledger.txs)
-            {
-                txns.append(
-                    fillJsonTx(fill, bBinary, bExpanded, i.first, i.second));
-            }
+            appendAll(fill.ledger.txs);
         }
     }
     catch (std::exception const&)

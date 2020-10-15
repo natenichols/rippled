@@ -411,7 +411,7 @@ public:
      * @param j Logger object.
      * @param parent Stoppable parent.
      */
-    PgPool(Section const& pgConfig, beast::Journal const& j, Stoppable& parent);
+    PgPool(Section const& pgConfig, Stoppable& parent, beast::Journal j);
 
     /** Initiate idle connection timer.
      *
@@ -505,10 +505,7 @@ public:
  * @return Postgres connection pool manager
  */
 std::shared_ptr<PgPool>
-make_PgPool(
-    Section const& pgConfig,
-    beast::Journal const& j,
-    Stoppable& parent);
+make_PgPool(Section const& pgConfig, Stoppable& parent, beast::Journal j);
 
 /** Initialize the Postgres schema.
  *

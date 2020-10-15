@@ -75,7 +75,6 @@ struct AccountTxResult
     LedgerRange ledgerRange;
     uint32_t limit;
     std::optional<AccountTxMarker> marker;
-    bool usedPostgres = false;
 };
 
 // parses args into a ledger specifier, or returns a grpc status object on error
@@ -276,15 +275,16 @@ getLedgerRange(
     return LedgerRange{uLedgerMin, uLedgerMax};
 }
 
+enum class DataFormat { binary, expanded };
 std::variant<TxnsData, TxnsDataBinary>
 flatFetchTransactions(
     RPC::Context& context,
     std::vector<uint256>& nodestoreHashes,
     std::vector<uint32_t>& ledgerSequences,
-    bool binary)
+    DataFormat format)
 {
     std::variant<TxnsData, TxnsDataBinary> ret;
-    if (binary)
+    if (format == DataFormat::binary)
         ret = TxnsDataBinary();
     else
         ret = TxnsData();
@@ -311,7 +311,7 @@ flatFetchTransactions(
             auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
             if (item)
             {
-                if (binary)
+                if (format == DataFormat::binary)
                 {
                     auto& transactions = std::get<TxnsDataBinary>(ret);
                     SerialIter it(item->slice());
@@ -354,7 +354,6 @@ processAccountTxStoredProcedureResult(
     RPC::Context& context)
 {
     AccountTxResult ret;
-    ret.usedPostgres = true;
     ret.limit = args.limit;
 
     try
@@ -394,7 +393,10 @@ processAccountTxStoredProcedureResult(
 
             assert(nodestoreHashes.size() == ledgerSequences.size());
             ret.transactions = flatFetchTransactions(
-                context, nodestoreHashes, ledgerSequences, args.binary);
+                context,
+                nodestoreHashes,
+                ledgerSequences,
+                args.binary ? DataFormat::binary : DataFormat::expanded);
 
             JLOG(context.j.trace()) << __func__ << " : processed db results";
 
@@ -785,7 +787,7 @@ populateJsonResponse(
             response[jss::marker][jss::ledger] = result.marker->ledgerSeq;
             response[jss::marker][jss::seq] = result.marker->txnSeq;
         }
-        if (result.usedPostgres)
+        if (context.app.config().reporting())
             response["used_postgres"] = true;
     }
 

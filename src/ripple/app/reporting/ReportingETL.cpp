@@ -34,6 +34,18 @@
 
 namespace ripple {
 
+/// Convenience function for printing out basic ledger info
+std::string
+toString(LedgerInfo const& info)
+{
+    std::stringstream ss;
+    ss << "LedgerInfo { Sequence : " << info.seq
+       << " Hash : " << strHex(info.hash) << " TxHash : " << strHex(info.txHash)
+       << " AccountHash : " << strHex(info.accountHash)
+       << " ParentHash : " << strHex(info.parentHash) << " }";
+    return ss.str();
+}
+
 void
 ReportingETL::consumeLedgerData(
     std::shared_ptr<Ledger>& ledger,
@@ -83,7 +95,7 @@ ReportingETL::insertTransactions(
             << "Inserting transaction = " << sttx.getTransactionID();
         uint256 nodestoreHash = ledger->rawTxInsertWithHash(
             sttx.getTransactionID(), txSerializer, metaSerializer);
-        accountTxData.emplace_back(txMeta, nodestoreHash, journal_);
+        accountTxData.emplace_back(txMeta, std::move(nodestoreHash), journal_);
     }
     return accountTxData;
 }

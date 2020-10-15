@@ -190,15 +190,16 @@ Transaction::locate(uint256 const& id, Application& app)
         }
         if (v.isMember("min_seq") && v.isMember("max_seq"))
         {
-            return {
-                std::make_pair(v["min_seq"].asUInt(), v["max_seq"].asUInt())};
+            return {ClosedInterval<uint32_t>(
+                v["min_seq"].asUInt(), v["max_seq"].asUInt())};
         }
     }
 #endif
     // Shouldn' happen. Postgres should return the ledger range searched if
     // the transaction was not found
     assert(false);
-    return {};
+    Throw<std::runtime_error>(
+        "Transaction::Locate - Invalid Postgres response");
 }
 
 std::variant<

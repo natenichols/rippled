@@ -27,8 +27,6 @@
 
 namespace ripple {
 
-class PgPool;
-
 namespace NodeStore {
 
 /** Base class for backend factories. */

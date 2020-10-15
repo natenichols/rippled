@@ -24,7 +24,6 @@
 
 namespace ripple {
 
-class PgPool;
 namespace NodeStore {
 
 class ManagerImp : public Manager

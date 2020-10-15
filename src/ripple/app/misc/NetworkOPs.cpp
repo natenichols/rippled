@@ -2832,8 +2832,7 @@ NetworkOPsImp::getServerInfo(bool human, bool admin, bool counters)
         info[jss::peer_disconnects_resources] =
             std::to_string(app_.overlay().getPeerDisconnectCharges());
     }
-
-    if (app_.config().reporting())
+    else
     {
         info["reporting"] = app_.getReportingETL().getInfo();
     }
@@ -2917,7 +2916,7 @@ NetworkOPsImp::forwardProposedTransaction(Json::Value const& jvObj)
     forwardProposedAccountTransaction(jvObj);
 }
 
-void
+static void
 getAccounts(Json::Value const& jvObj, std::vector<AccountID>& accounts)
 {
     for (auto& jv : jvObj)
