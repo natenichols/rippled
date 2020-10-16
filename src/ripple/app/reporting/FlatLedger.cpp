@@ -44,7 +44,7 @@ calculateLedgerHash(LedgerInfo const& info)
 class FlatLedger::sles_iter_impl : public sles_type::iter_base
 {
 private:
-    SHAMap::const_iterator iter_;
+    hash_map<uint256, sles_type::value_type>::const_iterator iter_;
 
 public:
     sles_iter_impl() = delete;
@@ -53,7 +53,7 @@ public:
 
     sles_iter_impl(sles_iter_impl const&) = default;
 
-    sles_iter_impl(SHAMap::const_iterator iter) : iter_(iter)
+    sles_iter_impl(hash_map<uint256, sles_type::value_type>::const_iterator iter) : iter_(iter)
     {
     }
 
@@ -79,9 +79,11 @@ public:
     sles_type::value_type
     dereference() const override
     {
-        auto const item = *iter_;
-        SerialIter sit(item.slice());
-        return std::make_shared<SLE const>(sit, item.key());
+        auto const [hash, sle] = *iter_;
+        Serializer s;
+        sle->add(s);
+        SerialIter iter(s.slice());
+        return std::make_shared<SLE const>(std::move(iter), hash);
     }
 };
 
@@ -91,7 +93,7 @@ class FlatLedger::txs_iter_impl : public txs_type::iter_base
 {
 private:
     bool metadata_;
-    SHAMap::const_iterator iter_;
+    hash_map<uint256, tx_type>::const_iterator iter_;
 
 public:
     txs_iter_impl() = delete;
@@ -100,7 +102,7 @@ public:
 
     txs_iter_impl(txs_iter_impl const&) = default;
 
-    txs_iter_impl(bool metadata, SHAMap::const_iterator iter)
+    txs_iter_impl(bool metadata, hash_map<uint256, tx_type>::const_iterator iter)
         : metadata_(metadata), iter_(iter)
     {
     }
@@ -127,19 +129,18 @@ public:
     txs_type::value_type
     dereference() const override
     {
-        auto const item = *iter_;
-        if (metadata_)
-            return deserializeTxPlusMeta(item);
-        return {deserializeTx(item), nullptr};
+        auto [_, txs] = *iter_;
+        return txs;
     }
 };
 
 //------------------------------------------------------------------------------
 
 
-FlatLedger::FlatLedger(LedgerInfo const& info, Config const& config, Family& family)
+FlatLedger::FlatLedger(LedgerInfo const& info, Config const& config, Family& family, NodeStore::CassandraBackend& cassandra)
     : rules_(config.features)
     , info_(info)
+    , cassandra_(cassandra)
 {
     assert(config.reporting());
 
@@ -151,6 +152,7 @@ FlatLedger::FlatLedger(
     NetClock::time_point closeTime)
     : fees_(previous.fees_)
     , rules_(previous.rules_)
+    , cassandra_(previous.cassandra_)
 {
     assert(previous.config().reporting());
 
@@ -182,9 +184,11 @@ FlatLedger::FlatLedger(
     bool acquire,
     Config const& config,
     Family& family,
-    beast::Journal j)
+    beast::Journal j,
+    NodeStore::CassandraBackend& cassandra)
     : rules_(config.features)
     , info_(info)
+    , cassandra_(cassandra)
 {
     assert(config.reporting());
 
@@ -221,13 +225,13 @@ FlatLedger::read(Keylet const& k) const
 auto 
 FlatLedger::slesBegin() const -> std::unique_ptr<sles_type::iter_base>
 {
-    return nullptr;
+    return std::make_unique<sles_iter_impl>(stateMap_.begin());
 }
 
 auto
 FlatLedger::slesEnd() const -> std::unique_ptr<sles_type::iter_base>
 {
-    return nullptr;
+    return std::make_unique<sles_iter_impl>(stateMap_.end());
 }
 
 auto
@@ -240,24 +244,25 @@ FlatLedger::slesUpperBound(uint256 const& key) const
 auto
 FlatLedger::txsBegin() const -> std::unique_ptr<txs_type::iter_base>
 {
-    return nullptr;
+    return std::make_unique<txs_iter_impl>(true, txMap_.begin());
 }
 
 auto 
 FlatLedger::txsEnd() const -> std::unique_ptr<txs_type::iter_base>
 {
-    return nullptr;
+    return std::make_unique<txs_iter_impl>(true, txMap_.begin());
 }
 
 bool
 FlatLedger::txExists(uint256 const& key) const 
 {    
-    return false;
+    return txMap_.find(key) != txMap_.end();
 }
 
 auto 
 FlatLedger::txRead(key_type const& key) const -> tx_type
 {
+
     return { nullptr, nullptr};
 }
 
@@ -269,13 +274,12 @@ FlatLedger::rawErase(uint256 const& key)
 
 void
 FlatLedger::rawInsert(
-    std::shared_ptr<SLE> const& sle,
-    NodeStore::CassandraBackend& cassandra)
+    std::shared_ptr<SLE> const& sle)
 {
     Serializer s;
     sle->add(s);
     auto item = std::make_shared<SHAMapItem const>(sle->key(), std::move(s));
-    cassandra.store(sle->key(), info().seq, item->peekData());
+    cassandra_.store(sle->key(), info().seq, item->peekData());
 }
 
 void
@@ -307,8 +311,7 @@ uint256
 FlatLedger::rawTxInsert(
     uint256 const& key,
     std::shared_ptr<Serializer const> const& txn,
-    std::shared_ptr<Serializer const> const& metaData,
-    NodeStore::CassandraBackend& cassandra)
+    std::shared_ptr<Serializer const> const& metaData)
 {
     assert(metaData);
 
@@ -322,7 +325,7 @@ FlatLedger::rawTxInsert(
         HashPrefix::txNode, makeSlice(item->peekData()), item->key());
 
     // Write item, seq, and hash to Cassandra tx table
-    cassandra.store(hash, seq, item->peekData());
+    cassandra_.store(hash, seq, item->peekData());
 
     return hash;
 }
@@ -356,7 +359,8 @@ loadLedgerHelperPostgres(
         acquire,
         app.config(),
         app.getNodeFamily(),
-        app.journal("Ledger"));
+        app.journal("Ledger"),
+        app.getReportingETL().getCassandra());
 
     if (!loaded)
         ledger.reset();

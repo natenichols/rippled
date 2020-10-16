@@ -42,12 +42,12 @@ ReportingETL::consumeLedgerData(
     std::shared_ptr<SLE> sle;
     std::size_t num = 0;
     // TODO: if this call blocks, flushDirty in the meantime
-    while (not stopping_ and (sle = writeQueue.pop()))
+    while (not stopping_ && (sle = writeQueue.pop()))
     {
         assert(sle);
-        ledger->rawInsert(sle, cassandra_);
+        ledger->rawInsert(sle);
 
-        if (flushInterval_ != 0 and (num % flushInterval_) == 0)
+        if (flushInterval_ != 0 && (num % flushInterval_) == 0)
             cassandra_.sync();
     
         ++num;
@@ -81,7 +81,7 @@ ReportingETL::insertTransactions(
             << "Inserting transaction = " << sttx.getTransactionID();
 
         uint256 nodestoreHash = ledger->rawTxInsert(
-            sttx.getTransactionID(), txSerializer, metaSerializer, cassandra_);
+            sttx.getTransactionID(), txSerializer, metaSerializer);
 
         accountTxData.emplace_back(txMeta, nodestoreHash, journal_);
     }
@@ -120,7 +120,7 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
                            << "Deserialized ledger header. "
                            << toString(lgrInfo);
 
-    ledger = std::make_shared<FlatLedger>(lgrInfo, app_.config(), app_.getNodeFamily());
+    ledger = std::make_shared<FlatLedger>(lgrInfo, app_.config(), app_.getNodeFamily(), cassandra_);
     // ledger->stateMap().clearSynching();
     // ledger->txMap().clearSynching();
     std::vector<AccountTransactionsData> accountTxData =
@@ -426,7 +426,7 @@ ReportingETL::buildNextLedger(
 
             JLOG(journal_.trace()) << __func__ << " : "
                                     << "Inserting object = " << key;
-            next->rawInsert(sle, cassandra_);
+            next->rawInsert(sle);
         }
     }
     JLOG(journal_.debug())

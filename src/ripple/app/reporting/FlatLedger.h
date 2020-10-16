@@ -43,7 +43,7 @@ public:
     FlatLedger&
     operator=(FlatLedger const&) = delete;
 
-    FlatLedger(LedgerInfo const& info, Config const& config, Family& family);
+    FlatLedger(LedgerInfo const& info, Config const& config, Family& family, NodeStore::CassandraBackend& cassandra);
 
     FlatLedger(FlatLedger const& previous, NetClock::time_point closeTime);
 
@@ -53,7 +53,8 @@ public:
         bool acquire,
         Config const& config,
         Family& family,
-        beast::Journal j);
+        beast::Journal j,
+        NodeStore::CassandraBackend& cassandra);
 
     ~FlatLedger() = default;
 
@@ -63,8 +64,7 @@ public:
 
     void
     rawInsert(
-        std::shared_ptr<SLE> const& sle,
-        NodeStore::CassandraBackend& cassandra);
+        std::shared_ptr<SLE> const& sle);
 
     void
     rawReplace(std::shared_ptr<SLE> const& sle);
@@ -143,8 +143,7 @@ public:
     rawTxInsert(
         uint256 const& key,
         std::shared_ptr<Serializer const> const& txn,
-        std::shared_ptr<Serializer const> const& metaData,
-        NodeStore::CassandraBackend& cassandra);
+        std::shared_ptr<Serializer const> const& metaData);
 
     void 
     setImmutable(
@@ -166,8 +165,10 @@ private:
     Rules rules_;
     LedgerInfo info_;
 
-    std::map<uint256, Blob> txMap_;
-    std::map<uint256, Blob> stateMap_;
+    hash_map<uint256, tx_type> txMap_;
+    hash_map<uint256, sles_type::value_type> stateMap_;
+
+    NodeStore::CassandraBackend& cassandra_;
 };
 
 extern std::shared_ptr<FlatLedger>
