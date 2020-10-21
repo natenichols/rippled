@@ -895,8 +895,7 @@ std::shared_ptr<SHAMapAbstractNode>
 SHAMap::writeNode(
     NodeObjectType t,
     std::uint32_t seq,
-    std::shared_ptr<SHAMapAbstractNode> node,
-    bool const etl) const
+    std::shared_ptr<SHAMapAbstractNode> node) const
 {
     // Node is ours, so we can just make it shareable
     assert(node->getSeq() == seq_);
@@ -911,8 +910,7 @@ SHAMap::writeNode(
         t,
         std::move(s.modData()),
         node->getNodeHash().as_uint256(),
-        ledgerSeq_,
-        etl);
+        ledgerSeq_);
     return node;
 }
 
@@ -946,9 +944,9 @@ SHAMap::unshare()
 /** Convert all modified nodes to shared nodes */
 // If requested, write them to the node store
 int
-SHAMap::flushDirty(NodeObjectType t, std::uint32_t seq, bool const etl)
+SHAMap::flushDirty(NodeObjectType t, std::uint32_t seq)
 {
-    return walkSubTree(true, t, seq, etl);
+    return walkSubTree(true, t, seq);
 }
 
 int
@@ -958,11 +956,7 @@ SHAMap::flushDirtyNoWrite(NodeObjectType t, std::uint32_t seq)
 }
 
 int
-SHAMap::walkSubTree(
-    bool doWrite,
-    NodeObjectType t,
-    std::uint32_t seq,
-    bool const etl)
+SHAMap::walkSubTree(bool doWrite, NodeObjectType t, std::uint32_t seq)
 {
     int flushed = 0;
     Serializer s;
@@ -975,7 +969,7 @@ SHAMap::walkSubTree(
         root_ = preFlushNode(std::move(root_));
         root_->updateHash();
         if (doWrite && backed_)
-            root_ = writeNode(t, seq, std::move(root_), etl);
+            root_ = writeNode(t, seq, std::move(root_));
         else
             root_->setSeq(0);
         return 1;
@@ -1041,7 +1035,7 @@ SHAMap::walkSubTree(
                         child->updateHash();
 
                         if (doWrite && backed_)
-                            child = writeNode(t, seq, std::move(child), etl);
+                            child = writeNode(t, seq, std::move(child));
                         else
                             child->setSeq(0);
 
@@ -1057,7 +1051,7 @@ SHAMap::walkSubTree(
         // This inner node can now be shared
         if (doWrite && backed_)
             node = std::static_pointer_cast<SHAMapInnerNode>(
-                writeNode(t, seq, std::move(node), etl));
+                writeNode(t, seq, std::move(node)));
         else
             node->setSeq(0);
 

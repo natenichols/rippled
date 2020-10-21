@@ -41,7 +41,6 @@ public:
         std::shared_ptr<Backend> writableBackend,
         std::shared_ptr<Backend> archiveBackend,
         Section const& config,
-        bool const reporting,
         beast::Journal j);
 
     ~DatabaseRotatingImp() override
@@ -131,8 +130,6 @@ private:
     std::shared_ptr<Backend> writableBackend_;
     std::shared_ptr<Backend> archiveBackend_;
     mutable std::mutex mutex_;
-
-    bool const reporting_;
 
     struct Backends
     {

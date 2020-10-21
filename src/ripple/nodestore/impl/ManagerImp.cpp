@@ -77,7 +77,6 @@ ManagerImp::make_Database(
     int readThreads,
     Stoppable& parent,
     Section const& config,
-    bool const reporting,
     beast::Journal journal)
 {
     auto backend{make_Backend(config, burstSize, scheduler, journal)};
@@ -89,7 +88,6 @@ ManagerImp::make_Database(
         parent,
         std::move(backend),
         config,
-        reporting,
         journal);
 }
 

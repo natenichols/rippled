@@ -157,7 +157,6 @@ SHAMapStoreImp::SHAMapStoreImp(
     , journal_(journal)
     , working_(true)
     , canDelete_(std::numeric_limits<LedgerIndex>::max())
-    , reportingReadOnly_(app.config().reportingReadOnly())
 {
     Config& config{app.config()};
 
@@ -187,7 +186,6 @@ SHAMapStoreImp::SHAMapStoreImp(
 
     if (deleteInterval_)
     {
-        assert(!reportingReadOnly_);
         get_if_exists(section, "advisory_delete", advisoryDelete_);
 
         auto const minInterval = config.standalone()
@@ -240,7 +238,6 @@ SHAMapStoreImp::makeNodeStore(std::string const& name, std::int32_t readThreads)
             std::move(writableBackend),
             std::move(archiveBackend),
             app_.config().section(ConfigSection::nodeDatabase()),
-            app_.config().reporting(),
             app_.logs().journal(nodeStoreName_));
         fdRequired_ += dbr->fdRequired();
         dbRotating_ = dbr.get();
@@ -256,7 +253,6 @@ SHAMapStoreImp::makeNodeStore(std::string const& name, std::int32_t readThreads)
             readThreads,
             app_.getJobQueue(),
             app_.config().section(ConfigSection::nodeDatabase()),
-            app_.config().reporting(),
             app_.logs().journal(nodeStoreName_));
         fdRequired_ += db->fdRequired();
     }

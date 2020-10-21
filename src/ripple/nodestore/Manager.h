@@ -101,7 +101,6 @@ public:
         int readThreads,
         Stoppable& parent,
         Section const& backendParameters,
-        bool const reporting,
         beast::Journal journal) = 0;
 };
 

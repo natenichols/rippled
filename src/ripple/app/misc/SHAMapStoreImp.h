@@ -102,7 +102,6 @@ private:
     std::shared_ptr<Ledger const> newLedger_;
     std::atomic<bool> working_;
     std::atomic<LedgerIndex> canDelete_;
-    bool reportingReadOnly_;
     int fdRequired_ = 0;
 
     std::uint32_t deleteInterval_ = 0;
@@ -258,7 +257,7 @@ private:
     void
     onStart() override
     {
-        if (deleteInterval_ && !reportingReadOnly_)
+        if (deleteInterval_)
             thread_ = std::thread(&SHAMapStoreImp::run, this);
     }
 

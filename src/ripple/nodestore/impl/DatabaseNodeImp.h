@@ -41,7 +41,6 @@ public:
         Stoppable& parent,
         std::shared_ptr<Backend> backend,
         Section const& config,
-        bool const reporting,
         beast::Journal j)
         : Database(name, parent, scheduler, readThreads, config, j)
         , pCache_(std::make_shared<TaggedCache<uint256, NodeObject>>(
@@ -56,7 +55,6 @@ public:
               cacheTargetSize,
               cacheTargetAge))
         , backend_(std::move(backend))
-        , reporting_(reporting)
     {
         assert(backend_);
         setParent(parent);
@@ -149,8 +147,6 @@ private:
 
     // Persistent key/value storage
     std::shared_ptr<Backend> backend_;
-
-    bool reporting_;
 
     std::shared_ptr<NodeObject>
     fetchNodeObject(

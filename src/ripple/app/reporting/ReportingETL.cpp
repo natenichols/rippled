@@ -62,8 +62,7 @@ ReportingETL::consumeLedgerData(
         if (flushInterval_ != 0 && (num % flushInterval_) == 0)
         {
             JLOG(journal_.debug()) << "Flushing! key = " << strHex(sle->key());
-            ledger->stateMap().flushDirty(
-                hotACCOUNT_NODE, ledger->info().seq, true);
+            ledger->stateMap().flushDirty(hotACCOUNT_NODE, ledger->info().seq);
         }
         ++num;
     }
@@ -185,11 +184,11 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
     ledger->setImmutable(app_.config(), false);
     auto start = std::chrono::system_clock::now();
 
-    auto numFlushed = ledger->stateMap().flushDirty(
-        hotACCOUNT_NODE, ledger->info().seq, true);
+    auto numFlushed =
+        ledger->stateMap().flushDirty(hotACCOUNT_NODE, ledger->info().seq);
 
-    auto numTxFlushed = ledger->txMap().flushDirty(
-        hotTRANSACTION_NODE, ledger->info().seq, true);
+    auto numTxFlushed =
+        ledger->txMap().flushDirty(hotTRANSACTION_NODE, ledger->info().seq);
 
     {
         Serializer s(128);
@@ -199,8 +198,7 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
             hotLEDGER,
             std::move(s.modData()),
             ledger->info().hash,
-            ledger->info().seq,
-            true);
+            ledger->info().seq);
     }
 
     app_.getNodeStore().sync();

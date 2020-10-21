@@ -271,7 +271,7 @@ public:
     compare(SHAMap const& otherMap, Delta& differences, int maxCount) const;
 
     int
-    flushDirty(NodeObjectType t, std::uint32_t seq, bool const etl = false);
+    flushDirty(NodeObjectType t, std::uint32_t seq);
     int
     flushDirtyNoWrite(NodeObjectType t, std::uint32_t seq);
     void
@@ -356,8 +356,7 @@ private:
     writeNode(
         NodeObjectType t,
         std::uint32_t seq,
-        std::shared_ptr<SHAMapAbstractNode> node,
-        bool const etl) const;
+        std::shared_ptr<SHAMapAbstractNode> node) const;
 
     SHAMapTreeNode*
     firstBelow(
@@ -417,11 +416,7 @@ private:
         Delta& differences,
         int& maxCount) const;
     int
-    walkSubTree(
-        bool doWrite,
-        NodeObjectType t,
-        std::uint32_t seq,
-        bool const etl = false);
+    walkSubTree(bool doWrite, NodeObjectType t, std::uint32_t seq);
 
     // Structure to track information about call to
     // getMissingNodes while it's in progress
