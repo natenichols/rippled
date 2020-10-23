@@ -186,6 +186,13 @@ SHAMapStoreImp::SHAMapStoreImp(
 
     if (deleteInterval_)
     {
+        if (app_.config().reporting())
+        {
+            Throw<std::runtime_error>(
+                "Reporting does not support online_delete. Remove "
+                "online_delete info from config");
+        }
+
         get_if_exists(section, "advisory_delete", advisoryDelete_);
 
         auto const minInterval = config.standalone()
@@ -219,6 +226,12 @@ SHAMapStoreImp::makeNodeStore(std::string const& name, std::int32_t readThreads)
     std::unique_ptr<NodeStore::Database> db;
     if (deleteInterval_)
     {
+        if (app_.config().reporting())
+        {
+            Throw<std::runtime_error>(
+                "Reporting does not support online_delete. Remove "
+                "online_delete info from config");
+        }
         SavedState state = state_db_.getState();
         auto writableBackend = makeBackendRotating(state.writableDb);
         auto archiveBackend = makeBackendRotating(state.archiveDb);
@@ -305,17 +318,21 @@ SHAMapStoreImp::copyNode(
 void
 SHAMapStoreImp::run()
 {
+    if (app_.config().reporting())
+    {
+        assert(false);
+        Throw<std::runtime_error>(
+            "Reporting does not support online_delete. Remove "
+            "online_delete info from config");
+    }
     beast::setCurrentThreadName("SHAMapStore");
     LedgerIndex lastRotated = state_db_.getState().lastRotated;
     netOPs_ = &app_.getOPs();
     ledgerMaster_ = &app_.getLedgerMaster();
     fullBelowCache_ = &(*app_.getNodeFamily().getFullBelowCache(0));
     treeNodeCache_ = &(*app_.getNodeFamily().getTreeNodeCache(0));
-    if (!app_.config().reporting())
-    {
-        transactionDb_ = &app_.getTxnDB();
-        ledgerDb_ = &app_.getLedgerDB();
-    }
+    transactionDb_ = &app_.getTxnDB();
+    ledgerDb_ = &app_.getLedgerDB();
     if (advisoryDelete_)
         canDelete_ = state_db_.getCanDelete();
 

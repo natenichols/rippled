@@ -134,5 +134,71 @@ DatabaseNodeImp::fetchNodeObject(
     return nodeObject;
 }
 
+std::vector<std::shared_ptr<NodeObject>>
+DatabaseNodeImp::fetchBatch(std::vector<uint256> const& hashes)
+{
+    std::vector<std::shared_ptr<NodeObject>> results{hashes.size()};
+    using namespace std::chrono;
+    auto const before = steady_clock::now();
+    std::unordered_map<uint256 const*, size_t> indexMap;
+    std::vector<uint256 const*> cacheMisses;
+    uint64_t hits = 0;
+    uint64_t fetches = 0;
+    for (size_t i = 0; i < hashes.size(); ++i)
+    {
+        auto const& hash = hashes[i];
+        // See if the object already exists in the cache
+        auto nObj = pCache_->fetch(hash);
+        ++fetches;
+        if (!nObj && !nCache_->touch_if_exists(hash))
+        {
+            // Try the database(s)
+            // report.wentToDisk = true;
+            indexMap[&hash] = i;
+            cacheMisses.push_back(&hash);
+        }
+        else
+        {
+            results[i] = nObj;
+            // It was in the cache.
+            ++hits;
+        }
+    }
+
+    auto dbResults = backend_->fetchBatch(cacheMisses).first;
+
+    for (size_t i = 0; i < dbResults.size(); ++i)
+    {
+        auto nObj = dbResults[i];
+        size_t index = indexMap[cacheMisses[i]];
+        results[index] = nObj;
+        auto const& hash = hashes[index];
+
+        if (!nObj)
+        {
+            // Just in case a write occurred
+            nObj = pCache_->fetch(hash);
+            if (!nObj)
+                // We give up
+                nCache_->insert(hash);
+        }
+        else
+        {
+            // Ensure all threads get the same object
+            pCache_->canonicalize_replace_client(hash, nObj);
+
+            // Since this was a 'hard' fetch, we will log it.
+            JLOG(j_.trace()) << "HOS: " << hash << " fetch: in db";
+        }
+    }
+
+    auto fetchDurationUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            steady_clock::now() - before)
+            .count();
+    updateFetchMetrics(fetches, hits, fetchDurationUs);
+    return results;
+}
+
 }  // namespace NodeStore
 }  // namespace ripple

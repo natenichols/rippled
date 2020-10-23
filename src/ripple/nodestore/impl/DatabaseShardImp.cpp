@@ -61,6 +61,12 @@ DatabaseShardImp::DatabaseShardImp(
     , openFinalLimit_(
           app.config().getValueFor(SizedItem::openFinalLimit, boost::none))
 {
+    if (app.config().reporting())
+    {
+        Throw<std::runtime_error>(
+            "Attempted to create DatabaseShardImp in reporting mode. Reporting "
+            "does not support shards. Remove shards info from config");
+    }
 }
 
 bool

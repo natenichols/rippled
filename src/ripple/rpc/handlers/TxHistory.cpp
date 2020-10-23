@@ -115,53 +115,11 @@ doTxHistoryReporting(RPC::JsonContext& context)
         nodestoreHashes.push_back(from_hex_text<uint256>(res.c_str(i, 0) + 2));
     }
 
-    auto objs = context.app.getNodeFamily().db().fetchBatch(nodestoreHashes);
-
-    assert(objs.size() == nodestoreHashes.size());
-    for (size_t i = 0; i < objs.size(); ++i)
+    auto txns = flatFetchTransactions(context.app, nodestoreHashes);
+    for (auto const& [sttx, meta] : txns)
     {
-        auto& obj = objs[i];
-        auto& nodestoreHash = nodestoreHashes[i];
-        if (obj)
-        {
-            auto node = SHAMapAbstractNode::makeFromPrefix(
-                makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
-            if (!node)
-            {
-                assert(false);
-                RPC::Status err{rpcINTERNAL, "Error making SHAMap node"};
-                err.inject(ret);
-                return ret;
-            }
-            auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
-            if (!item)
-            {
-                assert(false);
-                RPC::Status err{rpcINTERNAL, "Error reading SHAMap node"};
-                err.inject(ret);
-                return ret;
-            }
-
-            auto [sttx, meta] = deserializeTxPlusMeta(*item);
-            JLOG(context.j.debug()) << "Successfully fetched from db";
-
-            if (!sttx || !meta)
-            {
-                assert(false);
-                RPC::Status err{rpcINTERNAL, "Error deserializing SHAMap node"};
-                err.inject(ret);
-                return ret;
-            }
-
-            txs.append(sttx->getJson(JsonOptions::none));
-        }
-        else
-        {
-            assert(false);
-            RPC::Status err{rpcINTERNAL, "Containing SHAMap node not found"};
-            err.inject(ret);
-            return ret;
-        }
+        assert(sttx);
+        txs.append(sttx->getJson(JsonOptions::none));
     }
 
     ret[jss::index] = startIndex;

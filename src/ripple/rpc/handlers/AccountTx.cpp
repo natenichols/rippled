@@ -288,60 +288,33 @@ flatFetchTransactions(
         ret = TxnsDataBinary();
     else
         ret = TxnsData();
-    auto start = std::chrono::system_clock::now();
-    auto objs = context.app.getNodeFamily().db().fetchBatch(nodestoreHashes);
 
-    auto end = std::chrono::system_clock::now();
-    JLOG(context.j.debug()) << "account_tx Flat fetch time : "
-                            << ((end - start).count() / 1000000000.0);
-    assert(objs.size() == nodestoreHashes.size());
-    for (size_t i = 0; i < objs.size(); ++i)
+    std::vector<
+        std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
+        txns = flatFetchTransactions(context.app, nodestoreHashes);
+    for (size_t i = 0; i < txns.size(); ++i)
     {
-        auto& obj = objs[i];
-        auto& nodestoreHash = nodestoreHashes[i];
-        if (obj)
+        auto& [txn, meta] = txns[i];
+        if (format == DataFormat::binary)
         {
-            auto node = SHAMapAbstractNode::makeFromPrefix(
-                makeSlice(obj->getData()), SHAMapHash{nodestoreHash});
-            if (!node)
-            {
-                assert(false);
-                Throw<std::runtime_error>("Error making SHAMap node");
-            }
-            auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
-            if (item)
-            {
-                if (format == DataFormat::binary)
-                {
-                    auto& transactions = std::get<TxnsDataBinary>(ret);
-                    SerialIter it(item->slice());
-                    Blob txnBlob = it.getVL();
-                    Blob metaBlob = it.getVL();
-                    transactions.push_back(
-                        std::make_tuple(txnBlob, metaBlob, ledgerSequences[i]));
-                }
-                else
-                {
-                    auto& transactions = std::get<TxnsData>(ret);
-                    auto [txn, meta] = deserializeTxPlusMeta(*item);
-                    std::string reason;
-                    auto txnRet =
-                        std::make_shared<Transaction>(txn, reason, context.app);
-                    auto txMeta = std::make_shared<TxMeta>(
-                        txnRet->getID(), ledgerSequences[i], *meta);
-                    transactions.push_back(std::make_pair(txnRet, txMeta));
-                }
-            }
-            else
-            {
-                assert(false);
-                Throw<std::runtime_error>("Error reading SHAMap node");
-            }
+            auto& transactions = std::get<TxnsDataBinary>(ret);
+            Serializer txnSer = txn->getSerializer();
+            Serializer metaSer = meta->getSerializer();
+            //SerialIter it(item->slice());
+            Blob txnBlob = txnSer.getData();
+            Blob metaBlob = metaSer.getData();
+            transactions.push_back(
+                std::make_tuple(txnBlob, metaBlob, ledgerSequences[i]));
         }
         else
         {
-            assert(false);
-            Throw<std::runtime_error>("Containing SHAMap node not found");
+            auto& transactions = std::get<TxnsData>(ret);
+            std::string reason;
+            auto txnRet =
+                std::make_shared<Transaction>(txn, reason, context.app);
+            auto txMeta = std::make_shared<TxMeta>(
+                txnRet->getID(), ledgerSequences[i], *meta);
+            transactions.push_back(std::make_pair(txnRet, txMeta));
         }
     }
     return ret;

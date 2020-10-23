@@ -204,8 +204,9 @@ public:
             std::shared_ptr<NodeObject> nObj;
             Status status = fetch(h->begin(), &nObj);
             if (status != ok)
-                return {results, status};
-            results.push_back(nObj);
+                results.push_back({});
+            else
+                results.push_back(nObj);
         }
 
         return {results, ok};

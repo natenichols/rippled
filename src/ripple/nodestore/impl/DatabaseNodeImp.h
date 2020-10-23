@@ -95,10 +95,7 @@ public:
     }
 
     std::vector<std::shared_ptr<NodeObject>>
-    fetchBatch(std::vector<uint256> const& hashes) override
-    {
-        return doFetchBatch(hashes, *pCache_, *nCache_);
-    }
+    fetchBatch(std::vector<uint256> const& hashes);
 
     bool
     asyncFetch(
@@ -153,12 +150,6 @@ private:
         uint256 const& hash,
         std::uint32_t,
         FetchReport& fetchReport) override;
-
-    std::pair<std::vector<std::shared_ptr<NodeObject>>, Status>
-    fetchBatch(std::vector<uint256 const*> const& hashes) override
-    {
-        return backend_->fetchBatch(hashes);
-    }
 
     void
     for_each(std::function<void(std::shared_ptr<NodeObject>)> f) override

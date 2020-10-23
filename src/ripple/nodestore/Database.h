@@ -134,19 +134,6 @@ public:
         std::uint32_t ledgerSeq = 0,
         FetchType fetchType = FetchType::synchronous);
 
-    /** Fetch multiple objects
-        If an object is known to be not in the database, isn't found in the
-        database during the fetch, or failed to load correctly during the fetch,
-        `nullptr` is returned for that object
-
-        @note This can be called concurrently.
-        @note Results are returned in the same order as the hashes param
-        @param hashes The keys of the objects to retrieve.
-        @return The objects. Each not found object is a nullptr
-    */
-    virtual std::vector<std::shared_ptr<NodeObject>>
-    fetchBatch(std::vector<uint256> const& hashes) = 0;
-
     /** Fetch an object without waiting.
         If I/O is required to determine whether or not the object is present,
         `false` is returned. Otherwise, `true` is returned and `object` is set
@@ -292,12 +279,6 @@ protected:
     void
     importInternal(Backend& dstBackend, Database& srcDB);
 
-    std::vector<std::shared_ptr<NodeObject>>
-    doFetchBatch(
-        std::vector<uint256> const& hashes,
-        TaggedCache<uint256, NodeObject>& pCache,
-        KeyCache<uint256>& nCache);
-
     // Called by the public storeLedger function
     bool
     storeLedger(
@@ -305,6 +286,14 @@ protected:
         std::shared_ptr<Backend> dstBackend,
         std::shared_ptr<TaggedCache<uint256, NodeObject>> dstPCache,
         std::shared_ptr<KeyCache<uint256>> dstNCache);
+
+    void
+    updateFetchMetrics(uint64_t fetches, uint64_t hits, uint64_t duration)
+    {
+        fetchTotalCount_ += fetches;
+        fetchHitCount_ += hits;
+        fetchDurationUs_ += duration;
+    }
 
 private:
     std::atomic<std::uint64_t> storeCount_{0};
@@ -338,9 +327,6 @@ private:
         uint256 const& hash,
         std::uint32_t ledgerSeq,
         FetchReport& fetchReport) = 0;
-
-    virtual std::pair<std::vector<std::shared_ptr<NodeObject>>, Status>
-    fetchBatch(std::vector<uint256 const*> const& hashes) = 0;
 
     /** Visit every object in the database
         This is usually called during import.

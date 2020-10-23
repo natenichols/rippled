@@ -55,6 +55,8 @@
 #include <utility>
 #include <vector>
 
+#include <ripple/nodestore/impl/DatabaseNodeImp.h>
+
 namespace ripple {
 
 create_genesis_t const create_genesis{};
@@ -1698,86 +1700,33 @@ getHashesByIndex(std::uint32_t minSeq, std::uint32_t maxSeq, Application& app)
 
 std::vector<
     std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
-flatFetchTransactions(ReadView const& ledger, Application& app)
+flatFetchTransactions(Application& app, std::vector<uint256>& nodestoreHashes)
 {
     if (!app.config().reporting())
     {
         assert(false);
-        return {};
+        Throw<std::runtime_error>(
+            "flatFetchTransactions: not running in reporting mode");
     }
+
     std::vector<
         std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
         txns;
-#ifdef RIPPLED_REPORTING
-
-    auto log = app.journal("Ledger");
-
-    std::vector<uint256> nodestoreHashes;
-    std::vector<uint256> txIDs;
-    std::vector<uint32_t> ledgerSequences;
-    std::string query =
-        "SELECT ledger_seq, trans_id, nodestore_hash"
-        "  FROM transactions "
-        " WHERE ledger_seq = " +
-        std::to_string(ledger.info().seq);
-    auto res = PgQuery(app.getPgPool())(query.c_str());
-
-    if (!res)
-    {
-        JLOG(log.error()) << __func__
-                          << " : Postgres response is null - query = " << query;
-        assert(false);
-        return {};
-    }
-    else if (res.status() != PGRES_TUPLES_OK)
-    {
-        JLOG(log.error()) << __func__
-                          << " : Postgres response should have been "
-                             "PGRES_TUPLES_OK but instead was "
-                          << res.status() << " - msg  = " << res.msg()
-                          << " - query = " << query;
-        assert(false);
-        return {};
-    }
-
-    JLOG(log.trace()) << __func__ << " Postgres result msg  : " << res.msg();
-
-    if (res.isNull() || res.ntuples() == 0)
-    {
-        JLOG(log.debug()) << __func__
-                          << " : Ledger not found. query = " << query;
-        return {};
-    }
-    else if (res.ntuples() > 0)
-    {
-        if (res.nfields() != 3)
-        {
-            JLOG(log.error()) << __func__
-                              << " : Wrong number of fields in Postgres "
-                                 "response. Expected 3, but got "
-                              << res.nfields() << " . query = " << query;
-            assert(false);
-            return {};
-        }
-    }
-
-    JLOG(log.trace()) << __func__ << " : result = " << res.c_str()
-                      << " : query = " << query;
-    for (size_t i = 0; i < res.ntuples(); ++i)
-    {
-        char const* txID = res.c_str(i, 1);
-        char const* nodestoreHash = res.c_str(i, 2);
-
-        txIDs.push_back(from_hex_text<uint256>(txID + 2));
-        nodestoreHashes.push_back(from_hex_text<uint256>(nodestoreHash + 2));
-    }
-
     auto start = std::chrono::system_clock::now();
-    auto objs = app.getNodeFamily().db().fetchBatch(nodestoreHashes);
+    auto nodeDb =
+        dynamic_cast<NodeStore::DatabaseNodeImp*>(&(app.getNodeStore()));
+    if (!nodeDb)
+    {
+        assert(false);
+        Throw<std::runtime_error>(
+            "Called flatFetchTransactions but database is not DatabaseNodeImp");
+    }
+    auto objs = nodeDb->fetchBatch(nodestoreHashes);
 
     auto end = std::chrono::system_clock::now();
-    JLOG(log.debug()) << "ledger " << ledger.info().seq << " Flat fetch time : "
-                      << ((end - start).count() / 1000000000.0);
+    JLOG(app.journal("Ledger").debug())
+        << " Flat fetch time : " << ((end - start).count() / 1000000000.0)
+        << " number of transactions " << nodestoreHashes.size();
     assert(objs.size() == nodestoreHashes.size());
     for (size_t i = 0; i < objs.size(); ++i)
     {
@@ -1816,7 +1765,78 @@ flatFetchTransactions(ReadView const& ledger, Application& app)
                 "flatFetchTransactions : Containing SHAMap node not found");
         }
     }
-#endif
     return txns;
+}
+std::vector<
+    std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
+flatFetchTransactions(ReadView const& ledger, Application& app)
+{
+    if (!app.config().reporting())
+    {
+        assert(false);
+        return {};
+    }
+    std::vector<uint256> nodestoreHashes;
+#ifdef RIPPLED_REPORTING
+
+    auto log = app.journal("Ledger");
+
+    std::string query =
+        "SELECT nodestore_hash"
+        "  FROM transactions "
+        " WHERE ledger_seq = " +
+        std::to_string(ledger.info().seq);
+    auto res = PgQuery(app.getPgPool())(query.c_str());
+
+    if (!res)
+    {
+        JLOG(log.error()) << __func__
+                          << " : Postgres response is null - query = " << query;
+        assert(false);
+        return {};
+    }
+    else if (res.status() != PGRES_TUPLES_OK)
+    {
+        JLOG(log.error()) << __func__
+                          << " : Postgres response should have been "
+                             "PGRES_TUPLES_OK but instead was "
+                          << res.status() << " - msg  = " << res.msg()
+                          << " - query = " << query;
+        assert(false);
+        return {};
+    }
+
+    JLOG(log.trace()) << __func__ << " Postgres result msg  : " << res.msg();
+
+    if (res.isNull() || res.ntuples() == 0)
+    {
+        JLOG(log.debug()) << __func__
+                          << " : Ledger not found. query = " << query;
+        return {};
+    }
+    else if (res.ntuples() > 0)
+    {
+        if (res.nfields() != 1)
+        {
+            JLOG(log.error()) << __func__
+                              << " : Wrong number of fields in Postgres "
+                                 "response. Expected 1, but got "
+                              << res.nfields() << " . query = " << query;
+            assert(false);
+            return {};
+        }
+    }
+
+    JLOG(log.trace()) << __func__ << " : result = " << res.c_str()
+                      << " : query = " << query;
+    for (size_t i = 0; i < res.ntuples(); ++i)
+    {
+        char const* nodestoreHash = res.c_str(i, 0);
+
+        nodestoreHashes.push_back(from_hex_text<uint256>(nodestoreHash + 2));
+    }
+#endif
+
+    return flatFetchTransactions(app, nodestoreHashes);
 }
 }  // namespace ripple
