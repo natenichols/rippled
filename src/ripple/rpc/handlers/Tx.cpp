@@ -115,15 +115,16 @@ doTxPostgres(RPC::Context& context, TxArgs const& args)
         pair;
     // database returned the nodestore hash. Fetch the txn directly from the
     // nodestore. Don't traverse the transaction SHAMap
-    if (uint256* nodestoreHash = locator.getNodestoreHash())
+    if (locator.isFound())
     {
         auto start = std::chrono::system_clock::now();
         // The second argument of fetch is ignored when not using shards
-        if (auto obj =
-                context.app.getNodeFamily().db().fetch(*nodestoreHash, 0))
+        if (auto obj = context.app.getNodeFamily().db().fetch(
+                locator.getNodestoreHash(), locator.getLedgerSequence()))
         {
             auto node = SHAMapAbstractNode::makeFromPrefix(
-                makeSlice(obj->getData()), SHAMapHash{*nodestoreHash});
+                makeSlice(obj->getData()),
+                SHAMapHash{locator.getNodestoreHash()});
             if (!node)
             {
                 assert(false);
@@ -146,6 +147,8 @@ doTxPostgres(RPC::Context& context, TxArgs const& args)
             }
             std::string reason;
             res.txn = std::make_shared<Transaction>(sttx, reason, context.app);
+            res.txn->setLedger(locator.getLedgerSequence());
+            res.txn->setStatus(COMMITTED);
             if (args.binary)
             {
                 SerialIter it(item->slice());
@@ -173,13 +176,14 @@ doTxPostgres(RPC::Context& context, TxArgs const& args)
     }
     // database did not find the transaction, and returned the ledger range
     // that was searched
-    else if (ClosedInterval<uint32_t>* range = locator.getLedgerRange())
+    else
     {
         if (args.ledgerRange)
         {
+            auto range = locator.getLedgerRangeSearched();
             auto min = args.ledgerRange->first;
             auto max = args.ledgerRange->second;
-            if (min >= range->lower() && max <= range->upper())
+            if (min >= range.lower() && max <= range.upper())
             {
                 res.searchedAll = TxSearched::all;
             }

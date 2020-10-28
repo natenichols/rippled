@@ -181,12 +181,13 @@ Transaction::locate(uint256 const& id, Application& app)
     bool success = reader.parse(resultStr, resultStr + strlen(resultStr), v);
     if (success)
     {
-        if (v.isMember("nodestore_hash"))
+        if (v.isMember("nodestore_hash") && v.isMember("ledger_seq"))
         {
             uint256 nodestoreHash = from_hex_text<uint256>(
                 v["nodestore_hash"].asString().substr(2));
+            uint32_t ledgerSeq = v["ledger_seq"].asUInt();
             if (nodestoreHash.isNonZero())
-                return {nodestoreHash};
+                return {std::make_pair(nodestoreHash, ledgerSeq)};
         }
         if (v.isMember("min_seq") && v.isMember("max_seq"))
         {

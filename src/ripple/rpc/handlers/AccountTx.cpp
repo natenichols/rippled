@@ -300,7 +300,7 @@ flatFetchTransactions(
             auto& transactions = std::get<TxnsDataBinary>(ret);
             Serializer txnSer = txn->getSerializer();
             Serializer metaSer = meta->getSerializer();
-            //SerialIter it(item->slice());
+            // SerialIter it(item->slice());
             Blob txnBlob = txnSer.getData();
             Blob metaBlob = metaSer.getData();
             transactions.push_back(
@@ -312,6 +312,8 @@ flatFetchTransactions(
             std::string reason;
             auto txnRet =
                 std::make_shared<Transaction>(txn, reason, context.app);
+            txnRet->setLedger(ledgerSequences[i]);
+            txnRet->setStatus(COMMITTED);
             auto txMeta = std::make_shared<TxMeta>(
                 txnRet->getID(), ledgerSequences[i], *meta);
             transactions.push_back(std::make_pair(txnRet, txMeta));
