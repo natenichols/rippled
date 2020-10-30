@@ -17,8 +17,8 @@
 */
 //==============================================================================
 
-#ifndef RIPPLE_CORE_TXPROXY_H_INCLUDED
-#define RIPPLE_CORE_TXPROXY_H_INCLUDED
+#ifndef RIPPLE_APP_REPORTING_P2PPROXY_H_INCLUDED
+#define RIPPLE_APP_REPORTING_P2PPROXY_H_INCLUDED
 
 #include <ripple/app/main/Application.h>
 #include <ripple/rpc/Context.h>

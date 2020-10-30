@@ -17,8 +17,8 @@
 */
 //==============================================================================
 
-#ifndef RIPPLE_CORE_REPORTINGETL_H_INCLUDED
-#define RIPPLE_CORE_REPORTINGETL_H_INCLUDED
+#ifndef RIPPLE_APP_REPORTING_REPORTINGETL_H_INCLUDED
+#define RIPPLE_APP_REPORTING_REPORTINGETL_H_INCLUDED
 
 #include <ripple/app/main/Application.h>
 #include <ripple/app/reporting/ETLHelpers.h>

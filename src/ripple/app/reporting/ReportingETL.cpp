@@ -34,6 +34,7 @@
 
 namespace ripple {
 
+namespace detail {
 /// Convenience function for printing out basic ledger info
 std::string
 toString(LedgerInfo const& info)
@@ -45,6 +46,7 @@ toString(LedgerInfo const& info)
        << " ParentHash : " << strHex(info.parentHash) << " }";
     return ss.str();
 }
+}  // namespace detail
 
 void
 ReportingETL::consumeLedgerData(
@@ -126,7 +128,7 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Deserialized ledger header. "
-                           << toString(lgrInfo);
+                           << detail::toString(lgrInfo);
 
     ledger =
         std::make_shared<Ledger>(lgrInfo, app_.config(), app_.getNodeFamily());
@@ -175,7 +177,8 @@ void
 ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
 {
     JLOG(journal_.debug()) << __func__ << " : "
-                           << "Flushing ledger. " << toString(ledger->info());
+                           << "Flushing ledger. "
+                           << detail::toString(ledger->info());
     // These are recomputed in setImmutable
     auto& accountHash = ledger->info().accountHash;
     auto& txHash = ledger->info().txHash;
@@ -262,7 +265,7 @@ ReportingETL::flushLedger(std::shared_ptr<Ledger>& ledger)
 
     JLOG(journal_.info()) << __func__ << " : "
                           << "Successfully flushed ledger! "
-                          << toString(ledger->info());
+                          << detail::toString(ledger->info());
 }
 
 void
@@ -333,7 +336,7 @@ ReportingETL::publishLedger(uint32_t ledgerSequence, uint32_t maxAttempts)
             setLastPublish();
             JLOG(journal_.info())
                 << __func__ << " : "
-                << "Published ledger. " << toString(ledger->info());
+                << "Published ledger. " << detail::toString(ledger->info());
         });
         return true;
     }
@@ -381,7 +384,7 @@ ReportingETL::buildNextLedger(
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Deserialized ledger header. "
-                           << toString(lgrInfo);
+                           << detail::toString(lgrInfo);
 
     next->setLedgerInfo(lgrInfo);
 
@@ -446,7 +449,7 @@ ReportingETL::buildNextLedger(
 
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Finished ledger update. "
-                           << toString(next->info());
+                           << detail::toString(next->info());
     return {std::move(next), std::move(accountTxData)};
 }
 
@@ -639,7 +642,8 @@ ReportingETL::runETLPipeline(uint32_t startSequence)
             JLOG(journal_.info())
                 << "Load phase of etl : "
                 << "Successfully published ledger! Ledger info: "
-                << toString(ledger->info()) << ". txn count = " << numTxns
+                << detail::toString(ledger->info())
+                << ". txn count = " << numTxns
                 << ". key-value write time = " << kvTime
                 << ". relational write time = " << relationalTime
                 << ". key-value tps = " << numTxns / kvTime

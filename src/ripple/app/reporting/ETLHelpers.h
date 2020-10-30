@@ -17,8 +17,8 @@
 */
 //==============================================================================
 
-#ifndef RIPPLE_CORE_ETLHELPERS_H_INCLUDED
-#define RIPPLE_CORE_ETLHELPERS_H_INCLUDED
+#ifndef RIPPLE_APP_REPORTING_ETLHELPERS_H_INCLUDED
+#define RIPPLE_APP_REPORTING_ETLHELPERS_H_INCLUDED
 #include <ripple/app/main/Application.h>
 #include <ripple/ledger/ReadView.h>
 #include <condition_variable>
@@ -157,7 +157,6 @@ public:
         return ret;
     }
 };
-
 
 /// Parititions the uint256 keyspace into numMarkers partitions, each of equal
 /// size.

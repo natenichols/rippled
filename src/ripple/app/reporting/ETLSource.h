@@ -17,8 +17,8 @@
 */
 //==============================================================================
 
-#ifndef RIPPLE_CORE_ETLSOURCE_H_INCLUDED
-#define RIPPLE_CORE_ETLSOURCE_H_INCLUDED
+#ifndef RIPPLE_APP_REPORTING_ETLSOURCE_H_INCLUDED
+#define RIPPLE_APP_REPORTING_ETLSOURCE_H_INCLUDED
 #include <ripple/app/main/Application.h>
 #include <ripple/app/reporting/ETLHelpers.h>
 #include <ripple/protocol/STLedgerEntry.h>

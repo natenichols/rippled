@@ -17,8 +17,8 @@
 */
 //==============================================================================
 
-#ifndef RIPPLE_CORE_DBHELPERS_H_INCLUDED
-#define RIPPLE_CORE_DBHELPERS_H_INCLUDED
+#ifndef RIPPLE_APP_REPORTING_DBHELPERS_H_INCLUDED
+#define RIPPLE_APP_REPORTING_DBHELPERS_H_INCLUDED
 
 #include <ripple/app/reporting/ReportingETL.h>
 #include <ripple/basics/Log.h>
