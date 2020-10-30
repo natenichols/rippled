@@ -24,11 +24,11 @@
 #include <ripple/protocol/ErrorCodes.h>
 #include <ripple/protocol/jss.h>
 #include <ripple/resource/Fees.h>
+#include <ripple/rpc/GRPCHandlers.h>
 #include <ripple/rpc/Role.h>
 #include <ripple/rpc/handlers/LedgerHandler.h>
-#include <ripple/rpc/impl/RPCHelpers.h>
-#include <ripple/rpc/GRPCHandlers.h>
 #include <ripple/rpc/impl/GRPCHelpers.h>
+#include <ripple/rpc/impl/RPCHelpers.h>
 
 namespace ripple {
 namespace RPC {

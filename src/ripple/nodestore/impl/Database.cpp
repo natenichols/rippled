@@ -183,7 +183,6 @@ Database::fetchNodeObject(
     return nodeObject;
 }
 
-
 bool
 Database::storeLedger(
     Ledger const& srcLedger,

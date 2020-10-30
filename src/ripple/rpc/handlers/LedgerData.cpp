@@ -23,11 +23,11 @@
 #include <ripple/protocol/LedgerFormats.h>
 #include <ripple/protocol/jss.h>
 #include <ripple/rpc/Context.h>
+#include <ripple/rpc/GRPCHandlers.h>
 #include <ripple/rpc/Role.h>
+#include <ripple/rpc/impl/GRPCHelpers.h>
 #include <ripple/rpc/impl/RPCHelpers.h>
 #include <ripple/rpc/impl/Tuning.h>
-#include <ripple/rpc/GRPCHandlers.h>
-#include <ripple/rpc/impl/GRPCHelpers.h>
 
 namespace ripple {
 
