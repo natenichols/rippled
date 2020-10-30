@@ -128,7 +128,8 @@ GRPCServerImpl::CallData<Request, Response>::process(
     try
     {
         auto usage = getUsage();
-        if (!clientIsUnlimited() && usage.disconnect())
+        bool isUnlimited = clientIsUnlimited();
+        if (!isUnlimited && usage.disconnect())
         {
             grpc::Status status{
                 grpc::StatusCode::RESOURCE_EXHAUSTED,
@@ -139,11 +140,24 @@ GRPCServerImpl::CallData<Request, Response>::process(
         {
             auto loadType = getLoadType();
             usage.charge(loadType);
-            auto role = getRole();
-            JLOG(app_.journal("GRPCServer::Calldata").debug())
-                << "role = " << (int)role
-                << " isUnlimited = " << clientIsUnlimited()
-                << " address = " << getClientIpAddress().value();
+            auto role = getRole(isUnlimited);
+
+            {
+                std::stringstream toLog;
+                toLog << "role = " << (int)role;
+
+                toLog << " address = ";
+                if (auto clientIp = getClientIpAddress())
+                    toLog << clientIp.value();
+
+                toLog << " user = ";
+                if (auto user = getUser())
+                    toLog << user.value();
+                toLog << " isUnlimited = " << isUnlimited;
+
+                JLOG(app_.journal("GRPCServer::Calldata").debug())
+                    << toLog.str();
+            }
 
             RPC::GRPCContext<Request> context{
                 {app_.journal("gRPCServer"),
@@ -181,6 +195,7 @@ GRPCServerImpl::CallData<Request, Response>::process(
                 {
                     std::pair<Response, grpc::Status> result =
                         handler_(context);
+                    setIsUnlimited(result.first, isUnlimited);
                     responder_.Finish(result.first, result.second, this);
                 }
                 catch (ReportingShouldProxy&)
@@ -255,9 +270,9 @@ GRPCServerImpl::CallData<Request, Response>::getLoadType()
 
 template <class Request, class Response>
 Role
-GRPCServerImpl::CallData<Request, Response>::getRole()
+GRPCServerImpl::CallData<Request, Response>::getRole(bool isUnlimited)
 {
-    if (clientIsUnlimited())
+    if (isUnlimited)
         return Role::IDENTIFIED;
     else if (wasForwarded())
         return Role::PROXY;
@@ -283,6 +298,22 @@ GRPCServerImpl::CallData<Request, Response>::wasForwarded()
 }
 
 template <class Request, class Response>
+std::optional<std::string>
+GRPCServerImpl::CallData<Request, Response>::getUser()
+{
+    if (auto descriptor = Request::GetDescriptor()->FindFieldByName("user"))
+    {
+        std::string user =
+            Request::GetReflection()->GetString(request_, descriptor);
+        if (!user.empty())
+        {
+            return user;
+        }
+    }
+    return {};
+}
+
+template <class Request, class Response>
 std::optional<beast::IP::Address>
 GRPCServerImpl::CallData<Request, Response>::getClientIpAddress()
 {
@@ -293,10 +324,19 @@ GRPCServerImpl::CallData<Request, Response>::getClientIpAddress()
 }
 
 template <class Request, class Response>
-std::optional<beast::IP::Endpoint>
-GRPCServerImpl::CallData<Request, Response>::getClientEndpoint()
+std::optional<beast::IP::Address>
+GRPCServerImpl::CallData<Request, Response>::getProxiedClientIpAddress()
 {
-    std::string peer = getEndpoint(ctx_.peer());
+    auto endpoint = getProxiedClientEndpoint();
+    if (endpoint)
+        return endpoint->address();
+    return {};
+}
+
+template <class Request, class Response>
+std::optional<beast::IP::Endpoint>
+GRPCServerImpl::CallData<Request, Response>::getProxiedClientEndpoint()
+{
     auto descriptor = Request::GetDescriptor()->FindFieldByName("client_ip");
     if (descriptor)
     {
@@ -305,11 +345,20 @@ GRPCServerImpl::CallData<Request, Response>::getClientEndpoint()
         if (!clientIp.empty())
         {
             JLOG(app_.journal("gRPCServer").debug())
-                << "Got client_ip from request : " << clientIp
-                << " original peer : " << peer;
-            peer = clientIp;
+                << "Got client_ip from request : " << clientIp;
+            auto res = beast::IP::Endpoint::from_string_checked(clientIp);
+            if (res)
+                return {res.get()};
         }
     }
+    return {};
+}
+
+template <class Request, class Response>
+std::optional<beast::IP::Endpoint>
+GRPCServerImpl::CallData<Request, Response>::getClientEndpoint()
+{
+    std::string peer = getEndpoint(ctx_.peer());
     auto res = beast::IP::Endpoint::from_string_checked(peer);
     if (res)
         return {res.get()};
@@ -321,8 +370,11 @@ template <class Request, class Response>
 bool
 GRPCServerImpl::CallData<Request, Response>::clientIsUnlimited()
 {
+    if (!getUser())
+        return false;
     auto clientIp = getClientIpAddress();
-    if (clientIp)
+    auto proxiedIp = getProxiedClientIpAddress();
+    if (clientIp && !proxiedIp)
     {
         for (auto& ip : secureGatewayIPs_)
         {
@@ -334,11 +386,31 @@ GRPCServerImpl::CallData<Request, Response>::clientIsUnlimited()
 }
 
 template <class Request, class Response>
+void
+GRPCServerImpl::CallData<Request, Response>::setIsUnlimited(
+    Response& response,
+    bool isUnlimited)
+{
+    if (isUnlimited)
+    {
+        if (auto descriptor =
+                Response::GetDescriptor()->FindFieldByName("is_unlimited"))
+        {
+            Response::GetReflection()->SetBool(&response, descriptor, true);
+        }
+    }
+}
+
+template <class Request, class Response>
 Resource::Consumer
 GRPCServerImpl::CallData<Request, Response>::getUsage()
 {
     auto endpoint = getClientEndpoint();
-    if (endpoint)
+    auto proxiedEndpoint = getProxiedClientEndpoint();
+    if (proxiedEndpoint)
+        return app_.getResourceManager().newInboundEndpoint(
+            proxiedEndpoint.value());
+    else if (endpoint)
         return app_.getResourceManager().newInboundEndpoint(endpoint.value());
     Throw<std::runtime_error>("Failed to get client endpoint");
 }

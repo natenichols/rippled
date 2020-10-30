@@ -784,6 +784,217 @@ class ReportingETL_test : public beast::unit_test::suite
         }
     }
 
+    void
+    testSecureGateway()
+    {
+        testcase("SecureGateway");
+        using namespace test::jtx;
+        {
+            std::unique_ptr<Config> config = envconfig(
+                addGrpcConfigWithSecureGateway, getEnvLocalhostAddr());
+            std::string grpcPort =
+                *(*config)["port_grpc"].get<std::string>("port");
+            Env env(*this, std::move(config));
+
+            env.close();
+
+            auto ledger = env.app().getLedgerMaster().getLedgerBySeq(3);
+
+            BEAST_EXPECT(env.current()->info().seq == 4);
+
+            auto grpcLedger = [&grpcPort](
+                                  auto sequence,
+                                  std::string const& clientIp,
+                                  std::string const& user) {
+                GrpcLedgerClient grpcClient{grpcPort};
+
+                grpcClient.request.mutable_ledger()->set_sequence(sequence);
+                grpcClient.request.set_client_ip(clientIp);
+                grpcClient.request.set_user(user);
+
+                grpcClient.GetLedger();
+                return std::make_pair(grpcClient.status, grpcClient.reply);
+            };
+
+            {
+                auto [status, reply] =
+                    grpcLedger(env.current()->info().seq, "", "");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+            {
+                auto [status, reply] =
+                    grpcLedger(env.current()->info().seq, "", "ETL");
+                BEAST_EXPECT(reply.is_unlimited());
+            }
+            {
+                auto [status, reply] =
+                    grpcLedger(env.current()->info().seq, "", "Reporting");
+                BEAST_EXPECT(reply.is_unlimited());
+            }
+            {
+                auto [status, reply] =
+                    grpcLedger(env.current()->info().seq, "127.0.0.1", "ETL");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+            {
+                auto [status, reply] =
+                    grpcLedger(env.current()->info().seq, "127.0.0.1", "");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+        }
+
+        {
+            std::string secureGatewayIp = "44.124.234.79";
+            std::unique_ptr<Config> config =
+                envconfig(addGrpcConfigWithSecureGateway, secureGatewayIp);
+            std::string grpcPort =
+                *(*config)["port_grpc"].get<std::string>("port");
+            Env env(*this, std::move(config));
+
+            env.close();
+
+            auto ledger = env.app().getLedgerMaster().getLedgerBySeq(3);
+
+            BEAST_EXPECT(env.current()->info().seq == 4);
+
+            auto grpcLedger = [&grpcPort](
+                                  auto sequence,
+                                  std::string const& clientIp,
+                                  std::string const& user) {
+                GrpcLedgerClient grpcClient{grpcPort};
+
+                grpcClient.request.mutable_ledger()->set_sequence(sequence);
+                grpcClient.request.set_client_ip(clientIp);
+                grpcClient.request.set_user(user);
+
+                grpcClient.GetLedger();
+                return std::make_pair(grpcClient.status, grpcClient.reply);
+            };
+
+            {
+                auto [status, reply] =
+                    grpcLedger(env.current()->info().seq, "", "");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+            {
+                auto [status, reply] =
+                    grpcLedger(env.current()->info().seq, "", "ETL");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+            {
+                auto [status, reply] = grpcLedger(
+                    env.current()->info().seq, secureGatewayIp, "ETL");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+            {
+                auto [status, reply] =
+                    grpcLedger(env.current()->info().seq, secureGatewayIp, "");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+        }
+
+        {
+            std::unique_ptr<Config> config = envconfig(
+                addGrpcConfigWithSecureGateway, getEnvLocalhostAddr());
+            std::string grpcPort =
+                *(*config)["port_grpc"].get<std::string>("port");
+            Env env(*this, std::move(config));
+
+            env.close();
+
+            auto ledger = env.app().getLedgerMaster().getLedgerBySeq(3);
+
+            BEAST_EXPECT(env.current()->info().seq == 4);
+            auto grpcLedgerData = [&grpcPort](
+                                      auto sequence,
+                                      std::string const& clientIp,
+                                      std::string const& user) {
+                GrpcLedgerDataClient grpcClient{grpcPort};
+
+                grpcClient.request.mutable_ledger()->set_sequence(sequence);
+                grpcClient.request.set_client_ip(clientIp);
+                grpcClient.request.set_user(user);
+
+                grpcClient.GetLedgerData();
+                return std::make_pair(grpcClient.status, grpcClient.reply);
+            };
+            {
+                auto [status, reply] =
+                    grpcLedgerData(env.current()->info().seq, "", "");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+            {
+                auto [status, reply] =
+                    grpcLedgerData(env.current()->info().seq, "", "ETL");
+                BEAST_EXPECT(reply.is_unlimited());
+            }
+            {
+                auto [status, reply] =
+                    grpcLedgerData(env.current()->info().seq, "", "Reporting");
+                BEAST_EXPECT(reply.is_unlimited());
+            }
+            {
+                auto [status, reply] = grpcLedgerData(
+                    env.current()->info().seq, "127.0.0.1", "ETL");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+            {
+                auto [status, reply] =
+                    grpcLedgerData(env.current()->info().seq, "127.0.0.1", "");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+        }
+        {
+            std::string secureGatewayIp = "44.124.234.79";
+            std::unique_ptr<Config> config =
+                envconfig(addGrpcConfigWithSecureGateway, secureGatewayIp);
+            std::string grpcPort =
+                *(*config)["port_grpc"].get<std::string>("port");
+            Env env(*this, std::move(config));
+
+            env.close();
+
+            auto ledger = env.app().getLedgerMaster().getLedgerBySeq(3);
+
+            BEAST_EXPECT(env.current()->info().seq == 4);
+
+            auto grpcLedgerData = [&grpcPort](
+                                      auto sequence,
+                                      std::string const& clientIp,
+                                      std::string const& user) {
+                GrpcLedgerDataClient grpcClient{grpcPort};
+
+                grpcClient.request.mutable_ledger()->set_sequence(sequence);
+                grpcClient.request.set_client_ip(clientIp);
+                grpcClient.request.set_user(user);
+
+                grpcClient.GetLedgerData();
+                return std::make_pair(grpcClient.status, grpcClient.reply);
+            };
+
+            {
+                auto [status, reply] =
+                    grpcLedgerData(env.current()->info().seq, "", "");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+            {
+                auto [status, reply] =
+                    grpcLedgerData(env.current()->info().seq, "", "ETL");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+            {
+                auto [status, reply] = grpcLedgerData(
+                    env.current()->info().seq, secureGatewayIp, "ETL");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+            {
+                auto [status, reply] = grpcLedgerData(
+                    env.current()->info().seq, secureGatewayIp, "");
+                BEAST_EXPECT(!reply.is_unlimited());
+            }
+        }
+    }
+
 public:
     void
     run() override
@@ -797,6 +1008,8 @@ public:
         testGetLedgerEntry();
 
         testNeedCurrentOrClosed();
+
+        testSecureGateway();
     }
 };
 

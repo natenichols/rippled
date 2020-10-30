@@ -27,6 +27,11 @@ message GetLedgerRequest
     // the reporting node will set this field. Clients should not set this
     // field.
     string client_ip = 5;
+
+    // Identifying string. If user is set, client_ip is not set, and request is
+    // coming from a secure_gateway host, then the client is not subject to
+    // resource controls
+    string user = 6;
 }
 
 message GetLedgerResponse
@@ -50,6 +55,9 @@ message GetLedgerResponse
 
     // True if the skiplist object is included in ledger_objects
     bool skiplist_included = 6;
+
+    // True if request was exempt from resource controls
+    bool is_unlimited = 7;
 }
 
 message TransactionHashList

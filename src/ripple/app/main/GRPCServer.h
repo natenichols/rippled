@@ -174,9 +174,6 @@ private:
         // What we get from the client.
         Request request_;
 
-        // What we send back to the client.
-        Response reply_;
-
         // The means to get back to the client.
         grpc::ServerAsyncResponseWriter<Response> responder_;
 
@@ -237,28 +234,48 @@ private:
         Resource::Charge
         getLoadType();
 
-        // return the Role required for this RPC
-        // for now, we are only supporting RPC's that require Role::USER for
-        // gRPC
+        // return the Role used for this RPC
         Role
-        getRole();
+        getRole(bool isUnlimited);
 
         // register endpoint with ResourceManager and return usage
         Resource::Consumer
         getUsage();
 
-        // Returns the ip of the client. If the request was proxied through
-        // another rippled node, returns the ip of the originating client.
+        // Returns the ip of the client
         // Empty optional if there was an error decoding the client ip
         std::optional<beast::IP::Address>
         getClientIpAddress();
 
-        // Returns the endpoint of the client. If the request was proxied
-        // through another rippled node, returns the endpoint of the originating
-        // client. Empty optional if there was an error decoding the client
+        // Returns the endpoint of the client.
+        // Empty optional if there was an error decoding the client
         // endpoint
         std::optional<beast::IP::Endpoint>
         getClientEndpoint();
+
+        // If the request was proxied through
+        // another rippled node, returns the ip of the originating client.
+        // Empty optional if request was not proxied or there was an error
+        // decoding the client ip
+        std::optional<beast::IP::Address>
+        getProxiedClientIpAddress();
+
+        // If the request was proxied through
+        // another rippled node, returns the endpoint of the originating client.
+        // Empty optional if request was not proxied or there was an error
+        // decoding the client endpoint
+        std::optional<beast::IP::Endpoint>
+        getProxiedClientEndpoint();
+
+        // Returns the user specified in the request. Empty optional if no user
+        // was specified
+        std::optional<std::string>
+        getUser();
+
+        // Sets is_unlimited in response to value of clientIsUnlimited
+        // Does nothing if is_unlimited is not a field of the response
+        void
+        setIsUnlimited(Response& response, bool isUnlimited);
 
         // True if the client is exempt from resource controls
         bool

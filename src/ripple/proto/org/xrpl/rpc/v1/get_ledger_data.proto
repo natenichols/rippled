@@ -24,6 +24,11 @@ message GetLedgerDataRequest
     // the reporting node will set this field. Clients should not set this
     // field.
     string client_ip = 4;
+
+    // Identifying string. If user is set, client_ip is not set, and request is
+    // coming from a secure_gateway host, then the client is not subject to
+    // resource controls
+    string user = 6;
 }
 
 message GetLedgerDataResponse
@@ -41,5 +46,8 @@ message GetLedgerDataResponse
     // set, there are no more objects left in the ledger, or no more objects
     // with key less than end_marker (if end_marker was set in the request)
     bytes marker = 4;
+
+    // True if request was exempt from resource controls
+    bool is_unlimited = 7;
 }
 

@@ -409,6 +409,7 @@ public:
         {
             request_.set_marker(marker.data(), marker.size());
         }
+        request_.set_user("ETL");
         nextPrefix_ = 0x00;
         if (nextMarker)
             nextPrefix_ = nextMarker->data()[0];
@@ -449,6 +450,13 @@ public:
                                    << " code = " << status_.error_code()
                                    << " message = " << status_.error_message();
             return CallStatus::ERROR;
+        }
+        if (!next_->is_unlimited())
+        {
+            JLOG(journal_.warn())
+                << "AsyncCallData is_unlimited is false. Make sure "
+                   "secure_gateway is set correctly at the ETL source";
+            assert(false);
         }
 
         std::swap(cur_, next_);
@@ -536,7 +544,8 @@ ETLSource::loadInitialLedger(
         calls.emplace_back(markers[i], nextMarker, sequence, journal_);
     }
 
-    JLOG(journal_.debug()) << "Starting data download for ledger " << sequence;
+    JLOG(journal_.debug()) << "Starting data download for ledger " << sequence
+                           << ". Using source = " << toString();
 
     for (auto& c : calls)
         c.call(stub_, cq);
@@ -591,7 +600,16 @@ ETLSource::fetchLedger(uint32_t ledgerSequence, bool getObjects)
     request.set_transactions(true);
     request.set_expand(true);
     request.set_get_objects(getObjects);
+    request.set_user("ETL");
     grpc::Status status = stub_->GetLedger(&context, request, &response);
+    if (!response.is_unlimited())
+    {
+        JLOG(journal_.warn()) << "ETLSource::fetchLedger - is_unlimited is "
+                                 "false. Make sure secure_gateway is set "
+                                 "correctly on the ETL source. source = "
+                              << toString();
+        assert(false);
+    }
     return {status, std::move(response)};
 }
 
