@@ -119,7 +119,7 @@ doTxPostgres(RPC::Context& context, TxArgs const& args)
     {
         auto start = std::chrono::system_clock::now();
         // The second argument of fetch is ignored when not using shards
-        if (auto obj = context.app.getNodeFamily().db().fetch(
+        if (auto obj = context.app.getNodeFamily().db().fetchNodeObject(
                 locator.getNodestoreHash(), locator.getLedgerSequence()))
         {
             auto node = SHAMapAbstractNode::makeFromPrefix(
