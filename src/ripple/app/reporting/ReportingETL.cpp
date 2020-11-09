@@ -121,8 +121,7 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
                            << toString(lgrInfo);
 
     ledger = std::make_shared<FlatLedger>(lgrInfo, app_.config(), app_.getNodeFamily(), cassandra_);
-    // ledger->stateMap().clearSynching();
-    // ledger->txMap().clearSynching();
+
     std::vector<AccountTransactionsData> accountTxData =
         insertTransactions(ledger, *ledgerData);
 
@@ -177,96 +176,12 @@ ReportingETL::flushLedger(std::shared_ptr<FlatLedger>& ledger)
 {
     JLOG(journal_.debug()) << __func__ << " : "
                            << "Flushing ledger. " << toString(ledger->info());
-    // These are recomputed in setImmutable
-    auto& accountHash = ledger->info().accountHash;
-    auto& txHash = ledger->info().txHash;
-    auto& ledgerHash = ledger->info().hash;
 
+    cassandra_.sync();
 
-    ledger->setImmutable(app_.config(), false);
-    auto start = std::chrono::system_clock::now();
-
-    // auto numFlushed = ledger->stateMap().flushDirty(
-    //     hotACCOUNT_NODE, ledger->info().seq, true);
-
-    // auto numTxFlushed = ledger->txMap().flushDirty(
-    //     hotTRANSACTION_NODE, ledger->info().seq, true);
-
-    // {
-    //     Serializer s(128);
-    //     s.add32(HashPrefix::ledgerMaster);
-    //     addRaw(ledger->info(), s);
-    //     // app_.getNodeStore().store(
-        //     hotLEDGER,
-        //     std::move(s.modData()),
-        //     ledger->info().hash,
-        //     ledger->info().seq,
-        //     true);
-    // }
-
-    // app_.getNodeStore().sync();
-
-    auto end = std::chrono::system_clock::now();
-
-    // JLOG(journal_.debug()) << __func__ << " : "
-    //                        << "Flushed " << numFlushed
-    //                        << " nodes to nodestore from stateMap";
-    // JLOG(journal_.debug()) << __func__ << " : "
-    //                        << "Flushed " << numTxFlushed
-    //                        << " nodes to nodestore from txMap";
-
-    // JLOG(journal_.debug()) << __func__ << " : "
-    //                        << "Flush took "
-    //                        << (end - start).count() / 1000000000.0
-    //                        << " seconds";
-
-    // if (numFlushed == 0)
-    // {
-    //     JLOG(journal_.fatal()) << __func__ << " : "
-    //                            << "Flushed 0 nodes from state map";
-    //     assert(false);
-    // }
-    // if (numTxFlushed == 0)
-    // {
-    //     JLOG(journal_.warn()) << __func__ << " : "
-    //                           << "Flushed 0 nodes from tx map";
-    // }
-
-
-    // Make sure calculated hashes are correct
-    // if (ledger->stateMap().getHash().as_uint256() != accountHash)
-    // {
-    //     JLOG(journal_.fatal())
-    //         << __func__ << " : "
-    //         << "State map hash does not match. "
-    //         << "Expected hash = " << strHex(accountHash) << "Actual hash = "
-    //         << strHex(ledger->stateMap().getHash().as_uint256());
-    //     Throw<std::runtime_error>("state map hash mismatch");
-    // }
-
-    // if (ledger->txMap().getHash().as_uint256() != txHash)
-    // {
-    //     JLOG(journal_.fatal())
-    //         << __func__ << " : "
-    //         << "Tx map hash does not match. "
-    //         << "Expected hash = " << strHex(txHash) << "Actual hash = "
-    //         << strHex(ledger->txMap().getHash().as_uint256());
-    //     Throw<std::runtime_error>("tx map hash mismatch");
-    // }
-
-    // if (ledger->info().hash != ledgerHash)
-    // {
-    //     JLOG(journal_.fatal())
-    //         << __func__ << " : "
-    //         << "Ledger hash does not match. "
-    //         << "Expected hash = " << strHex(ledgerHash)
-    //         << "Actual hash = " << strHex(ledger->info().hash);
-    //     Throw<std::runtime_error>("ledger hash mismatch");
-    // }
-
-    // JLOG(journal_.info()) << __func__ << " : "
-    //                       << "Successfully flushed ledger! "
-    //                       << toString(ledger->info());
+    JLOG(journal_.info()) << __func__ << " : "
+                          << "Successfully flushed ledger! "
+                          << toString(ledger->info());
 }
 
 void

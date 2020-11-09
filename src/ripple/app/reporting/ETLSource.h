@@ -314,6 +314,7 @@ public:
             }
         }
         assert(false);
+        return false;
     }
 
     Json::Value

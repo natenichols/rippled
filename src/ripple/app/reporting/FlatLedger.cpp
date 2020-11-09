@@ -44,7 +44,10 @@ calculateLedgerHash(LedgerInfo const& info)
 class FlatLedger::sles_iter_impl : public sles_type::iter_base
 {
 private:
-    hash_map<uint256, sles_type::value_type>::const_iterator iter_;
+    using hash_map_iter =
+        hash_map<uint256, sles_type::value_type>::const_iterator;
+
+    hash_map_iter iter_;
 
 public:
     sles_iter_impl() = delete;
@@ -53,7 +56,7 @@ public:
 
     sles_iter_impl(sles_iter_impl const&) = default;
 
-    sles_iter_impl(hash_map<uint256, sles_type::value_type>::const_iterator iter) : iter_(iter)
+    sles_iter_impl(hash_map_iter iter) : iter_(iter)
     {
     }
 
@@ -219,7 +222,16 @@ FlatLedger::succ(uint256 const& key, boost::optional<uint256> const& last) const
 std::shared_ptr<SLE const>
 FlatLedger::read(Keylet const& k) const 
 {
-    return nullptr;
+    std::shared_ptr<Blob> entry;
+    cassandra_.fetch(NodeStore::CassTable::StateTable, k.key, info().seq, entry);
+
+    if(!entry)
+        return nullptr;
+    
+    SerialIter sit(entry->data(), entry->size());
+    auto sle = std::make_shared<SLE const>(sit, k.key);
+
+    return sle;
 }
 
 auto 
@@ -255,56 +267,82 @@ FlatLedger::txsEnd() const -> std::unique_ptr<txs_type::iter_base>
 
 bool
 FlatLedger::txExists(uint256 const& key) const 
-{    
-    return txMap_.find(key) != txMap_.end();
+{
+    std::shared_ptr<Blob> tx;
+    cassandra_.fetch(NodeStore::CassTable::StateTable, key, info().seq, tx);
+
+    return tx != nullptr;
 }
+
 
 auto 
 FlatLedger::txRead(key_type const& key) const -> tx_type
 {
+    std::shared_ptr<Blob> tx;
+    cassandra_.fetch(NodeStore::CassTable::TxTable, key, info().seq, tx);
 
-    return { nullptr, nullptr};
+    if(!tx)
+        return {nullptr, nullptr};
+
+    auto item = std::make_shared<SHAMapItem>(key, *tx);
+    return deserializeTxPlusMeta(*item);
+}
+
+std::shared_ptr<SLE>
+FlatLedger::peek(Keylet const& k) const
+{
+    std::shared_ptr<Blob> entry;
+    cassandra_.fetch(NodeStore::CassTable::StateTable, k.key, info().seq, entry);
+
+    if(!entry)
+        return nullptr;
+    
+    SerialIter sit(entry->data(), entry->size());
+    auto sle = std::make_shared<SLE>(sit, k.key);
+
+    return sle;
 }
 
 void
 FlatLedger::rawErase(uint256 const& key)
 {
-
+    cassandra_.remove(NodeStore::CassTable::StateTable, key, info().seq);
 }
 
 void
-FlatLedger::rawInsert(
-    std::shared_ptr<SLE> const& sle)
+FlatLedger::rawInsert(std::shared_ptr<SLE> const& sle)
 {
     Serializer s;
     sle->add(s);
     auto item = std::make_shared<SHAMapItem const>(sle->key(), std::move(s));
-    cassandra_.store(sle->key(), info().seq, item->peekData());
+    cassandra_.store(NodeStore::CassTable::StateTable, sle->key(), info().seq, item->peekData());
 }
 
 void
 FlatLedger::rawReplace(std::shared_ptr<SLE> const& sle)
 {
-
+    
 }
 
 auto
 FlatLedger::digest(key_type const& key) const -> boost::optional<digest_type>
 {
-    std::cout << "HI" << std::endl;
     return {};
 }
 
 bool
 FlatLedger::exists(Keylet const& k) const
 {
-    return true;
+   return exists(k.key);
 }
 
 bool
 FlatLedger::exists(uint256 const& entry) const
 {
-    return true;
+    std::shared_ptr<Blob> tx;
+    cassandra_.fetch(NodeStore::CassTable::StateTable, entry, info().seq, tx);
+
+    return tx != nullptr;
 }
 
 uint256
@@ -325,7 +363,7 @@ FlatLedger::rawTxInsert(
         HashPrefix::txNode, makeSlice(item->peekData()), item->key());
 
     // Write item, seq, and hash to Cassandra tx table
-    cassandra_.store(hash, seq, item->peekData());
+    cassandra_.store(NodeStore::CassTable::TxTable, hash, seq, item->peekData());
 
     return hash;
 }
@@ -333,7 +371,65 @@ FlatLedger::rawTxInsert(
 void
 FlatLedger::updateSkipList()
 {
-    
+    if (info_.seq == 0)  // genesis ledger has no previous ledger
+        return;
+
+    std::uint32_t prevIndex = info_.seq - 1;
+
+    // update record of every 256th ledger
+    if ((prevIndex & 0xff) == 0)
+    {
+        auto const k = keylet::skip(prevIndex);
+        auto sle = peek(k);
+        std::vector<uint256> hashes;
+
+        bool created;
+        if (!sle)
+        {
+            sle = std::make_shared<SLE>(k);
+            created = true;
+        }
+        else
+        {
+            hashes = static_cast<decltype(hashes)>(sle->getFieldV256(sfHashes));
+            created = false;
+        }
+
+        assert(hashes.size() <= 256);
+        hashes.push_back(info_.parentHash);
+        sle->setFieldV256(sfHashes, STVector256(hashes));
+        sle->setFieldU32(sfLastLedgerSequence, prevIndex);
+        if (created)
+            rawInsert(sle);
+        else
+            rawReplace(sle);
+    }
+
+    // update record of past 256 ledger
+    auto const k = keylet::skip();
+    auto sle = peek(k);
+    std::vector<uint256> hashes;
+    bool created;
+    if (!sle)
+    {
+        sle = std::make_shared<SLE>(k);
+        created = true;
+    }
+    else
+    {
+        hashes = static_cast<decltype(hashes)>(sle->getFieldV256(sfHashes));
+        created = false;
+    }
+    assert(hashes.size() <= 256);
+    if (hashes.size() == 256)
+        hashes.erase(hashes.begin());
+    hashes.push_back(info_.parentHash);
+    sle->setFieldV256(sfHashes, STVector256(hashes));
+    sle->setFieldU32(sfLastLedgerSequence, prevIndex);
+    if (created)
+        rawInsert(sle);
+    else
+        rawReplace(sle);
 }
 
 std::tuple<std::shared_ptr<FlatLedger>, std::uint32_t, uint256>

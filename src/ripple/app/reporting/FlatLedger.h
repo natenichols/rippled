@@ -115,6 +115,9 @@ public:
     std::shared_ptr<SLE const>
     read(Keylet const& k) const override;
 
+    std::shared_ptr<SLE>
+    peek(Keylet const& k) const;
+
     std::unique_ptr<sles_type::iter_base>
     slesBegin() const final;
 

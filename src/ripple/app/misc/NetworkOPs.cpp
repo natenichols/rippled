@@ -2740,12 +2740,16 @@ NetworkOPsImp::getServerInfo(bool human, bool admin, bool counters)
     }
 
     bool valid = false;
-    auto lpClosed = m_ledgerMaster.getValidatedLedger();
+
+    std::shared_ptr<ReadView const> lpClosed;
+
+    if(app_.config().reporting())
+        lpClosed = std::static_pointer_cast<ReadView const>(getValidatedLedgerPostgres(app_));
+    else
+        lpClosed = std::static_pointer_cast<ReadView const>(m_ledgerMaster.getValidatedLedger());
 
     if (lpClosed)
         valid = true;
-    else if (!app_.config().reporting())
-        lpClosed = m_ledgerMaster.getClosedLedger();
 
     if (lpClosed)
     {

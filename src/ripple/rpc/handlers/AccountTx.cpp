@@ -331,7 +331,7 @@ std::variant<
 flatFetchTransactions(
     RPC::Context& context,
     std::vector<uint256>& nodestoreHashes,
-    uint32_t seq,
+    std::vector<uint32_t> sequences,
     bool binary)
 {
      if(!context.app.config().reporting())
@@ -346,7 +346,7 @@ flatFetchTransactions(
         deserializedTransactions;
 
     auto start = std::chrono::system_clock::now();
-    auto objs = context.app.getReportingETL().getCassandra().fetchBatch(nodestoreHashes, seq);
+    auto objs = context.app.getReportingETL().getCassandra().fetchBatch(NodeStore::CassTable::TxTable, nodestoreHashes, sequences);
 
 
     auto end = std::chrono::system_clock::now();
@@ -406,7 +406,6 @@ processAccountTxStoredProcedureResult(
     {
         if (result.isMember("transactions"))
         {
-            uint32_t maxSeq = 0;
             std::vector<uint256> nodestoreHashes;
             std::vector<uint256> txIDs;
             std::vector<uint32_t> ledgerSequences;
@@ -420,9 +419,6 @@ processAccountTxStoredProcedureResult(
 
                     if (RPC::isHexTxID(idHex))
                     {
-                        if(ledgerSequence > maxSeq)
-                            maxSeq = ledgerSequence;
-
                         auto txID = from_hex_text<uint256>(idHex);
                         txIDs.push_back(txID);
                         ledgerSequences.push_back(ledgerSequence);
@@ -467,7 +463,7 @@ processAccountTxStoredProcedureResult(
                         "account_tx : nodestore hash returned for some txns "
                         "but not all");
                 }
-                fetchResults = flatFetchTransactions(context, nodestoreHashes, maxSeq, args.binary);
+                fetchResults = flatFetchTransactions(context, nodestoreHashes, ledgerSequences, args.binary);
             }
             else
                 fetchResults = fetchTransactions(context, txIDs, ledgerSequences, args.binary);

@@ -121,7 +121,7 @@ doTxPostgres(RPC::Context& context, TxArgs const& args)
 
     JLOG(context.j.debug()) << "Fetching from postgres";
     Transaction::Locator locator = Transaction::locate(args.hash, context.app);
-    auto seq = context.app.getLedgerMaster().getCurrentLedgerIndex();
+    auto seq = getValidatedLedgerPostgres(context.app)->info().seq;
 
     std::shared_ptr<Blob> obj = nullptr;
     std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>
@@ -131,7 +131,7 @@ doTxPostgres(RPC::Context& context, TxArgs const& args)
     if (uint256* nodestoreHash = locator.getNodestoreHash())
     {
         auto start = std::chrono::system_clock::now();
-        context.app.getReportingETL().getCassandra().fetch(*nodestoreHash, seq, obj);
+        context.app.getReportingETL().getCassandra().fetch(NodeStore::CassTable::TxTable ,*nodestoreHash, seq, obj);
         // The second argument of fetch is ignored when not using shards
         if (obj)
         {
@@ -161,7 +161,7 @@ doTxPostgres(RPC::Context& context, TxArgs const& args)
         //         {rpcLGR_NOT_FOUND,
         //          "The ledger containing the transaction was not found"}};
 
-        context.app.getReportingETL().getCassandra().fetch(args.hash, *ledgerSequence, obj);
+        context.app.getReportingETL().getCassandra().fetch(NodeStore::CassTable::TxTable, args.hash, *ledgerSequence, obj);
         auto end = std::chrono::system_clock::now();
         JLOG(context.j.debug()) << "traverse fetch time : "
                                 << ((end - start).count() / 1000000000.0);

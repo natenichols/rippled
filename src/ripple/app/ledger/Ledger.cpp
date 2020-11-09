@@ -1514,7 +1514,7 @@ flatFetchTransactions(ReadView const& ledger, Application& app)
 
     auto start = std::chrono::system_clock::now();
     auto objs =
-        app.getReportingETL().getCassandra().fetchBatch(nodestoreHashes, ledger.info().seq);
+        app.getReportingETL().getCassandra().fetchBatch(NodeStore::CassTable::TxTable, nodestoreHashes, ledger.info().seq);
 
     auto end = std::chrono::system_clock::now();
     JLOG(app.journal("Ledger").debug()) << "ledger Flat fetch time : "

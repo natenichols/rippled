@@ -112,7 +112,7 @@ public:
     }
 
     // The validated ledger is the last fully validated ledger.
-    std::shared_ptr<Ledger const> getValidatedLedger ();
+    std::shared_ptr<Ledger const> getValidatedLedger();
 
     // The Rules are in the last fully validated ledger if there is one.
     Rules
