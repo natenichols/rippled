@@ -150,6 +150,12 @@ public:
         return "cassandra";
     }
 
+    bool
+    isOpen() override
+    {
+        return open_;
+    }
+
     // Setup all of the necessary components for talking to the database.
     // Create the table if it doesn't exist already
     // @param createIfMissing ignored
