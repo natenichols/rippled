@@ -430,7 +430,7 @@ public:
         context_ = std::make_unique<grpc::ClientContext>();
     }
 
-    enum class CallStatus { MORE, DONE, ERROR };
+    enum class CallStatus { MORE, DONE, ERRORED };
     CallStatus
     process(
         std::unique_ptr<org::xrpl::rpc::v1::XRPLedgerAPIService::Stub>& stub,
@@ -442,14 +442,14 @@ public:
         if (abort)
         {
             JLOG(journal_.error()) << "AsyncCallData aborted";
-            return CallStatus::ERROR;
+            return CallStatus::ERRORED;
         }
         if (!status_.ok())
         {
             JLOG(journal_.debug()) << "AsyncCallData status_ not ok: "
                                    << " code = " << status_.error_code()
                                    << " message = " << status_.error_message();
-            return CallStatus::ERROR;
+            return CallStatus::ERRORED;
         }
         if (!next_->is_unlimited())
         {
@@ -577,7 +577,7 @@ ETLSource::loadInitialLedger(
                     << "Finished a marker. "
                     << "Current number of finished = " << numFinished;
             }
-            if (result == AsyncCallData::CallStatus::ERROR)
+            if (result == AsyncCallData::CallStatus::ERRORED)
             {
                 abort = true;
             }
