@@ -756,7 +756,7 @@ ETLSource::getP2pForwardingStub() const
                     .to_string(),
                 grpc::InsecureChannelCredentials()));
     }
-    catch (std::exception const& e)
+    catch (std::exception const&)
     {
         JLOG(journal_.error()) << "Failed to create grpc stub";
         return nullptr;

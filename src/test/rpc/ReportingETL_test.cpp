@@ -820,26 +820,31 @@ class ReportingETL_test : public beast::unit_test::suite
                 auto [status, reply] =
                     grpcLedger(env.current()->info().seq, "", "");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] =
                     grpcLedger(env.current()->info().seq, "", "ETL");
                 BEAST_EXPECT(reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] =
                     grpcLedger(env.current()->info().seq, "", "Reporting");
                 BEAST_EXPECT(reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] =
                     grpcLedger(env.current()->info().seq, "127.0.0.1", "ETL");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] =
                     grpcLedger(env.current()->info().seq, "127.0.0.1", "");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
         }
 
@@ -875,21 +880,25 @@ class ReportingETL_test : public beast::unit_test::suite
                 auto [status, reply] =
                     grpcLedger(env.current()->info().seq, "", "");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] =
                     grpcLedger(env.current()->info().seq, "", "ETL");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] = grpcLedger(
                     env.current()->info().seq, secureGatewayIp, "ETL");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] =
                     grpcLedger(env.current()->info().seq, secureGatewayIp, "");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
         }
 
@@ -922,26 +931,31 @@ class ReportingETL_test : public beast::unit_test::suite
                 auto [status, reply] =
                     grpcLedgerData(env.current()->info().seq, "", "");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] =
                     grpcLedgerData(env.current()->info().seq, "", "ETL");
                 BEAST_EXPECT(reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] =
                     grpcLedgerData(env.current()->info().seq, "", "Reporting");
                 BEAST_EXPECT(reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] = grpcLedgerData(
                     env.current()->info().seq, "127.0.0.1", "ETL");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] =
                     grpcLedgerData(env.current()->info().seq, "127.0.0.1", "");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
         }
         {
@@ -976,21 +990,25 @@ class ReportingETL_test : public beast::unit_test::suite
                 auto [status, reply] =
                     grpcLedgerData(env.current()->info().seq, "", "");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] =
                     grpcLedgerData(env.current()->info().seq, "", "ETL");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] = grpcLedgerData(
                     env.current()->info().seq, secureGatewayIp, "ETL");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
             {
                 auto [status, reply] = grpcLedgerData(
                     env.current()->info().seq, secureGatewayIp, "");
                 BEAST_EXPECT(!reply.is_unlimited());
+                BEAST_EXPECT(status.ok());
             }
         }
     }
