@@ -866,8 +866,8 @@ readCallback(CassFuture* fut, void* cbData)
     else
     {
         auto finish = [&requestParams]() {
-            ++(requestParams.numFinished);
-            if (requestParams.numFinished == requestParams.batchSize)
+            size_t batchSize = requestParams.batchSize;
+            if (++(requestParams.numFinished) == batchSize)
                 requestParams.cv.notify_all();
         };
         CassResult const* res = cass_future_get_result(fut);
