@@ -660,6 +660,9 @@ public:
             statement, 0, static_cast<cass_byte_t const*>(data.key), keyBytes_);
         if (rc != CASS_OK)
         {
+            size_t batchSize = data.batchSize;
+            if (++(data.numFinished) == batchSize)
+                data.cv.notify_all();
             cass_statement_free(statement);
             JLOG(j_.error()) << "Binding Cassandra fetch query: " << rc << ", "
                              << cass_error_desc(rc);
