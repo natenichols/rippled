@@ -6,6 +6,7 @@ if(reporting)
 
         find_library(zlib NAMES zlib1g-dev zlib-devel zlib z)
         if(NOT zlib)
+            message("zlib not found. will build")
             add_library(zlib SHARED IMPORTED GLOBAL)
             ExternalProject_Add(zlib_src
                 PREFIX ${nih_cache_path}
@@ -36,6 +37,7 @@ if(reporting)
         find_library(krb5 NAMES krb5-dev libkrb5-dev)
 
         if(NOT krb5)
+            message("krb5 not found. will build")
             add_library(krb5 SHARED IMPORTED GLOBAL)
             ExternalProject_Add(krb5_src
                 PREFIX ${nih_cache_path}
@@ -68,6 +70,7 @@ if(reporting)
 
 
         if(NOT libuv1)
+            message("libuv1 not found, will build")
             add_library(libuv1 SHARED IMPORTED GLOBAL)
             ExternalProject_Add(libuv_src
                 PREFIX ${nih_cache_path}
