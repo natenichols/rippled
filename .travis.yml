@@ -281,8 +281,8 @@ matrix:
       if: commit_message !~ /travis_run_/ OR commit_message =~ /travis_run_mac/
       stage: build
       os: osx
-      osx_image: xcode10.3
-      name: xcode10, debug
+      osx_image: xcode11
+      name: xcode11, debug
       env:
         # put NIH in non-cache location since it seems to
         # cause failures when homebrew updates
@@ -330,7 +330,7 @@ matrix:
         - export TEST_EXTRA_ARGS="--unittest-ipv6"
     - <<: *macos
       osx_image: xcode11.2
-      name: xcode11, debug
+      name: xcode11.2, debug
     # windows
     - &windows
       if: commit_message !~ /travis_run_/ OR commit_message =~ /travis_run_win/
