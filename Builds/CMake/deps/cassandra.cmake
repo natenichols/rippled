@@ -13,6 +13,7 @@ if(reporting)
                 GIT_REPOSITORY https://github.com/madler/zlib.git
                 GIT_TAG master
                 INSTALL_COMMAND ""
+                BUILD_BYPRODUCTS <BINARY_DIR>/${ep_lib_prefix}z.so
                 )
 
 
@@ -48,6 +49,7 @@ if(reporting)
                 BUILD_IN_SOURCE 1
                 BUILD_COMMAND make
                 INSTALL_COMMAND ""
+                BUILD_BYPRODUCTS <SOURCE_DIR>/lib/${ep_lib_prefix}krb5.so
                 )
 
             ExternalProject_Get_Property (krb5_src SOURCE_DIR)
@@ -77,6 +79,7 @@ if(reporting)
                 GIT_REPOSITORY https://github.com/libuv/libuv.git
                 GIT_TAG v1.x
                 INSTALL_COMMAND ""
+                BUILD_BYPRODUCTS <BINARY_DIR>/${ep_lib_prefix}uv.so.1
                 )
 
             ExternalProject_Get_Property (libuv_src SOURCE_DIR)
@@ -101,9 +104,10 @@ if(reporting)
             GIT_TAG master
             CMAKE_ARGS
             -DLIBUV_ROOT_DIR=${BINARY_DIR}
-            -DLIBUV_LIBARY=${BINARY_DIR}/libuv.so.1.0.0
+            -DLIBUV_LIBARY=${BINARY_DIR}/libuv.so.1
             -DLIBUV_INCLUDE_DIR=${SOURCE_DIR}/include
             INSTALL_COMMAND ""
+            BUILD_BYPRODUCTS <BINARY_DIR>/${ep_lib_prefix}cassandra.so
             )
 
         ExternalProject_Get_Property (cassandra_src SOURCE_DIR)

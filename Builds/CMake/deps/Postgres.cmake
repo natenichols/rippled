@@ -4,11 +4,11 @@ if(reporting)
     find_package(PostgreSQL)
 
     if(NOT PostgreSQL_FOUND)
-	    message("find_package did not find postgres")
+            message("find_package did not find postgres")
 
 
-	    find_library(postgres NAMES pq libpq libpq-dev pq-dev postgresql-devel)
-	    find_path(libpq-fe NAMES libpq-fe.h PATH_SUFFIXES postgresql pgsql include)
+            find_library(postgres NAMES pq libpq libpq-dev pq-dev postgresql-devel)
+            find_path(libpq-fe NAMES libpq-fe.h PATH_SUFFIXES postgresql pgsql include)
         if(NOT libpq-fe_FOUND OR NOT postgres_FOUND)
             message("No system installed Postgres found. Will build")
 
@@ -22,6 +22,7 @@ if(reporting)
                 UPDATE_COMMAND ""
                 BUILD_IN_SOURCE 1
                 INSTALL_COMMAND ""
+                BUILD_BYPRODUCTS <BINARY_DIR>/src/interfaces/libpq/${ep_lib_prefix}pq.so
                 )
 
 
