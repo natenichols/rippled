@@ -987,6 +987,7 @@ public:
     createInstance(
         size_t keyBytes,
         Section const& keyValues,
+        std::size_t burstSize,
         Scheduler& scheduler,
         beast::Journal journal) override
     {
@@ -997,6 +998,7 @@ public:
     createInstance(
         size_t keyBytes,
         Section const& keyValues,
+        std::size_t burstSize,
         Scheduler& scheduler,
         nudb::context& context,
         beast::Journal journal) override
