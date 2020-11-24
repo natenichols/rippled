@@ -7,13 +7,13 @@ if(reporting)
         find_library(zlib NAMES zlib1g-dev zlib-devel zlib z)
         if(NOT zlib)
             message("zlib not found. will build")
-            add_library(zlib SHARED IMPORTED GLOBAL)
+            add_library(zlib STATIC IMPORTED GLOBAL)
             ExternalProject_Add(zlib_src
                 PREFIX ${nih_cache_path}
                 GIT_REPOSITORY https://github.com/madler/zlib.git
                 GIT_TAG master
                 INSTALL_COMMAND ""
-                BUILD_BYPRODUCTS <BINARY_DIR>/${ep_lib_prefix}z.so
+                BUILD_BYPRODUCTS <BINARY_DIR>/${ep_lib_prefix}z.a
                 )
 
 
@@ -24,7 +24,7 @@ if(reporting)
 
             set_target_properties (zlib PROPERTIES
                 IMPORTED_LOCATION
-                ${BINARY_DIR}/${ep_lib_prefix}z.so
+                ${BINARY_DIR}/${ep_lib_prefix}z.a
                 INTERFACE_INCLUDE_DIRECTORIES
                 ${SOURCE_DIR}/include)
             add_dependencies(zlib zlib_src)
@@ -39,17 +39,17 @@ if(reporting)
 
         if(NOT krb5)
             message("krb5 not found. will build")
-            add_library(krb5 SHARED IMPORTED GLOBAL)
+            add_library(krb5 STATIC IMPORTED GLOBAL)
             ExternalProject_Add(krb5_src
                 PREFIX ${nih_cache_path}
                 GIT_REPOSITORY https://github.com/krb5/krb5.git
                 GIT_TAG master
                 UPDATE_COMMAND ""
-                CONFIGURE_COMMAND autoreconf src && ./src/configure
+                CONFIGURE_COMMAND autoreconf src && ./src/configure --enable-static --disable-shared
                 BUILD_IN_SOURCE 1
                 BUILD_COMMAND make
                 INSTALL_COMMAND ""
-                BUILD_BYPRODUCTS <SOURCE_DIR>/lib/${ep_lib_prefix}krb5.so
+                BUILD_BYPRODUCTS <SOURCE_DIR>/lib/${ep_lib_prefix}krb5.a
                 )
 
             ExternalProject_Get_Property (krb5_src SOURCE_DIR)
@@ -59,7 +59,7 @@ if(reporting)
 
             set_target_properties (krb5 PROPERTIES
                 IMPORTED_LOCATION
-                ${BINARY_DIR}/lib/${ep_lib_prefix}krb5.so
+                ${BINARY_DIR}/lib/${ep_lib_prefix}krb5.a
                 INTERFACE_INCLUDE_DIRECTORIES
                 ${SOURCE_DIR}/include)
             add_dependencies(krb5 krb5_src)
@@ -73,13 +73,13 @@ if(reporting)
 
         if(NOT libuv1)
             message("libuv1 not found, will build")
-            add_library(libuv1 SHARED IMPORTED GLOBAL)
+            add_library(libuv1 STATIC IMPORTED GLOBAL)
             ExternalProject_Add(libuv_src
                 PREFIX ${nih_cache_path}
                 GIT_REPOSITORY https://github.com/libuv/libuv.git
                 GIT_TAG v1.x
                 INSTALL_COMMAND ""
-                BUILD_BYPRODUCTS <BINARY_DIR>/${ep_lib_prefix}uv.so.1
+                BUILD_BYPRODUCTS <BINARY_DIR>/${ep_lib_prefix}uv_a.a
                 )
 
             ExternalProject_Get_Property (libuv_src SOURCE_DIR)
@@ -89,7 +89,7 @@ if(reporting)
 
             set_target_properties (libuv1 PROPERTIES
                 IMPORTED_LOCATION
-                ${BINARY_DIR}/${ep_lib_prefix}uv.so.1
+                ${BINARY_DIR}/${ep_lib_prefix}uv_a.a
                 INTERFACE_INCLUDE_DIRECTORIES
                 ${SOURCE_DIR}/include)
             add_dependencies(libuv1 libuv_src)
@@ -97,17 +97,18 @@ if(reporting)
             file(TO_CMAKE_PATH "${libuv_src_SOURCE_DIR}" libuv_src_SOURCE_DIR)
         endif()
 
-        add_library (cassandra SHARED IMPORTED GLOBAL)
+        add_library (cassandra STATIC IMPORTED GLOBAL)
         ExternalProject_Add(cassandra_src
             PREFIX ${nih_cache_path}
             GIT_REPOSITORY https://github.com/datastax/cpp-driver.git
             GIT_TAG master
             CMAKE_ARGS
             -DLIBUV_ROOT_DIR=${BINARY_DIR}
-            -DLIBUV_LIBARY=${BINARY_DIR}/libuv.so.1
+            -DLIBUV_LIBARY=${BINARY_DIR}/libuv_a.a
             -DLIBUV_INCLUDE_DIR=${SOURCE_DIR}/include
+            -DCASS_BUILD_STATIC=ON
             INSTALL_COMMAND ""
-            BUILD_BYPRODUCTS <BINARY_DIR>/${ep_lib_prefix}cassandra.so
+            BUILD_BYPRODUCTS <BINARY_DIR>/${ep_lib_prefix}cassandra_static.a
             )
 
         ExternalProject_Get_Property (cassandra_src SOURCE_DIR)
@@ -117,7 +118,7 @@ if(reporting)
 
         set_target_properties (cassandra PROPERTIES
             IMPORTED_LOCATION
-            ${BINARY_DIR}/${ep_lib_prefix}cassandra.so
+            ${BINARY_DIR}/${ep_lib_prefix}cassandra_static.a
             INTERFACE_INCLUDE_DIRECTORIES
             ${SOURCE_DIR}/include)
         add_dependencies(cassandra cassandra_src)
