@@ -1378,10 +1378,6 @@ ApplicationImp::setup()
     if (!config_->standalone())
         timeKeeper_->run(config_->SNTP_SERVERS);
 
-    // Configure where and whether to store transactions in RDBMS.
-    {
-    }
-
     if (!initRDBMS() || !initNodeStore())
         return false;
 

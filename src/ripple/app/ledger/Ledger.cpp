@@ -228,41 +228,42 @@ Ledger::Ledger(
     , rules_(config.features)
     , info_(info)
 {
-    if (config.reporting())
-        acquire = false;
     loaded = true;
 
     if (info_.txHash.isNonZero() &&
         !txMap_->fetchRoot(SHAMapHash{info_.txHash}, nullptr))
     {
-        loaded = false;
-        JLOG(j.warn()) << "Don't have transaction root for ledger" << info_.seq;
         if (config.reporting())
         {
             // Reporting should never have incomplete data
             Throw<std::runtime_error>("Missing tx map root for ledger");
         }
+        loaded = false;
+        JLOG(j.warn()) << "Don't have transaction root for ledger" << info_.seq;
     }
 
     if (info_.accountHash.isNonZero() &&
         !stateMap_->fetchRoot(SHAMapHash{info_.accountHash}, nullptr))
     {
-        loaded = false;
-        JLOG(j.warn()) << "Don't have state data root for ledger" << info_.seq;
         if (config.reporting())
         {
             // Reporting should never have incomplete data
             Throw<std::runtime_error>("Missing state map root for ledger");
         }
+        loaded = false;
+        JLOG(j.warn()) << "Don't have state data root for ledger" << info_.seq;
     }
 
     txMap_->setImmutable();
     stateMap_->setImmutable();
 
+    if (!setup(config))
+        loaded = false;
+
     if (!loaded)
     {
         info_.hash = calculateLedgerHash(info_);
-        if (acquire)
+        if (acquire && !config.reporting())
             family.missingNode(info_.hash, info_.seq);
     }
 }
