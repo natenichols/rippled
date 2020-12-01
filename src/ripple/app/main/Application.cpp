@@ -815,12 +815,16 @@ public:
     OpenLedger&
     openLedger() override
     {
+        if (config_->reporting())
+            Throw<ReportingShouldProxy>();
         return *openLedger_;
     }
 
     OpenLedger const&
     openLedger() const override
     {
+        if (config_->reporting())
+            Throw<ReportingShouldProxy>();
         return *openLedger_;
     }
 
