@@ -27,18 +27,43 @@ namespace ripple {
 namespace {
 
 // helper function. strips scheme from endpoint string
-std::string
+std::optional<boost::asio::ip::tcp::endpoint>
 getEndpoint(std::string const& peer)
 {
-    std::size_t first = peer.find_first_of(":");
-    std::size_t last = peer.find_last_of(":");
-    std::string peerClean(peer);
-    if (first != last)
+    try
     {
-        peerClean = peer.substr(first + 1);
+        std::size_t first = peer.find_first_of(":");
+        std::size_t last = peer.find_last_of(":");
+        std::string peerClean(peer);
+        if (first != last)
+        {
+            peerClean = peer.substr(first + 1);
+        }
+        boost::asio::ip::tcp::endpoint endpoint;
+        if (last == std::string::npos)
+        {
+            boost::asio::ip::address address =
+                boost::asio::ip::make_address(peer);
+            endpoint.address(address);
+        }
+        else
+        {
+            std::string ip = peer.substr(first + 1, last - first - 1);
+            std::string port = peer.substr(last + 1);
+            boost::asio::ip::address address =
+                boost::asio::ip::make_address(ip);
+            endpoint.address(address);
+            endpoint.port(std::stoi(port));
+        }
+
+        return endpoint;
     }
-    return peerClean;
+    catch (std::exception const&)
+    {
+        return {};
+    }
 }
+
 }  // namespace
 
 template <class Request, class Response>
@@ -51,7 +76,7 @@ GRPCServerImpl::CallData<Request, Response>::CallData(
     Forward<Request, Response> forward,
     RPC::Condition requiredCondition,
     Resource::Charge loadType,
-    std::vector<beast::IP::Address> const& secureGatewayIPs)
+    std::vector<boost::asio::ip::address> const& secureGatewayIPs)
     : service_(service)
     , cq_(cq)
     , finished_(false)
@@ -221,8 +246,7 @@ GRPCServerImpl::CallData<Request, Response>::forwardToP2p(
     if (auto descriptor =
             Request::GetDescriptor()->FindFieldByName("client_ip"))
     {
-        Request::GetReflection()->SetString(
-            &request_, descriptor, getEndpoint(ctx_.peer()));
+        Request::GetReflection()->SetString(&request_, descriptor, ctx_.peer());
         JLOG(app_.journal("gRPCServer").debug())
             << "Set client_ip to " << ctx_.peer();
     }
@@ -314,7 +338,7 @@ GRPCServerImpl::CallData<Request, Response>::getUser()
 }
 
 template <class Request, class Response>
-std::optional<beast::IP::Address>
+std::optional<boost::asio::ip::address>
 GRPCServerImpl::CallData<Request, Response>::getClientIpAddress()
 {
     auto endpoint = getClientEndpoint();
@@ -324,7 +348,7 @@ GRPCServerImpl::CallData<Request, Response>::getClientIpAddress()
 }
 
 template <class Request, class Response>
-std::optional<beast::IP::Address>
+std::optional<boost::asio::ip::address>
 GRPCServerImpl::CallData<Request, Response>::getProxiedClientIpAddress()
 {
     auto endpoint = getProxiedClientEndpoint();
@@ -334,7 +358,7 @@ GRPCServerImpl::CallData<Request, Response>::getProxiedClientIpAddress()
 }
 
 template <class Request, class Response>
-std::optional<beast::IP::Endpoint>
+std::optional<boost::asio::ip::tcp::endpoint>
 GRPCServerImpl::CallData<Request, Response>::getProxiedClientEndpoint()
 {
     auto descriptor = Request::GetDescriptor()->FindFieldByName("client_ip");
@@ -346,24 +370,17 @@ GRPCServerImpl::CallData<Request, Response>::getProxiedClientEndpoint()
         {
             JLOG(app_.journal("gRPCServer").debug())
                 << "Got client_ip from request : " << clientIp;
-            auto res = beast::IP::Endpoint::from_string_checked(clientIp);
-            if (res)
-                return {res.get()};
+            return getEndpoint(clientIp);
         }
     }
     return {};
 }
 
 template <class Request, class Response>
-std::optional<beast::IP::Endpoint>
+std::optional<boost::asio::ip::tcp::endpoint>
 GRPCServerImpl::CallData<Request, Response>::getClientEndpoint()
 {
-    std::string peer = getEndpoint(ctx_.peer());
-    auto res = beast::IP::Endpoint::from_string_checked(peer);
-    if (res)
-        return {res.get()};
-    else
-        return {};
+    return getEndpoint(ctx_.peer());
 }
 
 template <class Request, class Response>
@@ -409,9 +426,10 @@ GRPCServerImpl::CallData<Request, Response>::getUsage()
     auto proxiedEndpoint = getProxiedClientEndpoint();
     if (proxiedEndpoint)
         return app_.getResourceManager().newInboundEndpoint(
-            proxiedEndpoint.value());
+            beast::IP::from_asio(proxiedEndpoint.value()));
     else if (endpoint)
-        return app_.getResourceManager().newInboundEndpoint(endpoint.value());
+        return app_.getResourceManager().newInboundEndpoint(
+            beast::IP::from_asio(endpoint.value()));
     Throw<std::runtime_error>("Failed to get client endpoint");
 }
 
@@ -432,14 +450,18 @@ GRPCServerImpl::GRPCServerImpl(Application& app)
             return;
         try
         {
-            beast::IP::Endpoint endpoint(
+            boost::asio::ip::tcp::endpoint endpoint(
                 boost::asio::ip::make_address(ipPair.first),
                 std::stoi(portPair.first));
 
-            serverAddress_ = endpoint.to_string();
+            std::stringstream ss;
+            ss << endpoint;
+            serverAddress_ = ss.str();
         }
         catch (std::exception const&)
         {
+            JLOG(journal_.error()) << "Error setting grpc server address";
+            Throw<std::exception>();
         }
 
         std::pair<std::string, bool> secureGateway =
@@ -452,17 +474,9 @@ GRPCServerImpl::GRPCServerImpl(Application& app)
                 std::string ip;
                 while (std::getline(ss, ip, ','))
                 {
-                    auto const addr =
-                        beast::IP::Endpoint::from_string_checked(ip);
-                    if (!addr)
-                    {
-                        JLOG(journal_.error())
-                            << "Invalid value '" << ip << "' for "
-                            << "secure_gateway of port_grpc";
-                        Throw<std::exception>();
-                    }
+                    auto const addr = boost::asio::ip::make_address(ip);
 
-                    if (is_unspecified(*addr))
+                    if (beast::IP::is_unspecified(addr))
                     {
                         JLOG(journal_.error())
                             << "Can't pass unspecified IP in "
@@ -470,11 +484,14 @@ GRPCServerImpl::GRPCServerImpl(Application& app)
                         Throw<std::exception>();
                     }
 
-                    secureGatewayIPs_.emplace_back(addr->address());
+                    secureGatewayIPs_.emplace_back(addr);
                 }
             }
             catch (std::exception const&)
             {
+                JLOG(journal_.error())
+                    << "Error parsing secure gateway IPs for grpc server";
+                Throw<std::exception>();
             }
         }
     }

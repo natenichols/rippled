@@ -86,7 +86,7 @@ private:
 
     std::string serverAddress_;
 
-    std::vector<beast::IP::Address> secureGatewayIPs_;
+    std::vector<boost::asio::ip::address> secureGatewayIPs_;
 
     beast::Journal journal_;
 
@@ -192,7 +192,7 @@ private:
         // Load type for this RPC
         Resource::Charge loadType_;
 
-        std::vector<beast::IP::Address> const& secureGatewayIPs_;
+        std::vector<boost::asio::ip::address> const& secureGatewayIPs_;
 
     public:
         virtual ~CallData() = default;
@@ -209,7 +209,7 @@ private:
             Forward<Request, Response> forward,
             RPC::Condition requiredCondition,
             Resource::Charge loadType,
-            std::vector<beast::IP::Address> const& secureGatewayIPs);
+            std::vector<boost::asio::ip::address> const& secureGatewayIPs);
 
         CallData(const CallData&) = delete;
 
@@ -244,27 +244,27 @@ private:
 
         // Returns the ip of the client
         // Empty optional if there was an error decoding the client ip
-        std::optional<beast::IP::Address>
+        std::optional<boost::asio::ip::address>
         getClientIpAddress();
 
         // Returns the endpoint of the client.
         // Empty optional if there was an error decoding the client
         // endpoint
-        std::optional<beast::IP::Endpoint>
+        std::optional<boost::asio::ip::tcp::endpoint>
         getClientEndpoint();
 
         // If the request was proxied through
         // another rippled node, returns the ip of the originating client.
         // Empty optional if request was not proxied or there was an error
         // decoding the client ip
-        std::optional<beast::IP::Address>
+        std::optional<boost::asio::ip::address>
         getProxiedClientIpAddress();
 
         // If the request was proxied through
         // another rippled node, returns the endpoint of the originating client.
         // Empty optional if request was not proxied or there was an error
         // decoding the client endpoint
-        std::optional<beast::IP::Endpoint>
+        std::optional<boost::asio::ip::tcp::endpoint>
         getProxiedClientEndpoint();
 
         // Returns the user specified in the request. Empty optional if no user
