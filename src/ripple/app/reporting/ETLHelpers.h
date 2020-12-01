@@ -98,6 +98,9 @@ public:
 };
 
 /// Generic thread-safe queue with an optional maximum size
+/// Note, we can't use a lockfree queue here, since we need the ability to wait
+/// for an element to be added or removed from the queue. These waits are
+/// blocking calls.
 template <class T>
 class ThreadSafeQueue
 {
