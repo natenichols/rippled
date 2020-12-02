@@ -39,17 +39,18 @@ getEndpoint(std::string const& peer)
         {
             peerClean = peer.substr(first + 1);
         }
+        first = peerClean.find_first_of(":");
         boost::asio::ip::tcp::endpoint endpoint;
-        if (last == std::string::npos)
+        if (first == std::string::npos)
         {
             boost::asio::ip::address address =
-                boost::asio::ip::make_address(peer);
+                boost::asio::ip::make_address(peerClean);
             endpoint.address(address);
         }
         else
         {
-            std::string ip = peer.substr(first + 1, last - first - 1);
-            std::string port = peer.substr(last + 1);
+            std::string ip = peerClean.substr(0, first);
+            std::string port = peerClean.substr(first + 1);
             boost::asio::ip::address address =
                 boost::asio::ip::make_address(ip);
             endpoint.address(address);
