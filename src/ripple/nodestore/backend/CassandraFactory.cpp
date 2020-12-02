@@ -529,11 +529,8 @@ public:
             {
                 std::stringstream ss;
                 ss << "Cassandra fetch error";
-                if (rc != CASS_OK)
-                {
-                    ss << ", retrying";
-                    ++counters_.readRetries;
-                }
+                ss << ", retrying";
+                ++counters_.readRetries;
                 ss << ": " << cass_error_desc(rc);
                 JLOG(j_.warn()) << ss.str();
             }

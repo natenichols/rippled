@@ -134,8 +134,11 @@ ReportingETL::loadInitialLedger(uint32_t startingSequence)
         std::make_shared<Ledger>(lgrInfo, app_.config(), app_.getNodeFamily());
     ledger->stateMap().clearSynching();
     ledger->txMap().clearSynching();
+
+#ifdef RIPPLED_REPORTING
     std::vector<AccountTransactionsData> accountTxData =
         insertTransactions(ledger, *ledgerData);
+#endif
 
     auto start = std::chrono::system_clock::now();
 
