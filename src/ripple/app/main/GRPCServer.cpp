@@ -22,11 +22,14 @@
 #include <ripple/beast/core/CurrentThreadName.h>
 #include <ripple/resource/Fees.h>
 
+#include <beast/net/IPAddressConversion.h>
+
 namespace ripple {
 
 namespace {
 
-// helper function. strips scheme from endpoint string
+// helper function. converts string to endpoint. handles ipv4 and ipv6, with or
+// without port, with or without prepended scheme
 std::optional<boost::asio::ip::tcp::endpoint>
 getEndpoint(std::string const& peer)
 {
@@ -39,30 +42,16 @@ getEndpoint(std::string const& peer)
         {
             peerClean = peer.substr(first + 1);
         }
-        first = peerClean.find_first_of(":");
-        boost::asio::ip::tcp::endpoint endpoint;
-        if (first == std::string::npos)
-        {
-            boost::asio::ip::address address =
-                boost::asio::ip::make_address(peerClean);
-            endpoint.address(address);
-        }
-        else
-        {
-            std::string ip = peerClean.substr(0, first);
-            std::string port = peerClean.substr(first + 1);
-            boost::asio::ip::address address =
-                boost::asio::ip::make_address(ip);
-            endpoint.address(address);
-            endpoint.port(std::stoi(port));
-        }
 
-        return endpoint;
+        boost::optional<beast::IP::Endpoint> endpoint =
+            beast::IP::Endpoint::from_string_checked(peerClean);
+        if (endpoint)
+            return beast::IP::to_asio_endpoint(endpoint.value());
     }
     catch (std::exception const&)
     {
-        return {};
     }
+    return {};
 }
 
 }  // namespace
@@ -477,7 +466,7 @@ GRPCServerImpl::GRPCServerImpl(Application& app)
                 {
                     auto const addr = boost::asio::ip::make_address(ip);
 
-                    if (beast::IP::is_unspecified(addr))
+                    if (addr.is_unspecified())
                     {
                         JLOG(journal_.error())
                             << "Can't pass unspecified IP in "
