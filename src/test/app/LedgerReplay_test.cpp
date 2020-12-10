@@ -44,8 +44,8 @@ struct LedgerReplay_test : public beast::unit_test::suite
 
         LedgerMaster& ledgerMaster = env.app().getLedgerMaster();
         auto const lastClosed = ledgerMaster.getClosedLedger();
-        auto const lastClosedParent =
-            ledgerMaster.getLedgerByHash(lastClosed->info().parentHash);
+        auto const lastClosedParent = 
+            std::dynamic_pointer_cast<const Ledger>(ledgerMaster.getLedgerByHash(lastClosed->info().parentHash));
 
         auto const replayed = buildLedger(
             LedgerReplay(lastClosedParent, lastClosed),

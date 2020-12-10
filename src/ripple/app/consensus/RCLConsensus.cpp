@@ -104,8 +104,16 @@ RCLConsensus::Adaptor::Adaptor(
 boost::optional<RCLCxLedger>
 RCLConsensus::Adaptor::acquireLedger(LedgerHash const& hash)
 {
+    if (app_.config().reporting())
+    {
+        Throw<std::runtime_error>(
+            "acquireLedger not used in reporting mode");
+    }
+
     // we need to switch the ledger we're working from
-    auto built = ledgerMaster_.getLedgerByHash(hash);
+    auto built = 
+        std::static_pointer_cast<const Ledger>(ledgerMaster_.getLedgerByHash(hash));
+        
     if (!built)
     {
         if (acquiringLedger_ != hash)
@@ -438,6 +446,12 @@ RCLConsensus::Adaptor::doAccept(
     ConsensusMode const& mode,
     Json::Value&& consensusJson)
 {
+    if (app_.config().reporting())
+    {
+        Throw<std::runtime_error>(
+            "Should not run doAccept in reporting mode");
+    }
+
     prevProposers_ = result.proposers;
     prevRoundTime_ = result.roundTime.read();
 
@@ -620,7 +634,7 @@ RCLConsensus::Adaptor::doAccept(
         std::unique_lock sl{ledgerMaster_.peekMutex(), std::defer_lock};
         std::lock(lock, sl);
 
-        auto const lastVal = ledgerMaster_.getValidatedLedger();
+        auto const lastVal = std::dynamic_pointer_cast<const Ledger>(ledgerMaster_.getValidatedLedger());
         boost::optional<Rules> rules;
         if (lastVal)
             rules.emplace(*lastVal, app_.config().features);

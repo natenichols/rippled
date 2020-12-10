@@ -126,7 +126,15 @@ RCLValidationsAdaptor::now() const
 boost::optional<RCLValidatedLedger>
 RCLValidationsAdaptor::acquire(LedgerHash const& hash)
 {
-    auto ledger = app_.getLedgerMaster().getLedgerByHash(hash);
+    if (app_.config().reporting())
+    {
+        Throw<std::runtime_error>(
+            "acquire not used in reporting mode");
+    }
+
+    const std::shared_ptr<const ripple::Ledger> ledger = 
+        std::dynamic_pointer_cast<const ripple::Ledger>(app_.getLedgerMaster().getLedgerByHash(hash));
+
     if (!ledger)
     {
         JLOG(j_.debug())

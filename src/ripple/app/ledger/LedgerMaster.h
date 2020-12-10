@@ -112,7 +112,7 @@ public:
     }
 
     // The validated ledger is the last fully validated ledger.
-    std::shared_ptr<Ledger const>
+    std::shared_ptr<ReadView const>
     getValidatedLedger();
 
     // The Rules are in the last fully validated ledger if there is one.
@@ -194,13 +194,13 @@ public:
     boost::optional<LedgerHash>
     walkHashBySeq(
         std::uint32_t index,
-        std::shared_ptr<ReadView const> const& referenceLedger,
+        std::shared_ptr<Ledger const> const& referenceLedger,
         InboundLedger::Reason reason);
 
-    std::shared_ptr<Ledger const>
+    std::shared_ptr<ReadView const>
     getLedgerBySeq(std::uint32_t index);
 
-    std::shared_ptr<Ledger const>
+    std::shared_ptr<ReadView const>
     getLedgerByHash(uint256 const& hash);
 
     void

@@ -56,8 +56,16 @@ convertBlobsToTxResult(
 void
 saveLedgerAsync(Application& app, std::uint32_t seq)
 {
-    if (auto l = app.getLedgerMaster().getLedgerBySeq(seq))
-        pendSaveValidated(app, l, false, false);
+    if (app.config().reporting())
+    {
+        Throw<std::runtime_error>(
+            "saveLedgerAsync unused in reporting mode");
+    }
+
+    auto ledger =
+        std::static_pointer_cast<const Ledger>(app.getLedgerMaster().getLedgerBySeq(seq));
+    if (ledger)
+        pendSaveValidated(app, ledger, false, false);
 }
 
 void

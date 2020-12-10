@@ -287,7 +287,6 @@ public:
                                          logs_->journal("PgPool"))
                                    : nullptr)
 #endif
-
         , m_nodeStoreScheduler(*this)
         , m_shaMapStore(make_SHAMapStore(
               *this,
@@ -323,7 +322,6 @@ public:
               logs_->journal("JobQueue"),
               *logs_,
               *perfLog_))
-
         , m_nodeStore(m_shaMapStore->makeNodeStore("NodeStore.main", 4))
 
         , nodeFamily_(*this, *m_collectorManager)
@@ -981,7 +979,10 @@ public:
 
     bool
     initNodeStore()
-    {
+    {   
+        if(config_->reporting())
+            return true;
+
         if (config_->doImport)
         {
             auto j = logs_->journal("NodeObject");
@@ -1271,7 +1272,8 @@ public:
         if (shardFamily_)
             shardFamily_->sweep();
         getMasterTransaction().sweep();
-        getNodeStore().sweep();
+        if(!config().reporting())
+            getNodeStore().sweep();
         if (shardStore_)
             shardStore_->sweep();
         getLedgerMaster().sweep();
@@ -2232,6 +2234,9 @@ ApplicationImp::journal(std::string const& name)
 bool
 ApplicationImp::nodeToShards()
 {
+    if(config().reporting())
+        return true;
+
     assert(overlay_);
     assert(!config_->standalone());
 

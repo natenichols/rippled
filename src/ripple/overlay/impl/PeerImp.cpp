@@ -2621,6 +2621,12 @@ getPeerWithLedger(
 void
 PeerImp::getLedger(std::shared_ptr<protocol::TMGetLedger> const& m)
 {
+    if (app_.config().reporting())
+    {
+        Throw<std::runtime_error>(
+            "getLedger is unused in reporting mode");
+    }
+
     protocol::TMGetLedger& packet = *m;
     std::shared_ptr<SHAMap> shared;
     SHAMap const* map = nullptr;
@@ -2708,7 +2714,8 @@ PeerImp::getLedger(std::shared_ptr<protocol::TMGetLedger> const& m)
             uint256 const ledgerhash{packet.ledgerhash()};
             logMe += "LedgerHash:";
             logMe += to_string(ledgerhash);
-            ledger = app_.getLedgerMaster().getLedgerByHash(ledgerhash);
+            ledger = 
+                std::dynamic_pointer_cast<const Ledger>(app_.getLedgerMaster().getLedgerByHash(ledgerhash));
 
             if (!ledger && packet.has_ledgerseq())
             {
@@ -2756,7 +2763,9 @@ PeerImp::getLedger(std::shared_ptr<protocol::TMGetLedger> const& m)
                 JLOG(p_journal_.debug()) << "GetLedger: Early ledger request";
                 return;
             }
-            ledger = app_.getLedgerMaster().getLedgerBySeq(packet.ledgerseq());
+            ledger = std::dynamic_pointer_cast<const Ledger>(
+                app_.getLedgerMaster().getLedgerBySeq(packet.ledgerseq()));
+
             if (!ledger)
             {
                 JLOG(p_journal_.debug())

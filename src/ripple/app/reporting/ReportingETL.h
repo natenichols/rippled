@@ -23,6 +23,8 @@
 #include <ripple/app/main/Application.h>
 #include <ripple/app/reporting/ETLHelpers.h>
 #include <ripple/app/reporting/ETLSource.h>
+#include <ripple/app/reporting/FlatLedger.h>
+#include <ripple/app/reporting/nodestore/ReportingManager.h>
 #include <ripple/core/JobQueue.h>
 #include <ripple/core/Stoppable.h>
 #include <ripple/net/InfoSub.h>
@@ -75,6 +77,8 @@ private:
     beast::Journal journal_;
 
     std::thread worker_;
+
+    std::unique_ptr<NodeStore::ReportingBackend> backend_;
 
     /// Strand to ensure that ledgers are published in order.
     /// If ETL is started far behind the network, ledgers will be written and
@@ -164,7 +168,7 @@ private:
     /// @param sequence the sequence of the ledger to download
     /// @return The ledger downloaded, with a full transaction and account state
     /// map
-    std::shared_ptr<Ledger>
+    std::shared_ptr<FlatLedger>
     loadInitialLedger(uint32_t sequence);
 
     /// Run ETL. Extracts ledgers and writes them to the database, until a write
@@ -221,7 +225,7 @@ private:
     /// accounts)
     std::vector<AccountTransactionsData>
     insertTransactions(
-        std::shared_ptr<Ledger>& ledger,
+        std::shared_ptr<FlatLedger>& ledger,
         org::xrpl::rpc::v1::GetLedgerResponse& data);
 
     /// Build the next ledger using the previous ledger and the extracted data.
@@ -231,15 +235,15 @@ private:
     /// @param parent the previous ledger
     /// @param rawData data extracted from an ETL source
     /// @return the newly built ledger and data to write to Postgres
-    std::pair<std::shared_ptr<Ledger>, std::vector<AccountTransactionsData>>
+    std::pair<std::shared_ptr<FlatLedger>, std::vector<AccountTransactionsData>>
     buildNextLedger(
-        std::shared_ptr<Ledger>& parent,
+        std::shared_ptr<FlatLedger>& parent,
         org::xrpl::rpc::v1::GetLedgerResponse& rawData);
 
     /// Write all new data to the key-value store
     /// @param ledger ledger with new data to write
     void
-    flushLedger(std::shared_ptr<Ledger>& ledger);
+    flushLedger(std::shared_ptr<FlatLedger>& ledger);
 
     /// Attempt to read the specified ledger from the database, and then publish
     /// that ledger to the ledgers stream.
@@ -253,7 +257,7 @@ private:
     /// Publish the passed in ledger
     /// @param ledger the ledger to publish
     void
-    publishLedger(std::shared_ptr<Ledger>& ledger);
+    publishLedger(std::shared_ptr<FlatLedger>& ledger);
 
     /// Consume data from a queue and insert that data into the ledger
     /// This function will continue to pull from the queue until the queue
@@ -262,7 +266,7 @@ private:
     /// @param writeQueue the queue with extracted data
     void
     consumeLedgerData(
-        std::shared_ptr<Ledger>& ledger,
+        std::shared_ptr<FlatLedger>& ledger,
         ThreadSafeQueue<std::shared_ptr<SLE>>& writeQueue);
 
 public:
@@ -304,6 +308,12 @@ public:
     getJournal()
     {
         return journal_;
+    }
+
+    NodeStore::ReportingBackend&
+    getReportingBackend()
+    {
+        return *backend_;
     }
 
     Json::Value
@@ -357,6 +367,12 @@ public:
     getETLLoadBalancer()
     {
         return loadBalancer_;
+    }
+
+    NodeStore::ReportingBackend&
+    getBackend()
+    {
+        return *backend_;
     }
 
 private:

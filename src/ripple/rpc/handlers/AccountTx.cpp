@@ -21,6 +21,7 @@
 #include <ripple/app/main/Application.h>
 #include <ripple/app/misc/NetworkOPs.h>
 #include <ripple/app/misc/Transaction.h>
+#include <ripple/app/reporting/FlatLedger.h>
 #include <ripple/core/Pg.h>
 #include <ripple/json/json_reader.h>
 #include <ripple/json/json_value.h>
@@ -291,7 +292,7 @@ flatFetchTransactions(
 
     std::vector<
         std::pair<std::shared_ptr<STTx const>, std::shared_ptr<STObject const>>>
-        txns = flatFetchTransactions(context.app, nodestoreHashes);
+        txns = flatFetchTransactions(context.app, nodestoreHashes, ledgerSequences);
     for (size_t i = 0; i < txns.size(); ++i)
     {
         auto& [txn, meta] = txns[i];

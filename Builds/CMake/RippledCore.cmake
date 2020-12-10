@@ -385,6 +385,9 @@ target_sources (rippled PRIVATE
   src/ripple/app/reporting/ReportingETL.cpp
   src/ripple/app/reporting/ETLSource.cpp
   src/ripple/app/reporting/P2pProxy.cpp
+  src/ripple/app/reporting/FlatLedger.cpp
+  src/ripple/app/reporting/nodestore/backend/CassandraFactory.cpp
+  src/ripple/app/reporting/nodestore/impl/ReportingManagerImp.cpp
   src/ripple/app/misc/CanonicalTXSet.cpp
   src/ripple/app/misc/FeeVoteImpl.cpp
   src/ripple/app/misc/HashRouter.cpp

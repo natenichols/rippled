@@ -1638,7 +1638,8 @@ NetworkOPsImp::checkLastClosedLedger(
     if (!switchLedgers)
         return false;
 
-    auto consensus = m_ledgerMaster.getLedgerByHash(closedLedger);
+    auto consensus = 
+        std::dynamic_pointer_cast<const Ledger>(m_ledgerMaster.getLedgerByHash(closedLedger));
 
     if (!consensus)
         consensus = app_.getInboundLedgers().acquire(
@@ -1679,6 +1680,11 @@ void
 NetworkOPsImp::switchLastClosedLedger(
     std::shared_ptr<Ledger const> const& newLCL)
 {
+    if (app_.config().reporting())
+    {
+        Throw<std::runtime_error>(
+            "switchLastClosedLedger() not used in reporting mode");
+    }
     // set the newLCL as our last closed ledger -- this is abnormal code
     JLOG(m_journal.error())
         << "JUMP last closed ledger to " << newLCL->info().hash;
@@ -1694,7 +1700,7 @@ NetworkOPsImp::switchLastClosedLedger(
         // open ledger. Then apply local tx.
 
         auto retries = m_localTX->getTxSet();
-        auto const lastVal = app_.getLedgerMaster().getValidatedLedger();
+        auto const lastVal = std::dynamic_pointer_cast<const Ledger>(app_.getLedgerMaster().getValidatedLedger());
         boost::optional<Rules> rules;
         if (lastVal)
             rules.emplace(*lastVal, app_.config().features);
@@ -1739,7 +1745,8 @@ NetworkOPsImp::beginConsensus(uint256 const& networkClosed)
     JLOG(m_journal.info()) << "Consensus time for #" << closingInfo.seq
                            << " with LCL " << closingInfo.parentHash;
 
-    auto prevLedger = m_ledgerMaster.getLedgerByHash(closingInfo.parentHash);
+    auto prevLedger = 
+        std::dynamic_pointer_cast<const Ledger>(m_ledgerMaster.getLedgerByHash(closingInfo.parentHash));
 
     if (!prevLedger)
     {
@@ -2269,6 +2276,12 @@ NetworkOPsImp::getAccountTxs(
     int limit,
     bool bUnlimited)
 {
+    if(app_.config().reporting())
+    {
+        Throw<std::runtime_error>(
+            "getAccountTxs unused in reporting mode");
+    }
+
     // can be called with no locks
     AccountTxs ret;
 
@@ -2324,7 +2337,7 @@ NetworkOPsImp::getAccountTxs(
                 JLOG(m_journal.warn())
                     << "Recovering ledger " << seq << ", txn " << txn->getID();
 
-                if (auto l = m_ledgerMaster.getLedgerBySeq(seq))
+                if (auto l = std::dynamic_pointer_cast<const Ledger>(m_ledgerMaster.getLedgerBySeq(seq)))
                     pendSaveValidated(app_, l, false, false);
             }
 

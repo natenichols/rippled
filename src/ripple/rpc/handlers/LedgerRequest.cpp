@@ -137,7 +137,7 @@ doLedgerRequest(RPC::JsonContext& context)
 
     // In standalone mode, accept the ledger from the ledger cache
     if (!ledger && context.app.config().standalone())
-        ledger = ledgerMaster.getLedgerByHash(ledgerHash);
+        ledger = std::dynamic_pointer_cast<const Ledger>(ledgerMaster.getLedgerByHash(ledgerHash));
 
     if (ledger)
     {

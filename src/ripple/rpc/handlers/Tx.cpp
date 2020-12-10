@@ -21,6 +21,7 @@
 #include <ripple/app/ledger/TransactionMaster.h>
 #include <ripple/app/misc/NetworkOPs.h>
 #include <ripple/app/misc/Transaction.h>
+#include <ripple/app/reporting/ReportingETL.h>
 #include <ripple/basics/ToString.h>
 #include <ripple/net/RPCErr.h>
 #include <ripple/protocol/ErrorCodes.h>
@@ -118,19 +119,13 @@ doTxPostgres(RPC::Context& context, TxArgs const& args)
     if (locator.isFound())
     {
         auto start = std::chrono::system_clock::now();
-        // The second argument of fetch is ignored when not using shards
-        if (auto obj = context.app.getNodeFamily().db().fetchNodeObject(
-                locator.getNodestoreHash(), locator.getLedgerSequence()))
+
+        std::shared_ptr<Blob> obj;
+        context.app.getReportingETL().getReportingBackend().fetchTx(
+                            locator.getNodestoreHash(), locator.getLedgerSequence(), obj);
+        if (obj)
         {
-            auto node = SHAMapAbstractNode::makeFromPrefix(
-                makeSlice(obj->getData()),
-                SHAMapHash{locator.getNodestoreHash()});
-            if (!node)
-            {
-                assert(false);
-                return {res, {rpcINTERNAL, "Error making SHAMap node"}};
-            }
-            auto item = (static_cast<SHAMapTreeNode*>(node.get()))->peekItem();
+            auto item = std::make_shared<SHAMapItem>(locator.getNodestoreHash(), *obj);
             if (!item)
             {
                 assert(false);
@@ -263,8 +258,7 @@ doTxHelp(RPC::Context& context, TxArgs const& args)
         return {result, rpcSUCCESS};
     }
 
-    std::shared_ptr<Ledger const> ledger =
-        context.ledgerMaster.getLedgerBySeq(txn->getLedger());
+    std::shared_ptr<ReadView const> ledger = context.ledgerMaster.getLedgerBySeq(txn->getLedger());
 
     if (ledger && meta)
     {

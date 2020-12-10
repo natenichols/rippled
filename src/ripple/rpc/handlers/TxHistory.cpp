@@ -20,6 +20,7 @@
 #include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/main/Application.h>
 #include <ripple/app/misc/Transaction.h>
+#include <ripple/app/reporting/FlatLedger.h>
 #include <ripple/core/DatabaseCon.h>
 #include <ripple/core/Pg.h>
 #include <ripple/core/SociDB.h>
@@ -117,7 +118,7 @@ doTxHistoryReporting(RPC::JsonContext& context)
         ledgerSequences.push_back(res.asBigInt(i, 1));
     }
 
-    auto txns = flatFetchTransactions(context.app, nodestoreHashes);
+    auto txns = flatFetchTransactions(context.app, nodestoreHashes, ledgerSequences);
     for (size_t i = 0; i < txns.size(); ++i)
     {
         auto const& [sttx, meta] = txns[i];

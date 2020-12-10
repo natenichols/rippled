@@ -32,6 +32,7 @@
 #include <ripple/app/misc/Transaction.h>
 #include <ripple/app/misc/TxQ.h>
 #include <ripple/app/misc/ValidatorList.h>
+#include <ripple/app/reporting/FlatLedger.h>
 #include <ripple/app/paths/PathRequests.h>
 #include <ripple/app/tx/apply.h>
 #include <ripple/basics/Log.h>
@@ -208,6 +209,11 @@ LedgerMaster::LedgerMaster(
 LedgerIndex
 LedgerMaster::getCurrentLedgerIndex()
 {
+    if (app_.config().reporting())
+    {
+        Throw<ReportingShouldProxy>();
+    }
+
     return app_.openLedger().current()->info().seq;
 }
 
@@ -326,6 +332,12 @@ LedgerMaster::isCaughtUp(std::string& reason)
 void
 LedgerMaster::setValidLedger(std::shared_ptr<Ledger const> const& l)
 {
+    if (app_.config().reporting())
+    {
+        Throw<std::runtime_error>(
+            "Reporting mode does not use setValidLedger");
+    }
+
     std::vector<NetClock::time_point> times;
     boost::optional<uint256> consensusHash;
 
@@ -365,7 +377,8 @@ LedgerMaster::setValidLedger(std::shared_ptr<Ledger const> const& l)
     mValidLedgerSeq = l->info().seq;
 
     app_.getOPs().updateLocalTx(*l);
-    app_.getSHAMapStore().onLedgerClosed(getValidatedLedger());
+    auto ledger = std::dynamic_pointer_cast<const Ledger>(getValidatedLedger());
+    app_.getSHAMapStore().onLedgerClosed(ledger);
     mLedgerHistory.validatedLedger(l, consensusHash);
     app_.getAmendmentTable().doValidatedLedger(l);
     if (!app_.getOPs().isAmendmentBlocked())
@@ -1577,7 +1590,7 @@ LedgerMaster::getCurrentLedger()
     return app_.openLedger().current();
 }
 
-std::shared_ptr<Ledger const>
+std::shared_ptr<ReadView const>
 LedgerMaster::getValidatedLedger()
 {
 #ifdef RIPPLED_REPORTING
@@ -1644,6 +1657,12 @@ LedgerMaster::getCloseTimeByHash(
     LedgerHash const& ledgerHash,
     std::uint32_t index)
 {
+
+    if(app_.config().reporting())
+    {
+        return getCloseTimeByHashPostgres(ledgerHash, index, app_);
+    }
+
     auto nodeObject = app_.getNodeStore().fetchNodeObject(ledgerHash, index);
     if (nodeObject && (nodeObject->getData().size() >= 120))
     {
@@ -1664,6 +1683,11 @@ LedgerMaster::getCloseTimeByHash(
 uint256
 LedgerMaster::getHashBySeq(std::uint32_t index)
 {
+    if(app_.config().reporting())
+    {
+        return getHashByIndexPostgres(index, app_);
+    }
+
     uint256 hash = mLedgerHistory.getLedgerHash(index);
 
     if (hash.isNonZero())
@@ -1686,7 +1710,7 @@ LedgerMaster::walkHashBySeq(std::uint32_t index, InboundLedger::Reason reason)
 boost::optional<LedgerHash>
 LedgerMaster::walkHashBySeq(
     std::uint32_t index,
-    std::shared_ptr<ReadView const> const& referenceLedger,
+    std::shared_ptr<Ledger const> const& referenceLedger,
     InboundLedger::Reason reason)
 {
     if (!referenceLedger || (referenceLedger->info().seq < index))
@@ -1736,9 +1760,12 @@ LedgerMaster::walkHashBySeq(
     return ledgerHash;
 }
 
-std::shared_ptr<Ledger const>
+std::shared_ptr<ReadView const>
 LedgerMaster::getLedgerBySeq(std::uint32_t index)
 {
+    if (app_.config().reporting())
+        return loadByIndexPostgres(index, app_);
+
     if (index <= mValidLedgerSeq)
     {
         // Always prefer a validated ledger
@@ -1772,9 +1799,12 @@ LedgerMaster::getLedgerBySeq(std::uint32_t index)
     return {};
 }
 
-std::shared_ptr<Ledger const>
+std::shared_ptr<ReadView const>
 LedgerMaster::getLedgerByHash(uint256 const& hash)
 {
+    if (app_.config().reporting())
+        return loadByHashPostgres(hash, app_);
+
     if (auto ret = mLedgerHistory.getLedgerByHash(hash))
         return ret;
 
@@ -1856,11 +1886,17 @@ LedgerMaster::fetchForHistory(
     InboundLedger::Reason reason,
     std::unique_lock<std::recursive_mutex>& sl)
 {
+    if (app_.config().reporting())
+    {
+        Throw<std::runtime_error>(
+            "fetchForHistory unused in reporting mode");
+    }
+
     ScopedUnlock sul{sl};
     if (auto hash = getLedgerHashForHistory(missing, reason))
     {
         assert(hash->isNonZero());
-        auto ledger = getLedgerByHash(*hash);
+        auto ledger = std::dynamic_pointer_cast<const Ledger>(getLedgerByHash(*hash));
         if (!ledger)
         {
             if (!app_.getInboundLedgers().isFailure(*hash))
@@ -2112,6 +2148,12 @@ LedgerMaster::makeFetchPack(
     uint256 haveLedgerHash,
     UptimeClock::time_point uptime)
 {
+    if (app_.config().reporting())
+    {
+        Throw<std::runtime_error>(
+            "makeFetchPack unused in reporting mode");
+    }
+
     using namespace std::chrono_literals;
     if (UptimeClock::now() > uptime + 1s)
     {
@@ -2130,7 +2172,8 @@ LedgerMaster::makeFetchPack(
     if (!peer)
         return;
 
-    auto haveLedger = getLedgerByHash(haveLedgerHash);
+    auto haveLedger = 
+        std::dynamic_pointer_cast<const Ledger>(getLedgerByHash(haveLedgerHash));
 
     if (!haveLedger)
     {
@@ -2156,7 +2199,8 @@ LedgerMaster::makeFetchPack(
         return;
     }
 
-    auto wantLedger = getLedgerByHash(haveLedger->info().parentHash);
+    auto wantLedger = 
+        std::dynamic_pointer_cast<const Ledger>(getLedgerByHash(haveLedger->info().parentHash));
 
     if (!wantLedger)
     {
@@ -2237,7 +2281,7 @@ LedgerMaster::makeFetchPack(
 
             // move may save a ref/unref
             haveLedger = std::move(wantLedger);
-            wantLedger = getLedgerByHash(haveLedger->info().parentHash);
+            wantLedger = std::dynamic_pointer_cast<const Ledger>(getLedgerByHash(haveLedger->info().parentHash));
         } while (wantLedger && UptimeClock::now() <= uptime + 1s);
 
         JLOG(m_journal.info())
