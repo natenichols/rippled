@@ -123,6 +123,9 @@ public:
     virtual std::pair<std::vector<std::shared_ptr<Blob>>, Status>
     fetchEntryBatch(std::vector<uint256> const& hashes, std::vector<std::uint32_t> const& sequences) = 0;
 
+    virtual std::pair<std::vector<std::pair<uint256, std::shared_ptr<Blob>>>, Status>
+    doUpperBound(uint256 marker, std::uint32_t seq, std::uint32_t limit) = 0;
+
     /** Store a single ledger entry.
         @note This will be called concurrently.
         @param hash The nodestore hash of the ledger entry to store.

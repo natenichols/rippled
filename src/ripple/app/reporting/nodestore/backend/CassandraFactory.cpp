@@ -106,6 +106,7 @@ private:
     const CassPrepared* selectTx_ = nullptr;
     const CassPrepared* insertEntry_ = nullptr;
     const CassPrepared* selectEntry_ = nullptr;
+    const CassPrepared* upperBound_ = nullptr;
 
     // io_context used for exponential backoff for write retries
     boost::asio::io_context ioContext_;
@@ -580,6 +581,39 @@ public:
              * object
              */
             cass_future_free(prepare_future);
+
+            query.str("");
+            query << "SELECT hash, entry FROM " << stateTableName
+                  << " WHERE TOKEN(hash) >= TOKEN(?) and seq <= ?"
+                  << " PER PARTITION LIMIT 1 LIMIT ?"
+                  << " ALLOW FILTERING";
+
+            prepare_future =
+                cass_session_prepare(session_.get(), query.str().c_str());
+
+            /* Wait for the statement to prepare and get the result */
+            rc = cass_future_error_code(prepare_future);
+
+            if (rc != CASS_OK)
+            {
+                /* Handle error */
+                cass_future_free(prepare_future);
+
+                std::stringstream ss;
+                ss << "nodestore: Error preparing state table select : " << rc << ", "
+                   << cass_error_desc(rc);
+                JLOG(j_.error()) << ss.str();
+                continue;
+            }
+
+            /* Get the prepared object from the future */
+            upperBound_ = cass_future_get_prepared(prepare_future);
+
+            /* The future can be freed immediately after getting the prepared
+             * object
+             */
+            cass_future_free(prepare_future);
+
             setupPreparedStatements = true;
         }
 
@@ -804,6 +838,112 @@ public:
         JLOG(j_.trace()) << "Fetched " << numHashes
                          << " records from Cassandra";
         return {results, ok};
+    }
+
+    std::pair<std::vector<std::pair<uint256, std::shared_ptr<Blob>>>, Status>
+    doUpperBound(uint256 marker, std::uint32_t seq, std::uint32_t limit) override
+    {
+        CassStatement* statement = cass_prepared_bind(upperBound_);
+        cass_statement_set_consistency(statement, CASS_CONSISTENCY_QUORUM);
+
+        CassError rc = cass_statement_bind_bytes(
+            statement, 0, static_cast<cass_byte_t const*>(marker.begin()), keyBytes_);
+        if (rc != CASS_OK)
+        {
+            cass_statement_free(statement);
+            JLOG(j_.error()) << "Binding Cassandra hash to doUpperBound query: " << rc << ", "
+                             << cass_error_desc(rc);
+            return {{}, backendError};
+        }
+
+        rc = cass_statement_bind_int64(statement, 1, seq);
+        if (rc != CASS_OK)
+        {
+            cass_statement_free(statement);
+            JLOG(j_.error()) << "Binding Cassandra seq to doUpperBound query: " << rc << ", "
+                             << cass_error_desc(rc);
+            return {{}, backendError};
+        }
+
+        rc = cass_statement_bind_int32(statement, 2, limit+1);
+        if (rc != CASS_OK)
+        {
+            cass_statement_free(statement);
+            JLOG(j_.error()) << "Binding Cassandra limit to doUpperBound query: " << rc << ", "
+                            << cass_error_desc(rc);
+            return {{}, backendError};
+        }
+
+        CassFuture* fut;
+        do
+        {
+            fut = cass_session_execute(session_.get(), statement);
+            rc = cass_future_error_code(fut);
+            if (rc != CASS_OK)
+            {
+                std::stringstream ss;
+                ss << "Cassandra fetch error";
+                ss << ", retrying";
+                ++counters_.readRetries;
+                ss << ": " << cass_error_desc(rc);
+                JLOG(j_.warn()) << ss.str();
+            }
+        } while (rc != CASS_OK);
+
+        CassResult const* res = cass_future_get_result(fut);
+        cass_statement_free(statement);
+        cass_future_free(fut);
+
+        std::vector<std::pair<uint256, std::shared_ptr<Blob>>> result = {};
+
+        CassIterator* iter = cass_iterator_from_result(res);
+        while (cass_iterator_next(iter)) {
+            CassRow const* row = cass_iterator_get_row(iter);
+
+            cass_byte_t const* outData;
+            std::size_t outSize;
+
+            CassValue const* hash = cass_row_get_column(row, 0);
+            rc = cass_value_get_bytes(hash, &outData, &outSize);
+            if (rc != CASS_OK)
+            {
+                cass_iterator_free(iter);
+
+                std::stringstream ss;
+                ss << "Cassandra fetch error";
+                ss << ", retrying";
+                ss << ": " << cass_error_desc(rc);
+                JLOG(j_.warn()) << ss.str();
+
+                return {{}, backendError};
+            }
+            uint256 resultHash = uint256::fromVoid(outData);
+
+            CassValue const* entry = cass_row_get_column(row, 1);
+            rc = cass_value_get_bytes(entry, &outData, &outSize);
+            if (rc != CASS_OK)
+            {
+                cass_iterator_free(iter);
+
+                std::stringstream ss;
+                ss << "Cassandra fetch error";
+                ss << ", retrying";
+                ss << ": " << cass_error_desc(rc);
+                JLOG(j_.warn()) << ss.str();
+
+                return {{}, backendError};
+            }
+
+            nudb::detail::buffer bf;
+            auto [data, size] = lz4_decompress(outData, outSize, bf);
+            auto slice = Slice(data, size);
+            std::shared_ptr<Blob> resultBlob =
+                std::make_shared<Blob>(slice.begin(), slice.end());
+
+            result.push_back({resultHash, resultBlob});
+        }
+
+        return {result, Status::ok};
     }
 
     void
