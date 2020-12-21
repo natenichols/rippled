@@ -24,7 +24,7 @@
 #include <ripple/beast/utility/Journal.h>
 #include <ripple/core/TimeKeeper.h>
 #include <ripple/ledger/CachedView.h>
-#include <ripple/ledger/TxMeta.h>
+#include <ripple/protocol/TxMeta.h>
 #include <ripple/ledger/View.h>
 #include <ripple/protocol/Book.h>
 #include <ripple/protocol/Indexes.h>

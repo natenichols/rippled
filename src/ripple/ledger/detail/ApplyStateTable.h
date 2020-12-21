@@ -25,7 +25,7 @@
 #include <ripple/ledger/OpenView.h>
 #include <ripple/ledger/RawView.h>
 #include <ripple/ledger/ReadView.h>
-#include <ripple/ledger/TxMeta.h>
+#include <ripple/protocol/TxMeta.h>
 #include <ripple/protocol/TER.h>
 #include <memory>
 

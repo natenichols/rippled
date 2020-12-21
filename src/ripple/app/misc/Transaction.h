@@ -22,7 +22,7 @@
 
 #include <ripple/basics/RangeSet.h>
 #include <ripple/beast/utility/Journal.h>
-#include <ripple/ledger/TxMeta.h>
+#include <ripple/protocol/TxMeta.h>
 #include <ripple/protocol/ErrorCodes.h>
 #include <ripple/protocol/Protocol.h>
 #include <ripple/protocol/STTx.h>
