@@ -144,7 +144,30 @@ doSubscribe(RPC::JsonContext& context)
             }
             else if (streamName == "transactions")
             {
-                context.netOps.subTransactions(ispSub);
+                if (!context.params.isMember(jss::TransactionType))
+                {
+                    context.netOps.subTransactions(ispSub);
+                }
+                else
+                {
+                    auto const& types = context.params[jss::TransactionType];
+                    if (!types.isArray())
+                        return rpcError(rpcINVALID_PARAMS);
+
+                    for (auto const& type : types)
+                    {
+                        if (!type.isString())
+                            return rpcError(rpcINVALID_PARAMS);
+
+                        try 
+                            TxFormats::getInstance().findTypeByName(type.asString()));
+                        catch (std::exception const&)
+                            return rpcError(rpcINVALID_PARAMS);
+                    }
+
+                    for (auto const& type : types)
+                        context.netOps.subTransactionType(ispSub, type.asString());
+                }
             }
             else if (
                 streamName == "transactions_proposed" ||

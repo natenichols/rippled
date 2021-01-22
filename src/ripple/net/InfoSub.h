@@ -110,6 +110,8 @@ public:
         virtual bool
         subTransactions(ref ispListener) = 0;
         virtual bool
+        subTransactionType(InfoSub::ref isrListener, std::string const& type) = 0;
+        virtual bool
         unsubTransactions(std::uint64_t uListener) = 0;
 
         virtual bool

@@ -580,6 +580,8 @@ public:
     bool
     subTransactions(InfoSub::ref ispListener) override;
     bool
+    subTransactionType(InfoSub::ref isrListener, std::string const& type) override;
+    bool
     unsubTransactions(std::uint64_t uListener) override;
 
     bool
@@ -682,6 +684,7 @@ private:
 private:
     using SubMapType = hash_map<std::uint64_t, InfoSub::wptr>;
     using SubInfoMapType = hash_map<AccountID, SubMapType>;
+    using SubTxMapType = hash_map<std::string, SubMapType>;
     using subRpcMapType = hash_map<std::string, InfoSub::pointer>;
 
     Application& app_;
@@ -712,13 +715,14 @@ private:
     SubInfoMapType mSubAccount;
     SubInfoMapType mSubRTAccount;
 
+    SubTxMapType mSubTransactions;
+
     subRpcMapType mRpcSubMap;
 
     enum SubTypes {
         sLedger,          // Accepted ledgers.
         sManifests,       // Received validator manifests.
         sServer,          // When server changes connectivity state.
-        sTransactions,    // All accepted transactions.
         sRTTransactions,  // All proposed and accepted transactions.
         sValidations,     // Received validations.
         sPeerStatus,      // Peer status changes.
@@ -3226,8 +3230,10 @@ NetworkOPsImp::pubValidatedTransaction(
     {
         std::lock_guard sl(mSubLock);
 
-        auto it = mStreamMaps[sTransactions].begin();
-        while (it != mStreamMaps[sTransactions].end())
+        std::string type = jvObj[jss::transaction][jss::TransactionType].asString();
+        auto& subsMap = mSubTransactions[type];
+        auto it = subsMap.begin();
+        while (it != subsMap.end())
         {
             InfoSub::pointer p = it->second.lock();
 
@@ -3237,11 +3243,10 @@ NetworkOPsImp::pubValidatedTransaction(
                 ++it;
             }
             else
-                it = mStreamMaps[sTransactions].erase(it);
+                it = subsMap.erase(it);
         }
 
         it = mStreamMaps[sRTTransactions].begin();
-
         while (it != mStreamMaps[sRTTransactions].end())
         {
             InfoSub::pointer p = it->second.lock();
@@ -3569,8 +3574,29 @@ NetworkOPsImp::unsubServer(std::uint64_t uSeq)
 bool
 NetworkOPsImp::subTransactions(InfoSub::ref isrListener)
 {
+    // true if subscriber doesn't already exists
+    bool added = true;
+
     std::lock_guard sl(mSubLock);
-    return mStreamMaps[sTransactions]
+    auto it = TxFormats::getInstance().begin();
+    while (it != TxFormats::getInstance().end())
+    {
+        added = added && mSubTransactions[it->getName()]
+            .emplace(isrListener->getSeq(), isrListener)
+            .second;
+        
+        ++it;
+    }
+    
+    return added;
+}
+
+// <-- bool: true=erased, false=was not there
+bool
+NetworkOPsImp::subTransactionType(InfoSub::ref isrListener, std::string const& type)
+{   
+    std::lock_guard sl(mSubLock);
+    return mSubTransactions[type]
         .emplace(isrListener->getSeq(), isrListener)
         .second;
 }
@@ -3579,8 +3605,21 @@ NetworkOPsImp::subTransactions(InfoSub::ref isrListener)
 bool
 NetworkOPsImp::unsubTransactions(std::uint64_t uSeq)
 {
+    // true if erased at least one subscriber
+    bool erased = false;
+
+    // Unsubscribes to all transaction types
     std::lock_guard sl(mSubLock);
-    return mStreamMaps[sTransactions].erase(uSeq);
+    auto it = mSubTransactions.begin();
+    while (it != mSubTransactions.end())
+    {
+        auto& subsMap = it->second;
+        erased = erased || subsMap.erase(uSeq);
+
+        ++it;
+    }
+
+    return erased;
 }
 
 // <-- bool: true=added, false=already there
