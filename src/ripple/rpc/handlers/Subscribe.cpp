@@ -160,9 +160,13 @@ doSubscribe(RPC::JsonContext& context)
                             return rpcError(rpcINVALID_PARAMS);
 
                         try 
-                            TxFormats::getInstance().findTypeByName(type.asString()));
+                        {
+                            TxFormats::getInstance().findTypeByName(type.asString());
+                        }
                         catch (std::exception const&)
+                        {
                             return rpcError(rpcINVALID_PARAMS);
+                        }
                     }
 
                     for (auto const& type : types)
