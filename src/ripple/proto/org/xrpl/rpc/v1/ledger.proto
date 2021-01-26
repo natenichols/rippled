@@ -55,6 +55,8 @@ message RawLedgerObject
     }
 
     ModificationType mod_type = 3;
+
+    bytes book_of_deleted_offer = 4;
 }
 
 message RawLedgerObjects

@@ -200,12 +200,25 @@ doLedgerGrpc(RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
                 obj->set_mod_type(
                     org::xrpl::rpc::v1::RawLedgerObject::MODIFIED);
             else if (inBase && !inDesired)
+            {
                 obj->set_mod_type(org::xrpl::rpc::v1::RawLedgerObject::DELETED);
+                bool isOffer = false;
+                auto const& data = inBase->peekData();
+                short offer_bytes = (data[1] << 8) | data[2];
+                if (offer_bytes == 0x006f)
+                {
+                    SerialIter it{data.data(), data.size()};
+                    SLE sle{it, k};
+                    auto bookDir = sle.getFieldH256(ripple::sfBookDirectory);
+                    obj->set_book_of_deleted_offer(
+                        bookDir.data(), bookDir.size());
+                }
+            }
             else
                 obj->set_mod_type(org::xrpl::rpc::v1::RawLedgerObject::CREATED);
         }
-        response.set_skiplist_included(true);
     }
+    response.set_skiplist_included(true);
 
     response.set_validated(
         RPC::isValidated(context.ledgerMaster, *ledger, context.app));
