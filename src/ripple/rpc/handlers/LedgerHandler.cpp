@@ -108,6 +108,7 @@ doLedgerGrpc(RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
     org::xrpl::rpc::v1::GetLedgerRequest& request = context.params;
     org::xrpl::rpc::v1::GetLedgerResponse response;
     grpc::Status status = grpc::Status::OK;
+    auto start = std::chrono::system_clock::now();
 
     std::shared_ptr<ReadView const> ledger;
     if (RPC::ledgerFromRequest(ledger, context))
@@ -122,6 +123,7 @@ doLedgerGrpc(RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
 
     response.set_ledger_header(s.peekData().data(), s.getLength());
 
+    auto txnFetch = std::chrono::system_clock::now();
     if (request.transactions())
     {
         for (auto& i : ledger->txs)
@@ -148,6 +150,7 @@ doLedgerGrpc(RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
         }
     }
 
+    auto objFetch = std::chrono::system_clock::now();
     if (request.get_objects())
     {
         std::shared_ptr<ReadView const> parent =
@@ -174,6 +177,7 @@ doLedgerGrpc(RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
 
         int maxDifferences = std::numeric_limits<int>::max();
 
+        auto shamapDiff = std::chrono::system_clock::now();
         bool res = base->stateMap().compare(
             desired->stateMap(), differences, maxDifferences);
         if (!res)
@@ -184,6 +188,7 @@ doLedgerGrpc(RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
             return {response, errorStatus};
         }
 
+        auto diffIter = std::chrono::system_clock::now();
         for (auto& [k, v] : differences)
         {
             auto obj = response.mutable_ledger_objects()->add_objects();
@@ -217,7 +222,13 @@ doLedgerGrpc(RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
             else
                 obj->set_mod_type(org::xrpl::rpc::v1::RawLedgerObject::CREATED);
         }
+	auto end = std::chrono::system_clock::now();
+	double divisor = 1000000000.0;
+	JLOG(context.j.info()) << __func__ << "total = " << (end - start).count() / divisor << " txn = " << (txnFetch - start).count()  / divisor << " shamap = "
+		<< (diffIter - shamapDiff).count() / divisor
+		<< " iter = " << (end-diffIter).count() / divisor;
     }
+
     response.set_skiplist_included(true);
 
     response.set_validated(
