@@ -108,7 +108,7 @@ LoadMonitor::addLoadSample(LoadEvent const& s)
     // Don't include "jitter" as part of the latency
     auto const latency = total < 2ms ? 0ms : date::round<milliseconds>(total);
 
-    if (latency > 500ms)
+    if (latency > 500ms || s.name() == "gRPC-Client")
     {
         auto mj = (latency > 1s) ? j_.warn() : j_.info();
         JLOG(mj) << "Job: " << s.name()

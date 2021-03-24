@@ -222,11 +222,14 @@ doLedgerGrpc(RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
             else
                 obj->set_mod_type(org::xrpl::rpc::v1::RawLedgerObject::CREATED);
         }
-	auto end = std::chrono::system_clock::now();
-	double divisor = 1000000000.0;
-	JLOG(context.j.info()) << __func__ << "total = " << (end - start).count() / divisor << " txn = " << (txnFetch - start).count()  / divisor << " shamap = "
-		<< (diffIter - shamapDiff).count() / divisor
-		<< " iter = " << (end-diffIter).count() / divisor;
+        auto end = std::chrono::system_clock::now();
+        double divisor = 1000000000.0;
+        JLOG(context.j.info())
+            << __func__ << "total = " << (end - start).count() / divisor
+            << " txn = " << (txnFetch - start).count() / divisor
+            << " shamap = " << (diffIter - shamapDiff).count() / divisor
+            << " iter = " << (end - diffIter).count() / divisor
+            << " seq = " << std::to_string(ledger->seq());
     }
 
     response.set_skiplist_included(true);
