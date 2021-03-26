@@ -161,7 +161,7 @@ JobQueue::setThreadCount(int c, bool const standaloneMode)
 {
     if (standaloneMode)
     {
-        c = 1;
+        // c = 1;
     }
     else if (c == 0)
     {
