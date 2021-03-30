@@ -77,6 +77,8 @@ doLedgerCurrent(RPC::JsonContext&);
 Json::Value
 doLedgerData(RPC::JsonContext&);
 Json::Value
+doLedgerDiff(RPC::JsonContext&);
+Json::Value
 doLedgerEntry(RPC::JsonContext&);
 Json::Value
 doLedgerHeader(RPC::JsonContext&);

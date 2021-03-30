@@ -101,6 +101,7 @@ Handler const handlerArray[]{
      Role::USER,
      NEEDS_CURRENT_LEDGER},
     {"ledger_data", byRef(&doLedgerData), Role::USER, NO_CONDITION},
+    {"ledger_diff", byRef(&doLedgerDiff), Role::USER, NO_CONDITION},
     {"ledger_entry", byRef(&doLedgerEntry), Role::USER, NO_CONDITION},
     {"ledger_header", byRef(&doLedgerHeader), Role::USER, NO_CONDITION},
     {"ledger_request", byRef(&doLedgerRequest), Role::ADMIN, NO_CONDITION},
