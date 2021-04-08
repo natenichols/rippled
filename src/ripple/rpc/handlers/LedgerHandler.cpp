@@ -208,7 +208,7 @@ doLedgerGrpc(RPC::GRPCContext<org::xrpl::rpc::v1::GetLedgerRequest>& context)
             {
                 obj->set_mod_type(org::xrpl::rpc::v1::RawLedgerObject::DELETED);
                 bool isOffer = false;
-                auto const& data = inBase->peekData();
+                auto const& data = inBase->slice();
                 short offer_bytes = (data[1] << 8) | data[2];
                 if (offer_bytes == 0x006f)
                 {
